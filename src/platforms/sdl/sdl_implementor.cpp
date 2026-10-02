@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2025 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -87,12 +88,22 @@ fs::path SdlImplementor::SelectGameDirectory() {
     fs::path dir = RunFolderDialog();
     if (dir.empty())
       return {};
-    if (!CorrectPathCase(dir / "Gameexe.ini").empty())
+
+    auto detectGame = [](const fs::path& dir) -> bool {
+      if (!CorrectPathCase(dir / "Gameexe.ini").empty())  // likely reallive
+        return true;
+      if (!CorrectPathCase(dir / "Gameexe.dat").empty())  // likely siglus
+        return true;
+      return false;
+    };
+    if (detectGame(dir))
       return dir;
-    if (!AskUserPrompt(_("Select Game Directory"),
-                       dir.string() +
-                           _(" doesn't contain a Gameexe.ini. Try again?"),
-                       _("Retry"), _("Cancel")))
+
+    if (!AskUserPrompt(
+            _("Select Game Directory"),
+            dir.string() +
+                _(" doesn't contain a Gameexe.ini or Gameexe.dat. Try again?"),
+            _("Retry"), _("Cancel")))
       return {};
   }
 }
@@ -114,13 +125,9 @@ bool SdlImplementor::AskUserPrompt(const std::string& message_text,
       {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, true_button.c_str()},
   };
   const std::string message = message_text + "\n\n" + informative_text;
-  const SDL_MessageBoxData data = {SDL_MESSAGEBOX_WARNING,
-                                   nullptr,
-                                   "rlvm",
-                                   message.c_str(),
-                                   SDL_arraysize(buttons),
-                                   buttons,
-                                   nullptr};
+  const SDL_MessageBoxData data = {
+      SDL_MESSAGEBOX_WARNING, nullptr, "rlvm", message.c_str(),
+      SDL_arraysize(buttons), buttons, nullptr};
   int button_id = -1;
   if (!SDL_ShowMessageBox(&data, &button_id))
     return false;
