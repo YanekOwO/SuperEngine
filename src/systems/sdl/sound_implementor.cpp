@@ -87,10 +87,9 @@ void SDLSoundImpl::OpenAudio(AVSpec spec, int /*buf_size*/) const {
   movie_stream_ = SDL_CreateAudioStream(&want, &want);
   if (!bgm_stream_ || !movie_stream_)
     throw std::runtime_error("SDL Error: "s + GetError());
-  SDL_SetAudioStreamGetCallback(bgm_stream_, &SDLSoundImpl::OnBgmData,
-                                    nullptr);
+  SDL_SetAudioStreamGetCallback(bgm_stream_, &SDLSoundImpl::OnBgmData, nullptr);
   SDL_SetAudioStreamGetCallback(movie_stream_, &SDLSoundImpl::OnMovieData,
-                                    nullptr);
+                                nullptr);
   if (!SDL_BindAudioStream(device_, bgm_stream_) ||
       !SDL_BindAudioStream(device_, movie_stream_))
     throw std::runtime_error("SDL Error: "s + GetError());
@@ -361,15 +360,18 @@ void SDLSoundImpl::OnChannelData(void* userdata,
     return;
   }
 
-  // The player loops. The code appends passes until this read cannot
-  // underflow. It stops on an empty pass, because a fully clipped frame
-  // gives an empty chunk while the player continues.
-  while (info.player->IsPlaying() &&
-         SDL_GetAudioStreamAvailable(stream) < additional) {
+  // SDL has already accounted for queued audio. The deficit is in input
+  // bytes, whereas SDL_GetAudioStreamAvailable reports converted output bytes.
+  std::size_t remaining = static_cast<std::size_t>(additional);
+  while (info.player->IsPlaying() && remaining > 0) {
     std::vector<uint8_t> pcm = RenderChunk(info.player);
+    // A fully clipped frame can be empty while the player continues.
     if (pcm.empty())
       break;
-    SDL_PutAudioStreamData(stream, pcm.data(), static_cast<int>(pcm.size()));
+    if (!SDL_PutAudioStreamData(stream, pcm.data(),
+                                static_cast<int>(pcm.size())))
+      break;
+    remaining -= std::min(remaining, pcm.size());
   }
 }
 
@@ -412,12 +414,16 @@ void SDLSoundImpl::PumpPlayer(player_t& player,
     player = nullptr;
 }
 
-void SDLSoundImpl::OnBgmData(void*, SDL_AudioStream* stream, int additional,
+void SDLSoundImpl::OnBgmData(void*,
+                             SDL_AudioStream* stream,
+                             int additional,
                              int) {
   PumpPlayer(bgm_player_, bgm_enabled_, stream, additional);
 }
 
-void SDLSoundImpl::OnMovieData(void*, SDL_AudioStream* stream, int additional,
+void SDLSoundImpl::OnMovieData(void*,
+                               SDL_AudioStream* stream,
+                               int additional,
                                int) {
   PumpPlayer(movie_player_, true, stream, additional);
 }
