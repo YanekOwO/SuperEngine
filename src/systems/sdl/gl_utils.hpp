@@ -22,6 +22,10 @@
 
 #include <string>
 
+// Initializes OpenGL entry points for the current context, including EGL.
+// Throws on errors other than a missing GLX display for a valid context.
+void InitGLEW();
+
 std::string GetGLErrors();
 
 void ShowGLErrors();

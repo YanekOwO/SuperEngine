@@ -166,9 +166,7 @@ void SDLGraphicsBackend::InitSystem(Size screen_size, bool is_fullscreen) {
   if (!gl_context_)
     throw std::runtime_error("GL context creation failed: "s + SDL_GetError());
 
-  // Initialize glew
-  if (glewInit() != GLEW_OK)
-    throw std::runtime_error("Failed to initialize GLEW: " + GetGLErrors());
+  InitGLEW();
 
   ShowGLErrors();
 

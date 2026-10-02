@@ -24,6 +24,21 @@
 
 #include <stdexcept>
 
+void InitGLEW() {
+  const GLenum status = glewInit();
+  if (status == GLEW_OK)
+    return;
+
+  // GLEW loads the OpenGL entry points before attempting GLX initialization.
+  // EGL contexts (Wayland and offscreen SDL drivers) have no GLX display.
+  if (status == GLEW_ERROR_NO_GLX_DISPLAY && glGetString(GL_VERSION))
+    return;
+
+  throw std::runtime_error(
+      "Failed to initialize GLEW (" + std::to_string(status) +
+      "): " + reinterpret_cast<const char*>(glewGetErrorString(status)));
+}
+
 std::string GetGLErrors(void) {
   GLenum error;
   std::string msg;

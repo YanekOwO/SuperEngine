@@ -24,8 +24,8 @@
 #include "test_system/sdl_env.hpp"
 
 #include "core/rect.hpp"
+#include "systems/sdl/gl_utils.hpp"
 
-#include <GL/glew.h>
 #include <SDL3/SDL.h>
 
 #include <stdexcept>
@@ -56,14 +56,13 @@ sdlEnv::sdlEnv(Size screen) {
   }
   gl_context_ = context;
 
-  auto glew_status = glewInit();
-  if (glew_status != GLEW_OK) {
-    std::string error = "GLEW Initialization failed: ";
-    error += reinterpret_cast<const char*>(glewGetErrorString(glew_status));
+  try {
+    InitGLEW();
+  } catch (...) {
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window_);
     SDL_Quit();
-    throw std::runtime_error(error);
+    throw;
   }
 }
 
