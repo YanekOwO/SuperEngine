@@ -37,6 +37,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends $(cat apt-deps.txt)
 
+      - name: Cache SDL3
+        id: cache-sdl3
+        uses: actions/cache@v4
+        with:
+          path: ~/sdl3-prefix
+          key: ${{ runner.os }}-sdl3-3.2.30-sdl3ttf-3.2.2-hb
+
+      - name: Build SDL3 from source
+        if: steps.cache-sdl3.outputs.cache-hit != 'true'
+        run: |
+          curl -sL https://github.com/libsdl-org/SDL/releases/download/release-3.2.30/SDL3-3.2.30.tar.gz | tar xz -C /tmp
+          cmake -S /tmp/SDL3-3.2.30 -B /tmp/sdl3-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/sdl3-prefix \
+            -DCMAKE_INSTALL_LIBDIR=lib -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build /tmp/sdl3-build && cmake --install /tmp/sdl3-build
+
+          curl -sL https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.2/SDL3_ttf-3.2.2.tar.gz | tar xz -C /tmp
+          cmake -S /tmp/SDL3_ttf-3.2.2 -B /tmp/sdl3ttf-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/sdl3-prefix \
+            -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_PREFIX_PATH=$HOME/sdl3-prefix \
+            -DSDLTTF_VENDORED=OFF -DSDLTTF_SAMPLES=OFF -DSDLTTF_STRICT=ON -DSDLTTF_PLUTOSVG=OFF
+          cmake --build /tmp/sdl3ttf-build && cmake --install /tmp/sdl3ttf-build
+
+      - name: Export SDL3 environment
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/sdl3-prefix/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$HOME/sdl3-prefix" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$HOME/sdl3-prefix/lib" >> $GITHUB_ENV
+
       - name: Configure
         run: |
           cmake --preset release
@@ -88,6 +117,35 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends $(cat apt-deps.txt)
+
+      - name: Cache SDL3
+        id: cache-sdl3
+        uses: actions/cache@v4
+        with:
+          path: ~/sdl3-prefix
+          key: ${{ runner.os }}-sdl3-3.2.30-sdl3ttf-3.2.2-hb
+
+      - name: Build SDL3 from source
+        if: steps.cache-sdl3.outputs.cache-hit != 'true'
+        run: |
+          curl -sL https://github.com/libsdl-org/SDL/releases/download/release-3.2.30/SDL3-3.2.30.tar.gz | tar xz -C /tmp
+          cmake -S /tmp/SDL3-3.2.30 -B /tmp/sdl3-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/sdl3-prefix \
+            -DCMAKE_INSTALL_LIBDIR=lib -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build /tmp/sdl3-build && cmake --install /tmp/sdl3-build
+
+          curl -sL https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.2/SDL3_ttf-3.2.2.tar.gz | tar xz -C /tmp
+          cmake -S /tmp/SDL3_ttf-3.2.2 -B /tmp/sdl3ttf-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/sdl3-prefix \
+            -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_PREFIX_PATH=$HOME/sdl3-prefix \
+            -DSDLTTF_VENDORED=OFF -DSDLTTF_SAMPLES=OFF -DSDLTTF_STRICT=ON -DSDLTTF_PLUTOSVG=OFF
+          cmake --build /tmp/sdl3ttf-build && cmake --install /tmp/sdl3ttf-build
+
+      - name: Export SDL3 environment
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/sdl3-prefix/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$HOME/sdl3-prefix" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$HOME/sdl3-prefix/lib" >> $GITHUB_ENV
 
       - name: Enable ccache cache
         uses: hendrikmuhs/ccache-action@v1.2

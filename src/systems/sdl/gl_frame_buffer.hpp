@@ -30,8 +30,6 @@ class Size;
 
 class glFrameBuffer {
  public:
-  glFrameBuffer() = default;
-
   glFrameBuffer(std::shared_ptr<glTexture> texture);
   virtual ~glFrameBuffer();
 

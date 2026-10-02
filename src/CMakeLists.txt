@@ -6,7 +6,8 @@ configure_file(
 )
 
 set(RLVM_REQUIRED_LIBRARIES
-    ${SDL1_LIBRARIES}
+    PkgConfig::SDL3
+    PkgConfig::SDL3_TTF
     ${ZLIB_LIBRARIES}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
@@ -18,9 +19,6 @@ set(RLVM_REQUIRED_LIBRARIES
     xclannad
     pygame
     samplerate
-    sdl_image
-    sdl_ttf
-    sdl_mixer
     utf8cpp
     TBB::tbb
 )
@@ -46,14 +44,8 @@ file(GLOB_RECURSE RLVM_SRC_FILES CONFIGURE_DEPENDS
 )
 list(APPEND RLVM_SRC_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/platforms/platform_factory.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/platforms/sdl/sdl_implementor.cpp"
 )
-
-if (GTK2_FOUND) # use gtk
-   list(APPEND RLVM_SRC_FILES
-       "${CMAKE_CURRENT_SOURCE_DIR}/platforms/gtk/gtk_implementor.cpp"
-   )
-   list(APPEND RLVM_REQUIRED_LIBRARIES ${GTK2_LIBRARIES})
-endif()
 
 add_library(rlvm_src OBJECT)
 target_sources(rlvm_src PRIVATE ${RLVM_SRC_FILES})

@@ -24,7 +24,7 @@
 
 #include "systems/sdl/sdl_surface.hpp"
 
-#include <SDL/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "core/colour.hpp"
 #include "core/localrect.hpp"
@@ -71,19 +71,11 @@ static inline SDL_Rect ToSDLRect(const Rect rect) {
 
 // -----------------------------------------------------------------------
 
-// Note to self: These describe the byte order IN THE RAW G00 DATA!
-// These should NOT be switched to native byte order.
-#define DefaultRmask 0xff0000
-#define DefaultGmask 0xff00
-#define DefaultBmask 0xff
-#define DefaultAmask 0xff000000
-#define DefaultBpp 32
-
 SDL_Surface* buildNewSurface(const Size& size) {
-  // Create an empty surface
-  SDL_Surface* tmp = SDL_CreateRGBSurface(
-      SDL_SWSURFACE | SDL_SRCALPHA, size.width(), size.height(), DefaultBpp,
-      DefaultRmask, DefaultGmask, DefaultBmask, DefaultAmask);
+  // Create an empty surface. The ARGB8888 format has the same byte order as
+  // the raw G00 data.
+  SDL_Surface* tmp =
+      SDL_CreateSurface(size.width(), size.height(), SDL_PIXELFORMAT_ARGB8888);
 
   if (tmp == NULL) {
     std::ostringstream ss;
@@ -208,7 +200,7 @@ void SDLSurface::Allocate(const Size& size) {
 void SDLSurface::Deallocate() {
   textures_.clear();
   if (surface_) {
-    SDL_FreeSurface(surface_);
+    SDL_DestroySurface(surface_);
     surface_ = NULL;
   }
 }
@@ -222,39 +214,38 @@ void SDLSurface::BlitToSurface(SDLSurface& dest_surface,
                                bool use_src_alpha) const {
   SDL_Rect src_rect = ToSDLRect(src), dest_rect = ToSDLRect(dst);
 
+  // SDL 1.2 ignored the per-surface alpha when the source had per-pixel
+  // alpha. It also ignored the alpha value on raw copies. This code keeps
+  // both behaviors. Thus masked images and copies blit the same as before.
+  const auto set_blit_mode = [](SDL_Surface* s, bool blended, int a) {
+    SDL_SetSurfaceBlendMode(s,
+                            blended ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
+    SDL_SetSurfaceAlphaMod(
+        s, (blended && !SDL_ISPIXELFORMAT_ALPHA(s->format)) ? a : 255);
+  };
+
   if (src.size() != dst.size()) {
     // Blit the source rectangle into its own image.
     SDL_Surface* src_image = buildNewSurface(src.size());
+    SDL_SetSurfaceBlendMode(surface_, SDL_ISPIXELFORMAT_ALPHA(surface_->format)
+                                          ? SDL_BLENDMODE_BLEND
+                                          : SDL_BLENDMODE_NONE);
     if (pygame_AlphaBlit(surface_, &src_rect, src_image, NULL))
-      ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("pygame_AlphaBlit", "GraphicsSystem::blitSurfaceToDC()");
 
     SDL_Surface* tmp = buildNewSurface(dst.size());
     pygame_stretch(src_image, tmp);
 
-    if (use_src_alpha) {
-      if (SDL_SetAlpha(tmp, SDL_SRCALPHA, alpha))
-        ThrowSDLError("SDL_SetAlpha", "GraphicsSystem::blitSurfaceToDC()");
-    } else {
-      if (SDL_SetAlpha(tmp, 0, 0))
-        ThrowSDLError("SDL_SetAlpha", "GraphicsSystem::blitSurfaceToDC()");
-    }
-
-    if (SDL_BlitSurface(tmp, NULL, dest_surface.RawSurface(), &dest_rect))
+    set_blit_mode(tmp, use_src_alpha, alpha);
+    if (!SDL_BlitSurface(tmp, NULL, dest_surface.RawSurface(), &dest_rect))
       ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
 
-    SDL_FreeSurface(tmp);
-    SDL_FreeSurface(src_image);
+    SDL_DestroySurface(tmp);
+    SDL_DestroySurface(src_image);
   } else {
-    if (use_src_alpha) {
-      if (SDL_SetAlpha(surface_, SDL_SRCALPHA, alpha))
-        ThrowSDLError("SDL_SetAlpha", "GraphicsSystem::blitSurfaceToDC()");
-    } else {
-      if (SDL_SetAlpha(surface_, 0, 0))
-        ThrowSDLError("SDL_SetAlpha", "GraphicsSystem::blitSurfaceToDC()");
-    }
-
-    if (SDL_BlitSurface(surface_, &src_rect, dest_surface.RawSurface(),
-                        &dest_rect))
+    set_blit_mode(surface_, use_src_alpha, alpha);
+    if (!SDL_BlitSurface(surface_, &src_rect, dest_surface.RawSurface(),
+                         &dest_rect))
       ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
   }
   dest_surface.markWrittenTo(dst);
@@ -275,7 +266,7 @@ void SDLSurface::blitFROMSurface(SDL_Surface* src_surface,
     if (pygame_AlphaBlit(src_surface, &src_rect, surface_, &dest_rect))
       ThrowSDLError("pygame_AlphaBlit", "GraphicsSystem::blitSurfaceToDC()");
   } else {
-    if (SDL_BlitSurface(src_surface, &src_rect, surface_, &dest_rect))
+    if (!SDL_BlitSurface(src_surface, &src_rect, surface_, &dest_rect))
       ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
   }
 
@@ -296,52 +287,25 @@ static void determineProperties(SDL_Surface* surface,
                                 GLenum& bytes_per_pixel,
                                 GLint& byte_order,
                                 GLint& byte_type) {
-  SDL_LockSurface(surface);
-  {
-    bytes_per_pixel = surface->format->BytesPerPixel;
-    byte_order = GL_RGBA;
-    byte_type = GL_UNSIGNED_BYTE;
+  bytes_per_pixel = SDL_BYTESPERPIXEL(surface->format);
+  byte_type = GL_UNSIGNED_BYTE;
 
-    // Determine the byte order of the surface
-    SDL_PixelFormat* format = surface->format;
-    if (bytes_per_pixel == 4) {
-      // If the order is RGBA...
-      if (format->Rmask == 0xFF000000 && format->Amask == 0xFF)
-        byte_order = GL_RGBA;
-      // OSX's crazy ARGB pixel format
-      else if ((format->Amask == 0x0 || format->Amask == 0xFF000000) &&
-               format->Rmask == 0xFF0000 && format->Gmask == 0xFF00 &&
-               format->Bmask == 0xFF) {
-        // This is an insane hack to get around OSX's crazy byte order
-        // for alpha on PowerPC. Since there isn't a GL_ARGB type, we
-        // need to specify BGRA and then tell the byte type to be
-        // reversed order.
-        //
-        // 20070303: Whoah! Is this the internal format on all
-        // platforms!?
-        byte_order = GL_BGRA;
-        byte_type = GL_UNSIGNED_INT_8_8_8_8_REV;
-      } else {
-        std::ios_base::fmtflags f =
-            std::cerr.flags(std::ios::hex | std::ios::uppercase);
-        std::cerr << "Unknown mask: (" << format->Rmask << ", " << format->Gmask
-                  << ", " << format->Bmask << ", " << format->Amask << ")"
-                  << std::endl;
-        std::cerr.flags(f);
-      }
-    } else if (bytes_per_pixel == 3) {
-      // For now, just assume RGB.
-      byte_order = GL_RGB;
-      std::cerr << "Warning: Am I really an RGB SDLSurface? Check"
-                << " Texture::Texture()!" << std::endl;
-    } else {
-      std::ostringstream oss;
-      oss << "Error loading texture: bytes_per_pixel == "
-          << int(bytes_per_pixel) << " and we only handle 3 or 4.";
-      throw std::runtime_error(oss.str());
-    }
+  switch (surface->format) {
+    case SDL_PIXELFORMAT_ARGB8888:
+    case SDL_PIXELFORMAT_XRGB8888:
+      // OpenGL has no GL_ARGB format. GL_BGRA with the reversed byte type
+      // reads a packed ARGB word correctly on each byte order.
+      byte_order = GL_BGRA;
+      byte_type = GL_UNSIGNED_INT_8_8_8_8_REV;
+      break;
+    case SDL_PIXELFORMAT_RGBA32:
+      byte_order = GL_RGBA;
+      break;
+    default:
+      throw std::runtime_error(
+          std::format("Error loading texture: unsupported surface format {}",
+                      SDL_GetPixelFormatName(surface->format)));
   }
-  SDL_UnlockSurface(surface);
 
   if (is_mask) {
     // Compile shader for use:
@@ -449,12 +413,12 @@ void SDLSurface::RenderToScreen(const Rect& src_rect,
 // -----------------------------------------------------------------------
 
 void SDLSurface::Fill(const RGBAColour& colour, const Rect& area) {
-  Uint32 sdl_colour = SDL_MapRGBA(surface_->format, colour.r(), colour.g(),
-                                  colour.b(), colour.a());
+  Uint32 sdl_colour = SDL_MapSurfaceRGBA(surface_, colour.r(), colour.g(),
+                                         colour.b(), colour.a());
 
   SDL_Rect rect = ToSDLRect(area);
-  if (SDL_FillRect(surface_, &rect, sdl_colour))
-    ThrowSDLError("SDL_FillRect", "GraphicsSystem::wipe()");
+  if (!SDL_FillSurfaceRect(surface_, &rect, sdl_colour))
+    ThrowSDLError("SDL_FillSurfaceRect", "GraphicsSystem::wipe()");
 
   // If we are the main screen, then we want to update the screen
   markWrittenTo(area);
@@ -473,19 +437,12 @@ void SDLSurface::UpdateBGRA(std::span<const char> bgra, bool is_alpha_mask) {
 
   is_mask_ = is_alpha_mask;
 
-  if (SDL_MUSTLOCK(surface_) && SDL_LockSurface(surface_) != 0)
+  if (SDL_MUSTLOCK(surface_) && !SDL_LockSurface(surface_))
     ThrowSDLError("SDL_LockSurface", "SDLSurface::UpdateBGRA()");
 
-  constexpr Uint32 kDefaultAmask = 0xff000000;
-  constexpr Uint32 kDefaultRmask = 0xff0000;
-  constexpr Uint32 kDefaultGmask = 0xff00;
-  constexpr Uint32 kDefaultBmask = 0xff;
   const bool direct_copy =
-      surface_->format->BytesPerPixel == 4 &&
-      surface_->format->Rmask == kDefaultRmask &&
-      surface_->format->Gmask == kDefaultGmask &&
-      surface_->format->Bmask == kDefaultBmask &&
-      (!is_alpha_mask || surface_->format->Amask == kDefaultAmask);
+      surface_->format == SDL_PIXELFORMAT_ARGB8888 ||
+      (!is_alpha_mask && surface_->format == SDL_PIXELFORMAT_XRGB8888);
 
   auto* dst = static_cast<unsigned char*>(surface_->pixels);
   const auto* src = reinterpret_cast<const unsigned char*>(bgra.data());
@@ -496,17 +453,16 @@ void SDLSurface::UpdateBGRA(std::span<const char> bgra, bool is_alpha_mask) {
                   static_cast<std::size_t>(width) * 4);
     }
   } else {
+    const int bpp = SDL_BYTESPERPIXEL(surface_->format);
     for (int y = 0; y < height; ++y) {
       unsigned char* row = dst + y * surface_->pitch;
       for (int x = 0; x < width; ++x) {
         const std::size_t src_idx =
             (static_cast<std::size_t>(y) * width + x) * 4;
-        const Uint32 pixel =
-            SDL_MapRGBA(surface_->format, src[src_idx + 2], src[src_idx + 1],
-                        src[src_idx + 0],
-                        is_alpha_mask ? src[src_idx + 3] : 255);
-        std::memcpy(row + x * surface_->format->BytesPerPixel, &pixel,
-                    surface_->format->BytesPerPixel);
+        const Uint32 pixel = SDL_MapSurfaceRGBA(
+            surface_, src[src_idx + 2], src[src_idx + 1], src[src_idx + 0],
+            is_alpha_mask ? src[src_idx + 3] : 255);
+        std::memcpy(row + x * bpp, &pixel, bpp);
       }
     }
   }
@@ -523,7 +479,10 @@ void SDLSurface::Apply(std::function<RGBAColour(RGBAColour)> transformer,
                        Rect area) {
   SDL_Surface* surface = RawSurface();
 
-  const int bpp = surface->format->BytesPerPixel;
+  const SDL_PixelFormatDetails* format =
+      SDL_GetPixelFormatDetails(surface->format);
+  const SDL_Palette* palette = SDL_GetSurfacePalette(surface);
+  const int bpp = SDL_BYTESPERPIXEL(surface->format);
   const int row_advance = surface->pitch - bpp * area.width();
 
   // determine position
@@ -545,10 +504,10 @@ void SDLSurface::Apply(std::function<RGBAColour(RGBAColour)> transformer,
         // Before someone tries to simplify the following four lines,
         // remember that sizeof(int) != sizeof(Uint8).
         Uint8 r, g, b, a;
-        SDL_GetRGBA(col, surface->format, &r, &g, &b, &a);
+        SDL_GetRGBA(col, format, palette, &r, &g, &b, &a);
         RGBAColour out = transformer(RGBAColour(r, g, b, a));
         assert(out.is_within_u8());
-        col = SDL_MapRGBA(surface->format, static_cast<Uint8>(out.r()),
+        col = SDL_MapRGBA(format, palette, static_cast<Uint8>(out.r()),
                           static_cast<Uint8>(out.g()),
                           static_cast<Uint8>(out.b()),
                           static_cast<Uint8>(out.a()));
@@ -585,17 +544,17 @@ const GrpRect& SDLSurface::GetPattern(int patt_no) const {
 // -----------------------------------------------------------------------
 
 std::shared_ptr<SDLSurface> SDLSurface::Clone() const {
-  SDL_Surface* tmp_surface = SDL_CreateRGBSurface(
-      surface_->flags, surface_->w, surface_->h, surface_->format->BitsPerPixel,
-      surface_->format->Rmask, surface_->format->Gmask, surface_->format->Bmask,
-      surface_->format->Amask);
+  SDL_Surface* tmp_surface =
+      SDL_CreateSurface(surface_->w, surface_->h, surface_->format);
+  if (!tmp_surface)
+    ThrowSDLError("SDL_CreateSurface", "SDLSurface::clone()");
 
   // Disable alpha blending because we're copying onto a blank (and
   // blank alpha!) surface
-  if (SDL_SetAlpha(surface_, 0, 0))
-    ThrowSDLError("SDL_SetAlpha", "GraphicsSystem::blitSurfaceToDC()");
-
-  if (SDL_BlitSurface(surface_, NULL, tmp_surface, NULL))
+  SDL_SetSurfaceBlendMode(surface_, SDL_BLENDMODE_NONE);
+  const bool ok = SDL_BlitSurface(surface_, NULL, tmp_surface, NULL);
+  SDL_SetSurfaceBlendMode(surface_, SDL_BLENDMODE_BLEND);
+  if (!ok)
     ThrowSDLError("SDL_BlitSurface", "SDLSurface::clone()");
 
   return std::make_shared<SDLSurface>(tmp_surface, region_table_);
@@ -633,38 +592,40 @@ std::vector<int> SDLSurface::segmentPicture(int size_remainging) {
 // -----------------------------------------------------------------------
 
 RGBAColour SDLSurface::GetPixelAt(Point pos) const {
-  SDL_Color colour;
   Uint32 col = 0;
 
+  const int bpp = SDL_BYTESPERPIXEL(surface_->format);
   char* p_position = (char*)surface_->pixels;
   p_position += (surface_->pitch * pos.y());
-  p_position += (surface_->format->BytesPerPixel * pos.x());
+  p_position += (bpp * pos.x());
 
   // Copy pixel data
-  std::memcpy(&col, p_position, surface_->format->BytesPerPixel);
+  std::memcpy(&col, p_position, bpp);
 
   // Use SDL_GetRGBA to extract RGBA components
-  SDL_GetRGBA(col, surface_->format, &colour.r, &colour.g, &colour.b,
-              &colour.unused);
-  return RGBAColour(colour.r, colour.g, colour.b, colour.unused);
+  Uint8 r, g, b, a;
+  SDL_GetRGBA(col, SDL_GetPixelFormatDetails(surface_->format),
+              SDL_GetSurfacePalette(surface_), &r, &g, &b, &a);
+  return RGBAColour(r, g, b, a);
 }
 
 std::vector<char> SDLSurface::Dump(Rect region) const {
   auto x = region.x(), y = region.y();
   auto w = region.width(), h = region.height();
 
-  std::vector<char> buf(surface_->format->BytesPerPixel * w * h);
+  const int bpp = SDL_BYTESPERPIXEL(surface_->format);
+  std::vector<char> buf(bpp * w * h);
   char* dst = buf.data();
   if (SDL_MUSTLOCK(surface_)) {
-    if (SDL_LockSurface(surface_) != 0) {
+    if (!SDL_LockSurface(surface_)) {
       throw std::runtime_error("Failed to lock the SDL_Surface: " +
                                std::string(SDL_GetError()));
     }
   }
   char* src = static_cast<char*>(surface_->pixels);
   src += surface_->pitch * (y + h - 1);
-  int col_offset = surface_->format->BytesPerPixel * x;
-  int col_size = surface_->format->BytesPerPixel * w;
+  int col_offset = bpp * x;
+  int col_size = bpp * w;
   for (int row = 0; row < h; ++row) {
     std::memcpy(dst, src + col_offset, col_size);
     dst += col_size;
@@ -686,28 +647,29 @@ std::shared_ptr<SDLSurface> SDLSurface::ClipAsColorMask(const Rect& clip_rect,
 
   // TODO(erg): This needs to be made exception safe and so does the rest
   // of this file.
-  SDL_Surface* tmp_surface = SDL_CreateRGBSurface(
-      0, surface_->w, surface_->h, 24, 0xFF0000, 0xFF00, 0xFF, 0);
+  SDL_Surface* tmp_surface =
+      SDL_CreateSurface(surface_->w, surface_->h, SDL_PIXELFORMAT_XRGB8888);
 
   if (!tmp_surface)
-    ThrowSDLError("SDL_CreateRGBSurface", function_name);
+    ThrowSDLError("SDL_CreateSurface", function_name);
 
-  if (SDL_BlitSurface(surface_, NULL, tmp_surface, NULL))
+  SDL_SetSurfaceBlendMode(surface_, SDL_BLENDMODE_BLEND);
+  if (!SDL_BlitSurface(surface_, NULL, tmp_surface, NULL))
     ThrowSDLError("SDL_BlitSurface", function_name);
 
-  Uint32 colour = SDL_MapRGB(tmp_surface->format, r, g, b);
-  if (SDL_SetColorKey(tmp_surface, SDL_SRCCOLORKEY, colour))
-    ThrowSDLError("SDL_SetAlpha", function_name);
+  Uint32 colour = SDL_MapSurfaceRGB(tmp_surface, r, g, b);
+  if (!SDL_SetSurfaceColorKey(tmp_surface, true, colour))
+    ThrowSDLError("SDL_SetSurfaceColorKey", function_name);
 
-  // The OpenGL pieces don't know what to do an image formatted to
-  // (FF0000, FF00, FF, 0), so convert it to a standard RGBA image
-  // (and clip to the desired rectangle)
+  // The blit into the color-keyed copy removes the alpha channel. A second
+  // blit copies the result into a standard surface and clips it to the given
+  // rectangle.
   SDL_Surface* surface = buildNewSurface(clip_rect.size());
   SDL_Rect srcrect = ToSDLRect(clip_rect);
-  if (SDL_BlitSurface(tmp_surface, &srcrect, surface, NULL))
+  if (!SDL_BlitSurface(tmp_surface, &srcrect, surface, NULL))
     ThrowSDLError("SDL_BlitSurface", function_name);
 
-  SDL_FreeSurface(tmp_surface);
+  SDL_DestroySurface(tmp_surface);
 
   return std::make_shared<SDLSurface>(surface);
 }

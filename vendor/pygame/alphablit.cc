@@ -21,15 +21,7 @@
     pete@shinners.org
 */
 
-#include <SDL/SDL.h>
-
-
-#define PYGAME_BLEND_ADD  0x1
-#define PYGAME_BLEND_SUB  0x2
-#define PYGAME_BLEND_MULT 0x3
-#define PYGAME_BLEND_MIN  0x4
-#define PYGAME_BLEND_MAX  0x5
-
+#include <SDL3/SDL.h>
 
 
 /* The structure passed to the low level blit functions */
@@ -43,29 +35,20 @@ typedef struct {
         int d_height;
         int d_skip;
         void *aux_data;
-        SDL_PixelFormat *src;
+        const SDL_PixelFormatDetails *src;
         Uint8 *table;
-        SDL_PixelFormat *dst;
+        const SDL_PixelFormatDetails *dst;
+        Uint8 src_alpha;
+        Uint32 src_colorkey;
 } SDL_BlitInfo;
 static void alphablit_alpha(SDL_BlitInfo *info);
 static void alphablit_colorkey(SDL_BlitInfo *info);
 static void alphablit_solid(SDL_BlitInfo *info);
-static void blit_blend_THEM(SDL_BlitInfo *info, int the_args);
 
 
 
 static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
                           SDL_Surface *dst, SDL_Rect *dstrect, int the_args);
-extern int SDL_RLESurface(SDL_Surface *surface);
-extern void SDL_UnRLESurface(SDL_Surface *surface, int recode);
-
-
-
-
-
-
-
-
 
 
 
@@ -76,6 +59,8 @@ static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
         int okay;
         int src_locked;
         int dst_locked;
+        int src_bpp = SDL_BYTESPERPIXEL(src->format);
+        int dst_bpp = SDL_BYTESPERPIXEL(dst->format);
 
     /* Everything is okay at the beginning...  */
         okay = 1;
@@ -83,7 +68,7 @@ static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
         /* Lock the destination if it's in hardware */
         dst_locked = 0;
         if ( SDL_MUSTLOCK(dst) ) {
-                if ( SDL_LockSurface(dst) < 0 )
+                if ( !SDL_LockSurface(dst) )
                         okay = 0;
                 else
                         dst_locked = 1;
@@ -91,7 +76,7 @@ static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
         /* Lock the source if it's in hardware */
         src_locked = 0;
         if ( SDL_MUSTLOCK(src) ) {
-                if ( SDL_LockSurface(src) < 0 )
+                if ( !SDL_LockSurface(src) )
                         okay = 0;
                 else
                         src_locked = 1;
@@ -102,46 +87,38 @@ static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
                 SDL_BlitInfo info;
 
                 /* Set up the blit information */
-                info.s_pixels = (Uint8 *)src->pixels + src->offset +
+                info.s_pixels = (Uint8 *)src->pixels +
                                 (Uint16)srcrect->y*src->pitch +
-                                (Uint16)srcrect->x*src->format->BytesPerPixel;
+                                (Uint16)srcrect->x*src_bpp;
                 info.s_width = srcrect->w;
                 info.s_height = srcrect->h;
-                info.s_skip=src->pitch-info.s_width*src->format->BytesPerPixel;
-                info.d_pixels = (Uint8 *)dst->pixels + dst->offset +
+                info.s_skip=src->pitch-info.s_width*src_bpp;
+                info.d_pixels = (Uint8 *)dst->pixels +
                                 (Uint16)dstrect->y*dst->pitch +
-                                (Uint16)dstrect->x*dst->format->BytesPerPixel;
+                                (Uint16)dstrect->x*dst_bpp;
                 info.d_width = dstrect->w;
                 info.d_height = dstrect->h;
-                info.d_skip=dst->pitch-info.d_width*dst->format->BytesPerPixel;
-                info.src = src->format;
-                info.dst = dst->format;
+                info.d_skip=dst->pitch-info.d_width*dst_bpp;
+                info.src = SDL_GetPixelFormatDetails(src->format);
+                info.dst = SDL_GetPixelFormatDetails(dst->format);
+                info.src_alpha = 255;
+                SDL_GetSurfaceAlphaMod(src, &info.src_alpha);
+                info.src_colorkey = 0;
 
-                switch(the_args) {
-                    case 0:
-                    {
-                        if(src->flags&SDL_SRCALPHA && src->format->Amask)
-                            alphablit_alpha(&info);
-                        else if(src->flags & SDL_SRCCOLORKEY)
-                            alphablit_colorkey(&info);
-                        else
-                            alphablit_solid(&info);
-                        break;
-                    }
-                    case PYGAME_BLEND_ADD:
-                    case PYGAME_BLEND_SUB:
-                    case PYGAME_BLEND_MULT:
-                    case PYGAME_BLEND_MIN:
-                    case PYGAME_BLEND_MAX: {
-                        blit_blend_THEM(&info, the_args); 
-                        break;
-                    }
-                    default:
-                    {
+                if (the_args != 0) {
                         SDL_SetError("Invalid argument passed to blit.");
                         okay = 0;
-                        break;
-                    }
+                } else {
+                        SDL_BlendMode blend_mode = SDL_BLENDMODE_NONE;
+                        SDL_GetSurfaceBlendMode(src, &blend_mode);
+                        if (blend_mode != SDL_BLENDMODE_NONE &&
+                            SDL_ISPIXELFORMAT_ALPHA(src->format))
+                                alphablit_alpha(&info);
+                        else if (SDL_GetSurfaceColorKey(src,
+                                                        &info.src_colorkey))
+                                alphablit_colorkey(&info);
+                        else
+                                alphablit_solid(&info);
                 }
 
         }
@@ -162,12 +139,9 @@ static int SoftBlitPyGame(SDL_Surface *src, SDL_Rect *srcrect,
  */
 
 
-#define GET_PIXEL(buf, bpp, fmt, pixel)                    \
+#define DISEMBLE_RGBA(buf, bpp, fmt, pixel, R, G, B, A)                    \
 do {                                                                       \
         switch (bpp) {                                                           \
-                case 1:                                                           \
-                        pixel = *((Uint8 *)(buf));                           \
-                break;                                                       \
                 case 2:                                                           \
                         pixel = *((Uint16 *)(buf));                           \
                 break;                                                           \
@@ -184,57 +158,19 @@ do {                                                                       \
                 }                                                           \
                 break;                                                           \
         }                                                                   \
+        R = ((pixel&fmt->Rmask)>>fmt->Rshift)<<(8-fmt->Rbits);             \
+        G = ((pixel&fmt->Gmask)>>fmt->Gshift)<<(8-fmt->Gbits);             \
+        B = ((pixel&fmt->Bmask)>>fmt->Bshift)<<(8-fmt->Bbits);             \
+        A = ((pixel&fmt->Amask)>>fmt->Ashift)<<(8-fmt->Abits);             \
 } while(0)
-
-
-#define DISEMBLE_RGBA(buf, bpp, fmt, pixel, R, G, B, A)                    \
-do {                                                                       \
-        if(bpp==1){\
-            pixel = *((Uint8 *)(buf));                           \
-            R = fmt->palette->colors[pixel].r; \
-            G = fmt->palette->colors[pixel].g; \
-            B = fmt->palette->colors[pixel].b; \
-            A = 255; \
-        } else { \
-        switch (bpp) {                                                           \
-                case 2:                                                           \
-                        pixel = *((Uint16 *)(buf));                           \
-                break;                                                           \
-                case 4:                                                           \
-                        pixel = *((Uint32 *)(buf));                           \
-                break;                                                           \
-                default:        {/* case 3: FIXME: broken code (no alpha) */                   \
-                        Uint8 *b = (Uint8 *)buf;                           \
-                        if(SDL_BYTEORDER == SDL_LIL_ENDIAN) {                   \
-                                pixel = b[0] + (b[1] << 8) + (b[2] << 16); \
-                        } else {                                           \
-                                pixel = (b[0] << 16) + (b[1] << 8) + b[2]; \
-                        }                                                   \
-                }                                                           \
-                break;                                                           \
-            }                                                                   \
-            R = ((pixel&fmt->Rmask)>>fmt->Rshift)<<fmt->Rloss;                 \
-            G = ((pixel&fmt->Gmask)>>fmt->Gshift)<<fmt->Gloss;                 \
-            B = ((pixel&fmt->Bmask)>>fmt->Bshift)<<fmt->Bloss;                 \
-            A = ((pixel&fmt->Amask)>>fmt->Ashift)<<fmt->Aloss;                 \
-        }\
-} while(0)
-
-
-#define DISEMBLE_RGBA4(buf, bpp, fmt, pixel, R, G, B, A)                    \
-                        pixel = *((Uint32 *)(buf));                           \
-            R = ((pixel&fmt->Rmask)>>fmt->Rshift)<<fmt->Rloss;                 \
-            G = ((pixel&fmt->Gmask)>>fmt->Gshift)<<fmt->Gloss;                 \
-            B = ((pixel&fmt->Bmask)>>fmt->Bshift)<<fmt->Bloss;                 \
-            A = ((pixel&fmt->Amask)>>fmt->Ashift)<<fmt->Aloss;                 \
 
 
 #define PIXEL_FROM_RGBA(pixel, fmt, r, g, b, a)                         \
 {                                                                       \
-        pixel = ((r>>fmt->Rloss)<<fmt->Rshift)|                                \
-                ((g>>fmt->Gloss)<<fmt->Gshift)|                                \
-                ((b>>fmt->Bloss)<<fmt->Bshift)|                                \
-                ((a<<fmt->Aloss)<<fmt->Ashift);                                \
+        pixel = ((r>>(8-fmt->Rbits))<<fmt->Rshift)|                            \
+                ((g>>(8-fmt->Gbits))<<fmt->Gshift)|                            \
+                ((b>>(8-fmt->Bbits))<<fmt->Bshift)|                            \
+                ((a<<(8-fmt->Abits))<<fmt->Ashift);                            \
 }
 #define ASSEMBLE_RGBA(buf, bpp, fmt, r, g, b, a)                        \
 {                                                                       \
@@ -255,22 +191,6 @@ do {                                                                       \
 }
 
 
-#define ASSEMBLE_RGBA4(buf, bpp, fmt, r, g, b, a)                        \
-                        Uint32 pixel;                                        \
-                        PIXEL_FROM_RGBA(pixel, fmt, r, g, b, a);        \
-                        *((Uint32 *)(buf)) = pixel;                        \
-
-
-
-#if 0
-#define ALPHA_BLEND(sR, sG, sB, sA, dR, dG, dB, dA)  \
-do {                                            \
-        dR = (((sR-dR)*(sA))>>8)+dR;                \
-        dG = (((sG-dG)*(sA))>>8)+dG;                \
-        dB = (((sB-dB)*(sA))>>8)+dB;                \
-        dA = sA+dA - ((sA*dA)/255);                \
-} while(0)
-#else
 #define ALPHA_BLEND(sR, sG, sB, sA, dR, dG, dB, dA)  \
 do {   if(dA){\
         dR = ((dR<<8) + (sR-dR)*sA + sR) >> 8;	   \
@@ -284,186 +204,6 @@ do {   if(dA){\
         dA = sA;               \
     }\
 } while(0)
-#endif
-
-
-
-
-#define BLEND_TOP_VARS \
-        int n,ii; \
-        int width = info->d_width; \
-        int height = info->d_height; \
-        Uint8 *src = info->s_pixels; \
-        int srcskip = info->s_skip; \
-        Uint8 *dst = info->d_pixels; \
-        int dstskip = info->d_skip; \
-        SDL_PixelFormat *srcfmt = info->src; \
-        SDL_PixelFormat *dstfmt = info->dst; \
-        int srcbpp = srcfmt->BytesPerPixel; \
-        int dstbpp = dstfmt->BytesPerPixel; \
-        Uint8 dR, dG, dB, dA, sR, sG, sB, sA; \
-        Uint32 pixel; \
-        Uint32 tmp; \
-        Sint32 tmp2; \
-        ii = tmp = tmp2 = 0 ; \
-
-
-
-#define BLEND_TOP \
-        while ( height-- ) \
-        { \
-            for(n=width; n>0; --n) \
-            { \
-
-
-#define BLEND_TOP_GENERIC \
-        BLEND_TOP; \
-        DISEMBLE_RGBA(src, srcbpp, srcfmt, pixel, sR, sG, sB, sA); \
-        DISEMBLE_RGBA(dst, dstbpp, dstfmt, pixel, dR, dG, dB, dA); \
-
-
-#define BLEND_BOTTOM \
-            } \
-            src += srcskip; \
-            dst += dstskip; \
-        } \
-
-#define BLEND_BOTTOM_GENERIC \
-                ASSEMBLE_RGBA(dst, dstbpp, dstfmt, dR, dG, dB, dA); \
-                src += srcbpp; \
-                dst += dstbpp; \
-                BLEND_BOTTOM; \
-
-
-#define BLEND_TOP_4 \
-    if(srcfmt->BytesPerPixel == 4 && dstfmt->BytesPerPixel == 4) { \
-        BLEND_TOP;  \
-            for(ii=0;ii < 3; ii++){ \
-
-#define BLEND_START_GENERIC \
-                src++;dst++; \
-            } \
-            src++;dst++; \
-        BLEND_BOTTOM;  \
-    } else { \
-        BLEND_TOP_GENERIC;  \
-// NOTE: we don't touch alpha.
-
-
-#define BLEND_END_GENERIC \
-        BLEND_BOTTOM_GENERIC; \
-    } \
-
-
-/*
- * Blending functions for the 32bit routines.
- */
-
-#define BLEND_ADD4(S,D)  \
-    tmp = (D) + (S);  (D) = (tmp <= 255 ? tmp: 255); \
-
-#define BLEND_SUB4(S,D)  \
-    tmp2 = (D)-(S); (D) = (tmp2 >= 0 ? tmp2 : 0); \
-
-#define BLEND_MULT4(S,D)  \
-    tmp = ((D) * (S)) >> 8;  (D) = (tmp <= 255 ? tmp: 255); \
-
-#define BLEND_MIN4(S,D)  \
-    if ((S) < (D)) { (D) = (S); } \
-
-#define BLEND_MAX4(S,D)  \
-    if ((S) > (D)) { (D) = (S); } \
-
-
-/*
- * These are the dissasembled blending functions.
- */
-
-#define BLEND_ADD(sR, sG, sB, sA, dR, dG, dB, dA)  \
-    dR = (dR+sR <= 255 ? dR+sR: 255); \
-    dG = (dG+sG <= 255 ? dG+sG : 255); \
-    dB = (dB+sB <= 255 ? dB+sB : 255); \
-
-
-#define BLEND_SUB(sR, sG, sB, sA, dR, dG, dB, dA)  \
-    tmp2 = dR - sR; dR = (tmp2 >= 0 ? tmp2 : 0); \
-    tmp2 = dG - sG; dG = (tmp2 >= 0 ? tmp2 : 0); \
-    tmp2 = dB - sB; dB = (tmp2 >= 0 ? tmp2 : 0); \
-
-
-#define BLEND_MULT(sR, sG, sB, sA, dR, dG, dB, dA)  \
-    dR = (dR * sR) >> 8; \
-    dG = (dG * sG) >> 8; \
-    dB = (dB * sB) >> 8; \
-
-#define BLEND_MIN(sR, sG, sB, sA, dR, dG, dB, dA)  \
-    if(sR < dR) { dR = sR; } \
-    if(sG < dG) { dG = sG; } \
-    if(sB < dB) { dB = sB; } \
-
-#define BLEND_MAX(sR, sG, sB, sA, dR, dG, dB, dA)  \
-    if(sR > dR) { dR = sR; } \
-    if(sG > dG) { dG = sG; } \
-    if(sB > dB) { dB = sB; } \
-
-
-/*
- * blit_blend takes the blending args, and then uses that to select the 
- *  correct code for blending with.
- */
-static void blit_blend_THEM(SDL_BlitInfo *info, int the_args) {
-    BLEND_TOP_VARS;
-
-    switch(the_args) {
-        /*
-         * We use macros to keep the code shorter.
-         * First we see if it is a 32bit RGBA surface.  If so we have some 
-         *  special case code for that.  Otherwise we use the generic code.
-         */
-        case PYGAME_BLEND_ADD: {
-            BLEND_TOP_4;
-            BLEND_ADD4(*src,*dst); 
-            BLEND_START_GENERIC; 
-            BLEND_ADD(sR, sG, sB, sA, dR, dG, dB, dA); 
-            BLEND_END_GENERIC;
-            break;
-        }
-        case PYGAME_BLEND_SUB: {
-            BLEND_TOP_4;
-            BLEND_SUB4(*src,*dst); 
-            BLEND_START_GENERIC; 
-            BLEND_SUB(sR, sG, sB, sA, dR, dG, dB, dA); 
-            BLEND_END_GENERIC;
-            break;
-        }
-        case PYGAME_BLEND_MULT: {
-            BLEND_TOP_4;
-            BLEND_MULT4(*src,*dst); 
-            BLEND_START_GENERIC; 
-            BLEND_MULT(sR, sG, sB, sA, dR, dG, dB, dA); 
-            BLEND_END_GENERIC;
-            break;
-        }
-        case PYGAME_BLEND_MIN: {
-            BLEND_TOP_4;
-            BLEND_MIN4(*src,*dst); 
-            BLEND_START_GENERIC; 
-            BLEND_MIN(sR, sG, sB, sA, dR, dG, dB, dA); 
-            BLEND_END_GENERIC;
-            break;
-        }
-        case PYGAME_BLEND_MAX: {
-            BLEND_TOP_4;
-            BLEND_MAX4(*src,*dst); 
-            BLEND_START_GENERIC; 
-            BLEND_MAX(sR, sG, sB, sA, dR, dG, dB, dA); 
-            BLEND_END_GENERIC;
-            break;
-        }
-
-    }
-}
-
 
 
 
@@ -477,10 +217,10 @@ static void alphablit_alpha(SDL_BlitInfo *info)
         int srcskip = info->s_skip;
         Uint8 *dst = info->d_pixels;
         int dstskip = info->d_skip;
-        SDL_PixelFormat *srcfmt = info->src;
-        SDL_PixelFormat *dstfmt = info->dst;
-        int srcbpp = srcfmt->BytesPerPixel;
-        int dstbpp = dstfmt->BytesPerPixel;
+        const SDL_PixelFormatDetails *srcfmt = info->src;
+        const SDL_PixelFormatDetails *dstfmt = info->dst;
+        int srcbpp = srcfmt->bytes_per_pixel;
+        int dstbpp = dstfmt->bytes_per_pixel;
         int dR, dG, dB, dA, sR, sG, sB, sA;
 
         while ( height-- )
@@ -509,13 +249,13 @@ static void alphablit_colorkey(SDL_BlitInfo *info)
         int srcskip = info->s_skip;
         Uint8 *dst = info->d_pixels;
         int dstskip = info->d_skip;
-        SDL_PixelFormat *srcfmt = info->src;
-        SDL_PixelFormat *dstfmt = info->dst;
-        int srcbpp = srcfmt->BytesPerPixel;
-        int dstbpp = dstfmt->BytesPerPixel;
+        const SDL_PixelFormatDetails *srcfmt = info->src;
+        const SDL_PixelFormatDetails *dstfmt = info->dst;
+        int srcbpp = srcfmt->bytes_per_pixel;
+        int dstbpp = dstfmt->bytes_per_pixel;
         int dR, dG, dB, dA, sR, sG, sB, sA;
-        int alpha = srcfmt->alpha;
-        Uint32 colorkey = srcfmt->colorkey;
+        int alpha = info->src_alpha;
+        Uint32 colorkey = info->src_colorkey;
 
         while ( height-- )
         {
@@ -545,12 +285,12 @@ static void alphablit_solid(SDL_BlitInfo *info)
         int srcskip = info->s_skip;
         Uint8 *dst = info->d_pixels;
         int dstskip = info->d_skip;
-        SDL_PixelFormat *srcfmt = info->src;
-        SDL_PixelFormat *dstfmt = info->dst;
-        int srcbpp = srcfmt->BytesPerPixel;
-        int dstbpp = dstfmt->BytesPerPixel;
+        const SDL_PixelFormatDetails *srcfmt = info->src;
+        const SDL_PixelFormatDetails *dstfmt = info->dst;
+        int srcbpp = srcfmt->bytes_per_pixel;
+        int dstbpp = dstfmt->bytes_per_pixel;
         int dR, dG, dB, dA, sR, sG, sB, sA;
-        int alpha = srcfmt->alpha;
+        int alpha = info->src_alpha;
 
         while ( height-- )
         {
@@ -578,13 +318,8 @@ int pygame_Blit(SDL_Surface *src, SDL_Rect *srcrect,
         SDL_Rect fulldst;
         int srcx, srcy, w, h;
 
-        /* Make sure the surfaces aren't locked */
         if ( ! src || ! dst ) {
-                SDL_SetError("SDL_UpperBlit: passed a NULL surface");
-                return(-1);
-        }
-        if ( src->locked || dst->locked ) {
-                SDL_SetError("Surfaces must not be locked during blit");
+                SDL_SetError("%s", "SDL_UpperBlit: passed a NULL surface");
                 return(-1);
         }
 
@@ -628,8 +363,11 @@ int pygame_Blit(SDL_Surface *src, SDL_Rect *srcrect,
 
         /* clip the destination rectangle against the clip rectangle */
         {
-                SDL_Rect *clip = &dst->clip_rect;
+                SDL_Rect clip_rect;
+                SDL_Rect *clip = &clip_rect;
                 int dx, dy;
+
+                SDL_GetSurfaceClipRect(dst, &clip_rect);
 
                 dx = clip->x - dstrect->x;
                 if(dx > 0) {
@@ -691,7 +429,7 @@ void pygame_stretch(SDL_Surface *src, SDL_Surface *dst) {
 	int w_err, h_err = srcheight2 - dstheight2;
 
 
-	switch (src->format->BytesPerPixel) {
+	switch (SDL_BYTESPERPIXEL(src->format)) {
 	case 1:
 		for (looph = 0; looph < dstheight; ++looph) {
 			Uint8 *srcpix = (Uint8*)srcrow, *dstpix = (Uint8*)dstrow;

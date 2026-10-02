@@ -24,7 +24,7 @@
 
 #include <gtest/gtest.h>
 
-#include <SDL/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <chrono>
 #include <memory>
@@ -56,9 +56,7 @@ std::shared_ptr<SDLSurface> PatternedSurface() {
   regions[1].originX = 4;
   regions[1].originY = 5;
 
-  SDL_Surface* raw =
-      SDL_CreateRGBSurface(SDL_SWSURFACE | SDL_SRCALPHA, 64, 64, 32, 0xff0000,
-                           0xff00, 0xff, 0xff000000);
+  SDL_Surface* raw = SDL_CreateSurface(64, 64, SDL_PIXELFORMAT_ARGB8888);
   if (!raw)
     throw std::runtime_error(SDL_GetError());
   return std::make_shared<SDLSurface>(raw, std::move(regions));

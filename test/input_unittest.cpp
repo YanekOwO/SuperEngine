@@ -24,6 +24,9 @@
 #include <gtest/gtest.h>
 
 #include "core/input.hpp"
+#include "systems/sdl/event_backend.hpp"
+
+#include <SDL3/SDL.h>
 
 #include <memory>
 
@@ -168,4 +171,35 @@ TEST(InputListenerTest, UnrelatedAndNullEventsAreIgnored) {
   EXPECT_FALSE(listener.right_mouse_down);
   ExpectNoEdges(listener.decide);
   ExpectNoEdges(listener.cancel);
+}
+
+TEST(FromSDLKeycodeTest, MapsEngineConsumedKeys) {
+  EXPECT_EQ(FromSDLKeycode(SDLK_RETURN), KeyCode::RETURN);
+  EXPECT_EQ(FromSDLKeycode(SDLK_ESCAPE), KeyCode::ESCAPE);
+  EXPECT_EQ(FromSDLKeycode(SDLK_SPACE), KeyCode::SPACE);
+  EXPECT_EQ(FromSDLKeycode(SDLK_LCTRL), KeyCode::LCTRL);
+  EXPECT_EQ(FromSDLKeycode(SDLK_RCTRL), KeyCode::RCTRL);
+  EXPECT_EQ(FromSDLKeycode(SDLK_LSHIFT), KeyCode::LSHIFT);
+  EXPECT_EQ(FromSDLKeycode(SDLK_RSHIFT), KeyCode::RSHIFT);
+  EXPECT_EQ(FromSDLKeycode(SDLK_UP), KeyCode::UP);
+  EXPECT_EQ(FromSDLKeycode(SDLK_DOWN), KeyCode::DOWN);
+  EXPECT_EQ(FromSDLKeycode(SDLK_KP_ENTER), KeyCode::KP_ENTER);
+}
+
+TEST(FromSDLKeycodeTest, MapsPrintableAsciiByValue) {
+  EXPECT_EQ(FromSDLKeycode(SDLK_A), KeyCode::a);
+  EXPECT_EQ(FromSDLKeycode(SDLK_Z), KeyCode::z);
+  EXPECT_EQ(FromSDLKeycode(SDLK_0), KeyCode::NUM0);
+  EXPECT_EQ(FromSDLKeycode(SDLK_9), KeyCode::NUM9);
+  EXPECT_EQ(FromSDLKeycode(SDLK_BACKSPACE), KeyCode::BACKSPACE);
+  EXPECT_EQ(FromSDLKeycode(SDLK_TAB), KeyCode::TAB);
+}
+
+TEST(FromSDLKeycodeTest, ScancodeMaskedKeysDoNotPassThrough) {
+  EXPECT_EQ(FromSDLKeycode(SDLK_F1), KeyCode::F1);
+  EXPECT_EQ(FromSDLKeycode(SDLK_F15), KeyCode::F15);
+  EXPECT_EQ(FromSDLKeycode(SDLK_LEFT), KeyCode::LEFT);
+  EXPECT_EQ(FromSDLKeycode(SDLK_RIGHT), KeyCode::RIGHT);
+  // An unmapped masked key must not leak SDL3 numeric values into KeyCode.
+  EXPECT_EQ(FromSDLKeycode(SDLK_MEDIA_PLAY), KeyCode::UNKNOWN);
 }

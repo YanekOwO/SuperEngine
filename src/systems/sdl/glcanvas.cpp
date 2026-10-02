@@ -26,7 +26,6 @@
 #include "systems/sdl/gl_frame_buffer.hpp"
 #include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/gltexture.hpp"
-#include "systems/sdl/screen_canvas.hpp"
 
 #include <cstring>
 
@@ -64,11 +63,4 @@ void glCanvas::Use() {
 
 std::shared_ptr<glFrameBuffer> glCanvas::GetBuffer() const {
   return frame_buf_;
-}
-
-void glCanvas::Flush() {
-  auto screen = std::make_shared<ScreenCanvas>(display_size_);
-  const Rect src(Point(0, 0), resolution_);
-  const Rect dst(Point(0, 0), display_size_);
-  renderer_->Render({frame_buf_->GetTexture(), src}, {screen, dst});
 }

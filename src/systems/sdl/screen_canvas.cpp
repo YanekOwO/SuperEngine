@@ -28,13 +28,17 @@
 
 #include <GL/glew.h>
 
+ScreenCanvas::ScreenCanvas(Size size)
+    : glFrameBuffer(std::make_shared<glTexture>(size)) {}
+
 std::shared_ptr<glTexture> ScreenCanvas::GetTexture() const {
-  auto result = std::make_shared<glTexture>(display_size_);
+  const Size size = GetSize();
+  auto result = std::make_shared<glTexture>(size);
 
   glBindFramebuffer(GL_READ_FRAMEBUFFER, GetID());
   glBindTexture(GL_TEXTURE_2D, result->GetID());
-  glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, display_size_.width(),
-                      display_size_.height());
+  glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, size.width(),
+                      size.height());
   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
   return result;

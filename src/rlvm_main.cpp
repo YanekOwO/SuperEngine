@@ -22,12 +22,7 @@
 //
 // -----------------------------------------------------------------------
 
-// We include this here because SDL is retarded and works by #define
-// main(int argc, char* agrv[]). Loosers.
-#include <SDL/SDL.h>
-// TODO: Clean up platform-specific dependencies (SDL, GTK, etc.) once
-// abstractions and implementations are separated properly. Consider
-// refactoring for better cross-platform support and modularity.
+#include <SDL3/SDL_main.h>
 
 #include <boost/program_options.hpp>
 #include <filesystem>

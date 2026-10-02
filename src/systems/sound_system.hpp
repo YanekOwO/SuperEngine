@@ -151,7 +151,7 @@ class SoundSystem {
   // |channel|.
   void WavPlayImpl(const std::string& wav_file, const int channel, bool loop);
 
-  // Computes and passes a volume to SDL_mixer for |channel|.
+  // Computes and passes a volume to the audio backend for |channel|.
   void SetChannelVolumeImpl(int channel);
 
   // Creates a player object from a name. Throws if the bgm isn't found.
@@ -194,8 +194,8 @@ class SoundSystem {
   unsigned char channel_volume_[NUM_TOTAL_CHANNELS];
 
   // Open tasks that adjust the volume of a wave channel. We do this
-  // because SDL_mixer doesn't provide this functionality and I'm
-  // guessing other mixers don't either.
+  // because the audio backend doesn't provide this functionality and
+  // I'm guessing other mixers don't either.
   ChannelAdjustmentMap pcm_adjustment_tasks_;
 
   std::unique_ptr<VolumeAdjustTask> bgm_adjustment_task_;

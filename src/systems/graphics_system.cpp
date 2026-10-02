@@ -197,7 +197,7 @@ GraphicsSystem::GraphicsSystem(System& system,
   bool is_fullscreen = screen_mode() == 0;
   impl_->InitSystem(screen_size, is_fullscreen);
   SetScreenSize(screen_size);
-  display_size_ = screen_size;
+  Resize(screen_size);
 
   window_title_update_interval_ = std::chrono::milliseconds(60);
   last_window_title_update_ =
@@ -331,8 +331,19 @@ void GraphicsSystem::SetWindowSubtitle(std::string utf8str) {
 void GraphicsSystem::Resize(Size display_size) {
   display_size_ = display_size;
   if (impl_)
-    impl_->Resize(display_size_, screen_mode() == 0);
+    display_size_ = impl_->Resize(display_size_, screen_mode() == 0);
   ForceRefresh();
+}
+
+// -----------------------------------------------------------------------
+
+Point GraphicsSystem::DisplayToScreenPoint(const Point& display_pos) const {
+  const Rect view = AspectFitRect(screen_size(), display_size_);
+  const float scale = static_cast<float>(view.width()) / screen_size().width();
+  const int x = static_cast<int>((display_pos.x() - view.x()) / scale);
+  const int y = static_cast<int>((display_pos.y() - view.y()) / scale);
+  return Point(std::clamp(x, 0, screen_size().width() - 1),
+               std::clamp(y, 0, screen_size().height() - 1));
 }
 
 // -----------------------------------------------------------------------

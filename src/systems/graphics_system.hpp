@@ -301,6 +301,10 @@ class GraphicsSystem : public EventListener {
   Size screen_size() const noexcept { return screen_size_; }
   Size GetDisplaySize() const noexcept { return display_size_; }
 
+  // Maps a position in window coordinates (SDL mouse space) to game screen
+  // coordinates. The map includes the letterbox offset and the scale.
+  Point DisplayToScreenPoint(const Point& display_pos) const;
+
   // Returns a rectangle with an origin of (0,0) and a size returned by
   // screen_size().
   Rect screen_rect() const { return screen_rect_; }

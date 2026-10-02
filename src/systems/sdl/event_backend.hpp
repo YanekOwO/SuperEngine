@@ -28,11 +28,19 @@
 #include "core/event.hpp"
 #include "systems/event_backend.hpp"
 
+#include <cstdint>
+#include <deque>
 #include <memory>
+
+KeyCode FromSDLKeycode(uint32_t sdl_keycode);
 
 class SDLEventBackend : public IEventBackend {
  public:
   SDLEventBackend();
 
   virtual std::shared_ptr<Event> PollEvent() override;
+
+ private:
+  std::deque<Event> pending_;
+  float wheel_accum_y_ = 0.0f;
 };

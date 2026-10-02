@@ -78,8 +78,8 @@ Before you begin, ensure you have the following libraries and utilities installe
   [https://ninja-build.org/](https://ninja-build.org/)
 - **Boost** (version 1.40 or higher):
   [https://www.boost.org/](https://www.boost.org/)
-- **SDL 1.2**:
-  [https://www.libsdl.org/download-1.2.php](https://www.libsdl.org/download-1.2.php)
+- **SDL3** (version 3.2.0 or higher) and **SDL3_ttf**:
+  [https://www.libsdl.org/](https://www.libsdl.org/)
 - **OpenGL** and **GLEW**.
 - **FreeType**:
   [https://www.freetype.org/](https://www.freetype.org/)

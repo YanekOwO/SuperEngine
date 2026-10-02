@@ -26,6 +26,9 @@
 
 #include "systems/isound_system.hpp"
 
+#include <SDL3/SDL.h>
+
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -59,21 +62,37 @@ class SDLSoundImpl : public ISoundSystem {
   virtual player_t GetMovieAudio() const override;
   virtual void StopMovieAudio() override;
 
-  uint16_t ToSDLSoundFormat(AV_SAMPLE_FMT fmt) const;
-  AV_SAMPLE_FMT FromSDLSoundFormat(uint16_t fmt) const;
+  SDL_AudioFormat ToSDLSoundFormat(AV_SAMPLE_FMT fmt) const;
+  AV_SAMPLE_FMT FromSDLSoundFormat(SDL_AudioFormat fmt) const;
 
  private:
   const char* GetError() const;
 
-  static void OnChannelFinished(int channel);             // callback
-  static void OnMusic(void*, uint8_t* buffer, int size);  // callback
+  static std::vector<uint8_t> RenderChunk(player_t audio);
+  static void PumpPlayer(player_t& player,
+                         bool enabled,
+                         SDL_AudioStream* stream,
+                         int additional);
 
-  class SDLSoundChunk;
+  static void SDLCALL OnChannelData(void* userdata,
+                                    SDL_AudioStream* stream,
+                                    int additional,
+                                    int total);
+  static void SDLCALL OnBgmData(void* userdata,
+                                SDL_AudioStream* stream,
+                                int additional,
+                                int total);
+  static void SDLCALL OnMovieData(void* userdata,
+                                  SDL_AudioStream* stream,
+                                  int additional,
+                                  int total);
+
   struct ChannelInfo {
     player_t player;
-    SDLSoundImpl* implementor;
-    std::vector<uint8_t> buffer;
-    std::unique_ptr<SDLSoundChunk> chunk;
+    SDL_AudioStream* stream = nullptr;
+    float base_gain = 1.0f;
+    uint64_t fade_start = 0;
+    uint32_t fade_ms = 0;  // 0 means that no fade is active.
 
     bool IsIdle() const;
     void Reset();
@@ -82,6 +101,9 @@ class SDLSoundImpl : public ISoundSystem {
   static std::vector<ChannelInfo> ch_;
   static player_t bgm_player_;
   static player_t movie_player_;
-  static bool bgm_enabled_;
+  static std::atomic<bool> bgm_enabled_;
   static AVSpec spec_;
+  static SDL_AudioDeviceID device_;
+  static SDL_AudioStream* bgm_stream_;
+  static SDL_AudioStream* movie_stream_;
 };

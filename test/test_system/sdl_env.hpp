@@ -24,11 +24,16 @@
 #include <memory>
 
 class Size;
+struct SDL_Window;
 
 class sdlEnv {
  public:
   sdlEnv(Size screen);
   ~sdlEnv();
+
+ private:
+  SDL_Window* window_ = nullptr;
+  void* gl_context_ = nullptr;
 };
 
 std::shared_ptr<sdlEnv> SetupSDL(Size screen);

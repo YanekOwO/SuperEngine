@@ -53,7 +53,7 @@
 #include "utilities/string_utilities.hpp"
 #include "version.h"
 
-#include <SDL/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
@@ -138,7 +138,7 @@ System::System(Gameexe& gameexe,
 
   rlevent_handler_ = std::make_shared<RLEventListener>();
 
-  if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::ostringstream ss;
     ss << "Video initialization failed: " << SDL_GetError();
     throw libreallive::Error(ss.str());

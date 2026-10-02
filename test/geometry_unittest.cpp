@@ -455,3 +455,16 @@ TEST(RectTest, Serialization) {
   }
   EXPECT_EQ(r1, r2);
 }
+
+TEST(RectTest, AspectFitRect) {
+  EXPECT_EQ(AspectFitRect(Size(640, 480), Size(640, 480)),
+            Rect(Point(0, 0), Size(640, 480)));
+  EXPECT_EQ(AspectFitRect(Size(640, 480), Size(1920, 1080)),
+            Rect(Point(240, 0), Size(1440, 1080)));
+  EXPECT_EQ(AspectFitRect(Size(640, 480), Size(800, 900)),
+            Rect(Point(0, 150), Size(800, 600)));
+  EXPECT_EQ(AspectFitRect(Size(800, 600), Size(1366, 768)),
+            Rect(Point(171, 0), Size(1024, 768)));
+  EXPECT_EQ(AspectFitRect(Size(640, 480), Size(320, 240)),
+            Rect(Point(0, 0), Size(320, 240)));
+}

@@ -29,6 +29,7 @@
 #include "core/rect.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <sstream>
 
@@ -237,6 +238,18 @@ Rect::operator std::string() const {
   std::ostringstream oss;
   oss << *this;
   return oss.str();
+}
+
+// -----------------------------------------------------------------------
+
+Rect AspectFitRect(Size content, Size bounds) {
+  const double scale =
+      std::min(static_cast<double>(bounds.width()) / content.width(),
+               static_cast<double>(bounds.height()) / content.height());
+  const Size fitted(
+      std::max(1, static_cast<int>(std::lround(content.width() * scale))),
+      std::max(1, static_cast<int>(std::lround(content.height() * scale))));
+  return fitted.CenteredIn(Rect(Point(0, 0), bounds));
 }
 
 // -----------------------------------------------------------------------

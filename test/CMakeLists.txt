@@ -41,7 +41,7 @@ target_link_libraries(unittest PRIVATE
   rlvm_src
   ${GTEST_LIBRARIES}
 
-  ${SDL1_LIBRARIES}
+  PkgConfig::SDL3
   ${OPENGL_LIBRARIES}
   ${GLEW_LIBRARIES}
 )
@@ -52,7 +52,6 @@ add_test(
 )
 
 set_tests_properties(RLVM_UnitTests PROPERTIES
-  PASS_REGULAR_EXPRESSION ".*"
   FAIL_REGULAR_EXPRESSION "FAILED"
   TIMEOUT 30
 )

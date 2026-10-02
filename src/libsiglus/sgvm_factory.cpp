@@ -231,15 +231,7 @@ SiglusRuntime SGVMFactory::Create() {
                   return true;
                 }
                 if constexpr (std::same_as<T, MouseMotion>) {
-                  const auto& graphics_sys = sys.graphics();
-                  const auto aspect_ratio_w =
-                      1.0f * graphics_sys.GetDisplaySize().width() /
-                      graphics_sys.screen_size().width();
-                  const auto aspect_ratio_h =
-                      1.0f * graphics_sys.GetDisplaySize().height() /
-                      graphics_sys.screen_size().height();
-                  event.pos.set_x(event.pos.x() / aspect_ratio_w);
-                  event.pos.set_y(event.pos.y() / aspect_ratio_h);
+                  event.pos = sys.graphics().DisplayToScreenPoint(event.pos);
                   return false;
                 }
                 return false;

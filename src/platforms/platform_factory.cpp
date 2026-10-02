@@ -30,11 +30,12 @@
 namespace fs = std::filesystem;
 
 PlatformImpl_t PlatformFactory::Create(const std::string& platform_name) {
-  if (platform_name != "default") {
-    const auto* constructor = Registry::Find(platform_name);
-    if (constructor != nullptr)
-      return std::invoke(*constructor);
+  const std::string name = platform_name == "default" ? "sdl" : platform_name;
+  const auto* constructor = Registry::Find(name);
+  if (constructor != nullptr)
+    return std::invoke(*constructor);
 
+  if (platform_name != "default") {
     std::cerr << "[WARNING] Constructor for platform " << platform_name
               << " not found.";
   }

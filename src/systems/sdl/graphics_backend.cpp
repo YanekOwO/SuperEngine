@@ -37,12 +37,7 @@
 #include "systems/sdl/screen_canvas.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
-#include <SDL/SDL.h>
-#include <SDL/SDL_video.h>
-#if !defined(__APPLE__) && !defined(_WIN32)
-#include <SDL/SDL_image.h>
-#include "../resources/48/rlvm_icon_48.xpm"
-#endif
+#include <SDL3/SDL.h>
 
 #include <fstream>
 #include <memory>
@@ -69,37 +64,25 @@ static std::string LoadFile(const std::filesystem::path& pth) {
 
 namespace {
 
-using SDL_SurfacePtr = std::unique_ptr<SDL_Surface, decltype(&SDL_FreeSurface)>;
+using SDL_SurfacePtr =
+    std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
 
 SDL_SurfacePtr CreateRGBASurface(Size size) {
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-  constexpr Uint32 rmask = 0xff000000;
-  constexpr Uint32 gmask = 0x00ff0000;
-  constexpr Uint32 bmask = 0x0000ff00;
-  constexpr Uint32 amask = 0x000000ff;
-#else
-  constexpr Uint32 rmask = 0x000000ff;
-  constexpr Uint32 gmask = 0x0000ff00;
-  constexpr Uint32 bmask = 0x00ff0000;
-  constexpr Uint32 amask = 0xff000000;
-#endif
-
-  return SDL_SurfacePtr(SDL_CreateRGBSurface(SDL_SWSURFACE, size.width(),
-                                             size.height(), 32, rmask, gmask,
-                                             bmask, amask),
-                        SDL_FreeSurface);
+  return SDL_SurfacePtr(
+      SDL_CreateSurface(size.width(), size.height(), SDL_PIXELFORMAT_RGBA32),
+      SDL_DestroySurface);
 }
 
-void SaveBackBufferBMP(const RenderFrameConfig& config) {
+void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
   if (!config.frame_dump_path)
     return;
 
   const auto& path = *config.frame_dump_path;
-  const int width = config.display_size.width();
-  const int height = config.display_size.height();
+  const int width = config.screen_size.width();
+  const int height = config.screen_size.height();
   if (width <= 0 || height <= 0) {
-    logger(Severity::Warn) << "Skipping frame dump for invalid display size "
-                           << config.display_size.DebugString();
+    logger(Severity::Warn) << "Skipping frame dump for invalid screen size "
+                           << config.screen_size.DebugString();
     return;
   }
 
@@ -119,19 +102,20 @@ void SaveBackBufferBMP(const RenderFrameConfig& config) {
   GLint previous_pack_alignment = 0;
   glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadBuffer(GL_BACK);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
   glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
   glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
   ShowGLErrors();
 
-  SDL_SurfacePtr surface = CreateRGBASurface(config.display_size);
+  SDL_SurfacePtr surface = CreateRGBASurface(config.screen_size);
   if (!surface) {
     logger(Severity::Warn) << "Could not allocate frame dump surface: "
                            << SDL_GetError();
     return;
   }
 
-  if (SDL_MUSTLOCK(surface.get()) && SDL_LockSurface(surface.get()) != 0) {
+  if (SDL_MUSTLOCK(surface.get()) && !SDL_LockSurface(surface.get())) {
     logger(Severity::Warn) << "Could not lock frame dump surface: "
                            << SDL_GetError();
     return;
@@ -147,7 +131,7 @@ void SaveBackBufferBMP(const RenderFrameConfig& config) {
   if (SDL_MUSTLOCK(surface.get()))
     SDL_UnlockSurface(surface.get());
 
-  if (SDL_SaveBMP(surface.get(), path.string().c_str()) != 0) {
+  if (!SDL_SaveBMP(surface.get(), path.string().c_str())) {
     logger(Severity::Warn) << "Could not save frame dump " << path.string()
                            << ": " << SDL_GetError();
   }
@@ -156,68 +140,58 @@ void SaveBackBufferBMP(const RenderFrameConfig& config) {
 }  // namespace
 
 SDLGraphicsBackend::SDLGraphicsBackend()
-    : screen_(nullptr),
-      screen_contents_texture_(nullptr),
-      screen_contents_texture_valid_(false) {}
+    : screen_contents_texture_(nullptr), screen_contents_texture_valid_(false) {
+}
 
 void SDLGraphicsBackend::InitSystem(Size screen_size, bool is_fullscreen) {
-  SDLSurface::screen_ = std::make_shared<ScreenCanvas>(screen_size);
-  Resize(screen_size, is_fullscreen);
-
-  // Initialize glew
-  if (glewInit() != GLEW_OK)
-    throw std::runtime_error("Failed to initialize GLEW: " + GetGLErrors());
-
-  ShowGLErrors();
-
-#if !defined(__APPLE__) && !defined(_WIN32)
-  SDL_Surface* icon = IMG_ReadXPMFromArray(rlvm_icon_48);
-  if (icon) {
-    SDL_SetColorKey(icon, SDL_SRCCOLORKEY,
-                    SDL_MapRGB(icon->format, 255, 255, 255));
-    SDL_WM_SetIcon(icon, NULL);
-    SDL_FreeSurface(icon);
-  }
-#endif
-}
-void SDLGraphicsBackend::QuitSystem() {}
-
-void SDLGraphicsBackend::Resize(Size display_size, bool is_fullscreen) {
-  if (auto fake_screen =
-          std::dynamic_pointer_cast<ScreenCanvas>(SDLSurface::screen_)) {
-    fake_screen->display_size_ = display_size;
-  }
-
-  const SDL_VideoInfo* info = SDL_GetVideoInfo();
-  if (!info)
-    throw std::runtime_error("Video query failed: "s + SDL_GetError());
-
-  int bpp = info->vfmt->BitsPerPixel;
-
-  // the flags to pass to SDL_SetVideoMode
-  int video_flags;
-  video_flags = SDL_OPENGL;            // Enable OpenGL in SDL
-  video_flags |= SDL_GL_DOUBLEBUFFER;  // Enable double buffering
-  video_flags |= SDL_SWSURFACE;
-  video_flags |= SDL_RESIZABLE;
-
-  if (is_fullscreen)
-    video_flags |= SDL_FULLSCREEN;
-
-  // Sets up OpenGL double buffering
   SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
+                      SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 
-  // Set the video mode
-  if ((screen_ = SDL_SetVideoMode(display_size.width(), display_size.height(),
-                                  bpp, video_flags)) == 0) {
-    throw std::runtime_error("Video mode set failed: "s + SDL_GetError());
+  SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+  if (is_fullscreen)
+    window_flags |= SDL_WINDOW_FULLSCREEN;
+
+  window_ = SDL_CreateWindow("", screen_size.width(), screen_size.height(),
+                             window_flags);
+  if (!window_)
+    throw std::runtime_error("Window creation failed: "s + SDL_GetError());
+
+  gl_context_ = SDL_GL_CreateContext(window_);
+  if (!gl_context_)
+    throw std::runtime_error("GL context creation failed: "s + SDL_GetError());
+
+  InitGLEW();
+
+  ShowGLErrors();
+
+  SDLSurface::screen_ = std::make_shared<ScreenCanvas>(screen_size);
+
+  Resize(screen_size, is_fullscreen);
+}
+void SDLGraphicsBackend::QuitSystem() {}
+
+Size SDLGraphicsBackend::Resize(Size display_size, bool is_fullscreen) {
+  const bool now_fullscreen =
+      SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN;
+  if (is_fullscreen != now_fullscreen)
+    SDL_SetWindowFullscreen(window_, is_fullscreen);
+  if (!is_fullscreen) {
+    int w = 0, h = 0;
+    SDL_GetWindowSize(window_, &w, &h);
+    if (Size(w, h) != display_size)
+      SDL_SetWindowSize(window_, display_size.width(), display_size.height());
   }
+  SDL_SyncWindow(window_);
 
-  screen_contents_texture_.reset();
-  screen_contents_texture_valid_ = false;
+  int w = 0, h = 0;
+  SDL_GetWindowSize(window_, &w, &h);
+  return Size(w, h);
 }
 
 // -----------------------------------------------------------------------
@@ -235,33 +209,18 @@ std::shared_ptr<SDLSurface> SDLGraphicsBackend::CreateSurfaceBGRA(
     bool is_alpha_mask) {
   // Note to self: These describe the byte order IN THE RAW G00 DATA!
   // These should NOT be switched to native byte order.
-  constexpr auto DefaultBpp = 32;
-  constexpr auto DefaultAmask = 0xff000000;
-  constexpr auto DefaultRmask = 0xff0000;
-  constexpr auto DefaultGmask = 0xff00;
-  constexpr auto DefaultBmask = 0xff;
+  SDL_Surface* tmp = SDL_CreateSurfaceFrom(
+      size.width(), size.height(),
+      is_alpha_mask ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_XRGB8888,
+      bgra.data(), size.width() * 4);
+  if (!tmp)
+    throw std::runtime_error("SDL_CreateSurfaceFrom failed: "s +
+                             SDL_GetError());
 
-  int amask = is_alpha_mask ? DefaultAmask : 0;
-  SDL_Surface* tmp = SDL_CreateRGBSurfaceFrom(
-      bgra.data(), size.width(), size.height(), DefaultBpp, size.width() * 4,
-      DefaultRmask, DefaultGmask, DefaultBmask, amask);
-
-  // We now need to convert this surface to a format suitable for use across
-  // the rest of the program. We can't (regretfully) rely on
-  // SDL_DisplayFormat[Alpha] to decide on a format that we can send to OpenGL
-  // (see some Intel macs) so use convert surface to a pixel order our data
-  // correctly while still using the appropriate alpha flags. So use the above
-  // format with only the flags that would have been set by
-  // SDL_DisplayFormat[Alpha].
-  Uint32 flags;
-  if (is_alpha_mask) {
-    flags = tmp->flags & (SDL_SRCALPHA | SDL_RLEACCELOK);
-  } else {
-    flags = tmp->flags & (SDL_SRCCOLORKEY | SDL_SRCALPHA | SDL_RLEACCELOK);
-  }
-
-  SDL_Surface* surf = SDL_ConvertSurface(tmp, tmp->format, flags);
-  SDL_FreeSurface(tmp);
+  SDL_Surface* surf = SDL_DuplicateSurface(tmp);
+  SDL_DestroySurface(tmp);
+  if (!surf)
+    throw std::runtime_error("SDL_DuplicateSurface failed: "s + SDL_GetError());
 
   return std::make_shared<SDLSurface>(surf);
 }
@@ -274,7 +233,7 @@ std::shared_ptr<SDLSurface> SDLGraphicsBackend::LoadSurface(
   const auto width = dec.width;
   const auto height = dec.height;
 
-  // do not free until SDL_FreeSurface() is called on the surface using it
+  // do not free until SDL_DestroySurface() is called on the surface using it
   char* mem = dec.mem.data();
   bool is_mask = dec.ismask;
   if (is_mask) {
@@ -306,7 +265,7 @@ std::shared_ptr<Album> SDLGraphicsBackend::LoadAlbum(
   const auto width = dec.width;
   const auto height = dec.height;
 
-  // do not free until SDL_FreeSurface() is called on the surface using it
+  // do not free until SDL_DestroySurface() is called on the surface using it
   char* mem = dec.mem.data();
   bool is_mask = dec.ismask;
   if (is_mask) {
@@ -333,12 +292,41 @@ void SDLGraphicsBackend::SetWindowTitle(const std::string& title_utf8) {
   if (title_utf8 == current_window_title_)
     return;
 
-  SDL_WM_SetCaption(title_utf8.c_str(), nullptr);
+  SDL_SetWindowTitle(window_, title_utf8.c_str());
   current_window_title_ = title_utf8;
 }
 
 void SDLGraphicsBackend::ShowSystemCursor(bool show) {
-  SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);
+  if (show)
+    SDL_ShowCursor();
+  else
+    SDL_HideCursor();
+}
+
+void SDLGraphicsBackend::PresentFrame(const RenderFrameConfig& config) {
+  int window_width = 0, window_height = 0;
+  SDL_GetWindowSizeInPixels(window_, &window_width, &window_height);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  const Rect view =
+      AspectFitRect(config.screen_size, Size(window_width, window_height));
+  const float scale =
+      static_cast<float>(view.width()) / config.screen_size.width();
+  const Point origin =
+      view.origin() + Point(static_cast<int>(config.screen_origin.x() * scale),
+                            static_cast<int>(config.screen_origin.y() * scale));
+
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, SDLSurface::screen_->GetID());
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glBlitFramebuffer(0, 0, config.screen_size.width(),
+                    config.screen_size.height(), origin.x(),
+                    window_height - (origin.y() + view.height()),
+                    origin.x() + view.width(), window_height - origin.y(),
+                    GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
@@ -347,28 +335,10 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
                                      const DrawCallback& draw_cursor) {
   glRenderer renderer;
   renderer.SetUp();
-  renderer.ClearBuffer(std::make_shared<ScreenCanvas>(config.screen_size),
-                       RGBAColour(0, 0, 0, 255));
+  renderer.ClearBuffer(SDLSurface::screen_, RGBAColour(0, 0, 0, 255));
   ShowGLErrors();
 
-  glViewport(0, 0, config.display_size.width(), config.display_size.height());
-
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  glOrtho(0.0, static_cast<GLdouble>(config.display_size.width()),
-          static_cast<GLdouble>(config.display_size.height()), 0.0, 0.0, 1.0);
-  ShowGLErrors();
-
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
-  ShowGLErrors();
-
-  const auto aspect_ratio_w = static_cast<float>(config.display_size.width()) /
-                              static_cast<float>(config.screen_size.width());
-  const auto aspect_ratio_h = static_cast<float>(config.display_size.height()) /
-                              static_cast<float>(config.screen_size.height());
-  glTranslatef(config.screen_origin.x() * aspect_ratio_w,
-               config.screen_origin.y() * aspect_ratio_h, 0.0f);
+  glViewport(0, 0, config.screen_size.width(), config.screen_size.height());
 
   if (draw_scene)
     draw_scene();
@@ -377,13 +347,14 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
 
   if (config.manual_update_mode) {
     if (!screen_contents_texture_)
-      screen_contents_texture_ =
-          std::make_shared<glTexture>(config.display_size);
+      screen_contents_texture_ = std::make_shared<glTexture>(config.screen_size);
 
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, SDLSurface::screen_->GetID());
     glBindTexture(GL_TEXTURE_2D, screen_contents_texture_->GetID());
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
-                        config.display_size.width(),
-                        config.display_size.height());
+                        config.screen_size.width(),
+                        config.screen_size.height());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     screen_contents_texture_valid_ = true;
   } else {
     screen_contents_texture_valid_ = false;
@@ -392,9 +363,10 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
   if (draw_cursor)
     draw_cursor();
 
+  PresentFrame(config);
   glFlush();
-  SaveBackBufferBMP(config);
-  SDL_GL_SwapBuffers();
+  SaveFrameBMP(config, SDLSurface::screen_->GetID());
+  SDL_GL_SwapWindow(window_);
   ShowGLErrors();
 }
 
@@ -404,18 +376,20 @@ bool SDLGraphicsBackend::RedrawLastFrame(const RenderFrameConfig& config,
       !screen_contents_texture_)
     return false;
 
+  glViewport(0, 0, config.screen_size.width(), config.screen_size.height());
+
   glRenderer renderer;
   renderer.Render(
-      {screen_contents_texture_, Rect(Point(0, 0), config.display_size)},
-      {std::make_shared<ScreenCanvas>(config.screen_size),
-       Rect(Point(0, 0), config.screen_size)});
+      {screen_contents_texture_, Rect(Point(0, 0), config.screen_size)},
+      {SDLSurface::screen_, Rect(Point(0, 0), config.screen_size)});
 
   if (draw_cursor)
     draw_cursor();
 
+  PresentFrame(config);
   glFlush();
-  SaveBackBufferBMP(config);
-  SDL_GL_SwapBuffers();
+  SaveFrameBMP(config, SDLSurface::screen_->GetID());
+  SDL_GL_SwapWindow(window_);
   ShowGLErrors();
   return true;
 }
@@ -442,10 +416,9 @@ std::shared_ptr<SDLSurface> SDLGraphicsBackend::RenderToSurface(
                        GL_UNSIGNED_BYTE, buf.size(), buf.data());
 
   SDL_Surface* surface =
-      SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32, 0xFF000000,
-                           0x00FF0000, 0x0000FF00, 0x000000FF);
+      SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
   if (!surface)
-    throw std::runtime_error("SDL_CreateRGBSurface failed");
+    throw std::runtime_error("SDL_CreateSurface failed");
 
   for (int y = 0; y < height; ++y) {
     void* dst = static_cast<uint8_t*>(surface->pixels) + y * surface->pitch;

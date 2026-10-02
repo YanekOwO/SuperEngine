@@ -42,7 +42,6 @@ class glCanvas {
 
   std::shared_ptr<glFrameBuffer> GetBuffer() const;
 
-  void Flush();
 
  private:
   Size resolution_, display_size_;

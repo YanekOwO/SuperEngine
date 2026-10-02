@@ -28,7 +28,7 @@
 #include "log/domain_logger.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
-#include <SDL/SDL_ttf.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
 #include <cassert>
 #include <string>
@@ -41,6 +41,7 @@ static SDL_Color ToSDLColor(const RGBColour& in) {
   out.r = in.r();
   out.g = in.g();
   out.b = in.b();
+  out.a = 255;
   return out;
 }
 }  // namespace
@@ -56,8 +57,10 @@ struct TTFFont final : public IFont {
   bool IsMonospace() const override { return is_monospace; }
   int GetCharWidth(uint16_t codepoint) override {
     TTF_Font* f = ttf_font.get();
-    int minx, maxx, miny, maxy, advance;
-    TTF_GlyphMetrics(f, codepoint, &minx, &maxx, &miny, &maxy, &advance);
+    int minx, maxx, miny, maxy, advance = 0;
+    if (!TTF_GetGlyphMetrics(f, codepoint, &minx, &maxx, &miny, &maxy,
+                             &advance))
+      return 0;
     return advance;
   }
   int GetSize() const override { return size; }
@@ -70,8 +73,8 @@ struct TTFFont final : public IFont {
 // -----------------------------------------------------------------------
 // class SDLTextImpl
 void SDLTextImpl::InitSystem() {
-  if (TTF_Init() == -1)
-    throw std::runtime_error("Error initializing SDL_ttf: "s + TTF_GetError());
+  if (!TTF_Init())
+    throw std::runtime_error("Error initializing SDL_ttf: "s + SDL_GetError());
 }
 
 void SDLTextImpl::QuitSystem() { TTF_Quit(); }
@@ -79,9 +82,10 @@ void SDLTextImpl::QuitSystem() { TTF_Quit(); }
 std::shared_ptr<IFont> SDLTextImpl::GetFont(
     const std::filesystem::path& font_file,
     int font_size) {
-  TTF_Font* f = TTF_OpenFont(font_file.native().c_str(), font_size);
+  TTF_Font* f =
+      TTF_OpenFont(font_file.native().c_str(), static_cast<float>(font_size));
   if (f == nullptr)
-    throw std::runtime_error("Error loading font: "s + TTF_GetError());
+    throw std::runtime_error("Error loading font: "s + SDL_GetError());
 
   TTF_SetFontStyle(f, TTF_STYLE_NORMAL);
 
@@ -108,13 +112,13 @@ Size SDLTextImpl::RenderGlyphOnto(const std::string& text,
   }
 
   std::shared_ptr<SDL_Surface> character(
-      TTF_RenderUTF8_Blended(f, text.c_str(), ToSDLColor(font_color)),
-      SDL_FreeSurface);
+      TTF_RenderText_Blended(f, text.c_str(), 0, ToSDLColor(font_color)),
+      SDL_DestroySurface);
 
   if (character == nullptr) {
     // Bug during Kyou's path. The string is printed "". Regression in parser?
     logger(Severity::Warn)
-        << "TTF_RenderUTF8_Blended didn't render the character '" << text
+        << "TTF_RenderText_Blended didn't render the character '" << text
         << "'. Hopefully continuing...";
     return Size(0, 0);
   }
@@ -122,8 +126,8 @@ Size SDLTextImpl::RenderGlyphOnto(const std::string& text,
   std::shared_ptr<SDL_Surface> shadow = nullptr;
   if (shadow_color) {
     SDL_Color sdl_shadow_color = ToSDLColor(*shadow_color);
-    shadow.reset(TTF_RenderUTF8_Blended(f, text.c_str(), sdl_shadow_color),
-                 SDL_FreeSurface);
+    shadow.reset(TTF_RenderText_Blended(f, text.c_str(), 0, sdl_shadow_color),
+                 SDL_DestroySurface);
   }
 
   // reset the font back to normal
@@ -152,7 +156,7 @@ std::shared_ptr<SDLSurface> SDLTextImpl::RenderText(
   SDL_Color color = ToSDLColor(c);
   TTF_Font* f = static_cast<TTF_Font*>(get_ttf(font.font));
   assert(f != nullptr);
-  SDL_Surface* tmp = TTF_RenderUTF8_Blended(f, text.c_str(), color);
+  SDL_Surface* tmp = TTF_RenderText_Blended(f, text.c_str(), 0, color);
   return std::make_shared<SDLSurface>(tmp);
 }
 

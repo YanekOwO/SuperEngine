@@ -88,15 +88,12 @@ class OvershootingFloatDecoder : public IAudioDecoder {
 };
 
 TEST(SDLSound, SoundFormat) {
-  // sdl1.2 audio format flags
-  constexpr auto AUDIO_S8 = 0x8008;
-  constexpr auto AUDIO_U8 = 0x0008;
-  constexpr auto AUDIO_S16SYS = 0x8010;
-
   auto aimpl = std::make_shared<FakeAudioImpl>();
-  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::U8), AUDIO_U8);
-  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S8), AUDIO_S8);
-  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S16), AUDIO_S16SYS);
+  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::U8), SDL_AUDIO_U8);
+  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S8), SDL_AUDIO_S8);
+  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S16), SDL_AUDIO_S16);
+  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S32), SDL_AUDIO_S32);
+  EXPECT_EQ(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::FLT), SDL_AUDIO_F32);
   EXPECT_THROW(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::S64),
                std::invalid_argument);
   EXPECT_THROW(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::DBL),
@@ -104,12 +101,16 @@ TEST(SDLSound, SoundFormat) {
   EXPECT_THROW(aimpl->ToSDLSoundFormat(AV_SAMPLE_FMT::NONE),
                std::invalid_argument);
 
-  EXPECT_EQ(aimpl->FromSDLSoundFormat(AUDIO_U8), AV_SAMPLE_FMT::U8);
-  EXPECT_EQ(aimpl->FromSDLSoundFormat(AUDIO_S8), AV_SAMPLE_FMT::S8);
-  EXPECT_EQ(aimpl->FromSDLSoundFormat(AUDIO_S16SYS), AV_SAMPLE_FMT::S16);
+  EXPECT_EQ(aimpl->FromSDLSoundFormat(SDL_AUDIO_U8), AV_SAMPLE_FMT::U8);
+  EXPECT_EQ(aimpl->FromSDLSoundFormat(SDL_AUDIO_S8), AV_SAMPLE_FMT::S8);
+  EXPECT_EQ(aimpl->FromSDLSoundFormat(SDL_AUDIO_S16), AV_SAMPLE_FMT::S16);
+  EXPECT_EQ(aimpl->FromSDLSoundFormat(SDL_AUDIO_S32), AV_SAMPLE_FMT::S32);
+  EXPECT_EQ(aimpl->FromSDLSoundFormat(SDL_AUDIO_F32), AV_SAMPLE_FMT::FLT);
 
-  EXPECT_THROW(aimpl->FromSDLSoundFormat(0), std::invalid_argument);
-  EXPECT_THROW(aimpl->FromSDLSoundFormat(12345), std::invalid_argument);
+  EXPECT_THROW(aimpl->FromSDLSoundFormat(static_cast<SDL_AudioFormat>(0)),
+               std::invalid_argument);
+  EXPECT_THROW(aimpl->FromSDLSoundFormat(static_cast<SDL_AudioFormat>(12345)),
+               std::invalid_argument);
 }
 
 TEST(SDLSound, LoadForOutputClampsFloatOvershoot) {
@@ -126,4 +127,46 @@ TEST(SDLSound, LoadForOutputClampsFloatOvershoot) {
             (std::vector<avsample_s16_t>{
                 std::numeric_limits<avsample_s16_t>::min(),
                 std::numeric_limits<avsample_s16_t>::max()}));
+}
+
+TEST(SDLSound, CloseAudioWithoutOpenIsNoop) {
+  FakeAudioImpl aimpl;
+  EXPECT_NO_THROW(aimpl.CloseAudio());
+  EXPECT_NO_THROW(aimpl.CloseAudio());
+}
+
+TEST(SDLSound, OpenCloseCycleIsRepeatable) {
+  SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+  FakeAudioImpl aimpl;
+  aimpl.InitSystem();
+  const AVSpec spec{.sample_rate = 44100,
+                    .sample_format = AV_SAMPLE_FMT::S16,
+                    .channel_count = 2};
+  for (int i = 0; i < 3; ++i) {
+    aimpl.OpenAudio(spec, 4096);
+    aimpl.AllocateChannels(8);
+    aimpl.CloseAudio();
+    aimpl.CloseAudio();
+  }
+  aimpl.QuitSystem();
+}
+
+TEST(SDLSound, DestructorClosesLeakedDevice) {
+  SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+  const AVSpec spec{.sample_rate = 44100,
+                    .sample_format = AV_SAMPLE_FMT::S16,
+                    .channel_count = 2};
+  {
+    FakeAudioImpl aimpl;
+    aimpl.InitSystem();
+    aimpl.OpenAudio(spec, 4096);
+    aimpl.AllocateChannels(8);
+    // There is no CloseAudio call. This test simulates a SoundSystem
+    // constructor that throws after it allocates the channels.
+  }
+  FakeAudioImpl aimpl2;
+  aimpl2.OpenAudio(spec, 4096);
+  aimpl2.AllocateChannels(8);
+  aimpl2.CloseAudio();
+  aimpl2.QuitSystem();
 }

@@ -1,8 +1,11 @@
-libgtest-dev libgmock-dev libsdl1.2-dev libboost-all-dev
+libgtest-dev libgmock-dev libboost-all-dev
 libgl1-mesa-dev libglu1-mesa-dev libglew-dev
 libvorbis-dev libtheora-dev libavformat-dev libavcodec-dev libavutil-dev
-libswscale-dev zlib1g-dev libfreetype6-dev gettext libtbb-dev
+libswscale-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev gettext libtbb-dev
 clang-tidy clang-format
 ninja-build ccache
 libjpeg-dev
 python3-numpy python3-soundfile
+libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev
+libwayland-dev libxkbcommon-dev libegl1-mesa-dev libdrm-dev libgbm-dev
+libdbus-1-dev libasound2-dev libpulse-dev

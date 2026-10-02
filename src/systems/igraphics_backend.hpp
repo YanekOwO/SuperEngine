@@ -59,7 +59,7 @@ class IGraphicsBackend {
   virtual void InitSystem(Size screen_size, bool is_fullscreen) = 0;
   virtual void QuitSystem() = 0;
 
-  virtual void Resize(Size screen_size, bool is_fullscreen) = 0;
+  virtual Size Resize(Size screen_size, bool is_fullscreen) = 0;
 
   virtual std::shared_ptr<SDLSurface> CreateSurface(Size size) = 0;
   virtual std::shared_ptr<SDLSurface> CreateSurfaceBGRA(Size size,

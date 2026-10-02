@@ -27,6 +27,7 @@
 #include "core/avdec/audio_decoder.hpp"
 #include "core/avspec.hpp"
 
+#include <atomic>
 #include <deque>
 #include <list>
 #include <mutex>
@@ -91,7 +92,7 @@ class AudioPlayer {
   std::string name_;
   AudioDecoder decoder_;
   std::optional<size_t> loop_fr_, loop_to_;
-  STATUS status_;
+  std::atomic<STATUS> status_;
   AVSpec spec;
   std::optional<AudioFrame> buffer_;
   float volume_;

@@ -62,11 +62,10 @@ else()
 endif()
 
 # -------------------------------------------------------------------
-# Find SDL1 Library
+# Find SDL3 Libraries
 # -------------------------------------------------------------------
-pkg_check_modules(SDL1 REQUIRED sdl)
-include_directories(${SDL1_INCLUDE_DIRS})
-link_directories(${SDL1_LIBRARY_DIRS})
+pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3>=3.2.0)
+pkg_check_modules(SDL3_TTF REQUIRED IMPORTED_TARGET sdl3-ttf>=3.2.0)
 
 # -------------------------------------------------------------------
 # Find Theora decoder library
@@ -143,18 +142,6 @@ if (VorbisFile_FOUND)
   include_directories(${VorbisFile_INCLUDE_DIRS})
 else()
   message(FATAL_ERROR "VorbisFile not found. Please install VorbisFile development libraries.")
-endif()
-
-# -------------------------------------------------------------------
-# Find GTK 2.0 Library (optional)
-# -------------------------------------------------------------------
-find_package(GTK2 QUIET)
-
-if (GTK2_FOUND)
-  message(STATUS "GTK 2.0 found, version: ${GTK2_VERSION}")
-  include_directories(${GTK2_INCLUDE_DIRS})
-else()
-  message(STATUS "GTK 2.0 not found. Continuing without GTK 2.0 support.")
 endif()
 
 # -------------------------------------------------------------------

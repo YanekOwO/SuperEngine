@@ -24,36 +24,53 @@
 #include "test_system/sdl_env.hpp"
 
 #include "core/rect.hpp"
+#include "systems/sdl/gl_utils.hpp"
 
-#include <GL/glew.h>
-#include <SDL/SDL.h>
+#include <SDL3/SDL.h>
 
 #include <stdexcept>
+#include <string>
 
 sdlEnv::sdlEnv(Size screen) {
-  std::string error;
-  if (SDL_SetVideoMode(screen.width(), screen.height(), 32, SDL_OPENGL) ==
-      NULL) {
-    error += "Failed to setup sdl video: ";
-    error += SDL_GetError();
-    SDL_Quit();
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
+    throw std::runtime_error(std::string("Failed to setup sdl video: ") +
+                             SDL_GetError());
   }
 
-  if (!error.empty())
-    throw std::runtime_error(error);
-
-  auto glew_status = glewInit();
-  if (glew_status != GLEW_OK) {
-    error += "GLEW Initialization failed: ";
-    error += reinterpret_cast<const char*>(glewGetErrorString(glew_status));
+  window_ = SDL_CreateWindow("rlvm test", screen.width(), screen.height(),
+                             SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+  if (!window_) {
+    std::string error = std::string("Failed to create window: ") +
+                        SDL_GetError();
     SDL_Quit();
+    throw std::runtime_error(error);
   }
 
-  if (!error.empty())
+  SDL_GLContext context = SDL_GL_CreateContext(window_);
+  if (!context) {
+    std::string error = std::string("Failed to create GL context: ") +
+                        SDL_GetError();
+    SDL_DestroyWindow(window_);
+    SDL_Quit();
     throw std::runtime_error(error);
+  }
+  gl_context_ = context;
+
+  try {
+    InitGLEW();
+  } catch (...) {
+    SDL_GL_DestroyContext(context);
+    SDL_DestroyWindow(window_);
+    SDL_Quit();
+    throw;
+  }
 }
 
-sdlEnv::~sdlEnv() { SDL_Quit(); }
+sdlEnv::~sdlEnv() {
+  SDL_GL_DestroyContext(static_cast<SDL_GLContext>(gl_context_));
+  SDL_DestroyWindow(window_);
+  SDL_Quit();
+}
 
 std::shared_ptr<sdlEnv> SetupSDL(Size screen) {
   static std::weak_ptr<sdlEnv> cached;

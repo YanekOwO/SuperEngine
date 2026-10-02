@@ -4,8 +4,7 @@
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2011 Serina Sakurai
-// Copyright (C) 2011 Elliot Glaysher
+// Copyright (C) 2025 Serina Sakurai
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,11 +28,8 @@
 #include <filesystem>
 #include <string>
 
-class GtkImplementor : public IPlatformImplementor {
+class SdlImplementor : public IPlatformImplementor {
  public:
-  GtkImplementor();
-  ~GtkImplementor() = default;
-
   std::filesystem::path SelectGameDirectory() override;
 
   void ReportFatalError(const std::string& message_text,
@@ -43,7 +39,4 @@ class GtkImplementor : public IPlatformImplementor {
                      const std::string& informative_text,
                      const std::string& true_button,
                      const std::string& false_button) override;
-
- private:
-  void DoNativeWork();
 };

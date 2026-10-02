@@ -27,12 +27,7 @@
 
 struct ScreenCanvas : public glFrameBuffer {
  public:
-  ScreenCanvas(Size size) : size_(size) {}
-
-  virtual unsigned int GetID() const override { return 0; }
-  virtual Size GetSize() const override { return size_; }
+  ScreenCanvas(Size size);
 
   virtual std::shared_ptr<glTexture> GetTexture() const override;
-
-  Size size_, display_size_;
 };

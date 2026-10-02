@@ -178,6 +178,12 @@ class Rect {
 
 // -----------------------------------------------------------------------
 
+// Returns the largest centered sub-rectangle of Rect(Point(0, 0), bounds)
+// that keeps the aspect ratio of |content|. |content| must not be empty.
+Rect AspectFitRect(Size content, Size bounds);
+
+// -----------------------------------------------------------------------
+
 std::ostream& operator<<(std::ostream& os, const Size& s);
 std::ostream& operator<<(std::ostream& os, const Point& p);
 std::ostream& operator<<(std::ostream& os, const Rect& r);
