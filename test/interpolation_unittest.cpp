@@ -23,7 +23,7 @@
 
 #include <gtest/gtest.h>
 
-#include "utilities/interpolation.hpp"
+#include "core/interpolation.hpp"
 
 #include <cmath>
 
@@ -88,6 +88,36 @@ TEST(InterpolationTests, InterpolateBetween) {
         InterpolateBetween(range, value, InterpolationMode::LogEaseIn);
     EXPECT_NEAR(result, expected, 1e-3);
   }
+}
+
+TEST(InterpolationTests, QuadraticEasingModes) {
+  InterpolationRange midpoint(0.0, 5.0, 10.0);
+  Range value(100.0, 200.0);
+
+  EXPECT_NEAR(Interpolate(midpoint, 100.0, InterpolationMode::Accelerate), 25.0,
+              EPS);
+  EXPECT_NEAR(Interpolate(midpoint, 100.0, InterpolationMode::Decelerate), 75.0,
+              EPS);
+  EXPECT_NEAR(
+      InterpolateBetween(midpoint, value, InterpolationMode::Accelerate), 125.0,
+      EPS);
+  EXPECT_NEAR(
+      InterpolateBetween(midpoint, value, InterpolationMode::Decelerate), 175.0,
+      EPS);
+
+  EXPECT_NEAR(Interpolate(InterpolationRange(0.0, 0.0, 10.0), 100.0,
+                          InterpolationMode::Accelerate),
+              0.0, EPS);
+  EXPECT_NEAR(Interpolate(InterpolationRange(0.0, 10.0, 10.0), 100.0,
+                          InterpolationMode::Accelerate),
+              100.0, EPS);
+
+  EXPECT_NEAR(Interpolate(InterpolationRange(0.0, 0.0, 10.0), 100.0,
+                          InterpolationMode::Decelerate),
+              0.0, EPS);
+  EXPECT_NEAR(Interpolate(InterpolationRange(0.0, 10.0, 10.0), 100.0,
+                          InterpolationMode::Decelerate),
+              100.0, EPS);
 }
 
 TEST(InterpolationTests, Clamped) {

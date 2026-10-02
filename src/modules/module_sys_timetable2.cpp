@@ -28,10 +28,10 @@
 
 #include <cmath>
 
+#include "core/interpolation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
 #include "utilities/exception.hpp"
-#include "utilities/interpolation.hpp"
 
 // static
 int TimeTableMapper::GetTypeForTag(libreallive::Expression sp) {

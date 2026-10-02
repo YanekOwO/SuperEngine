@@ -30,9 +30,9 @@
 #include <sstream>
 #include <tuple>
 
+#include "core/interpolation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
-#include "utilities/interpolation.hpp"
 
 using std::get;
 

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2013 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,12 +22,12 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // -----------------------------------------------------------------------
 
-#include "utilities/interpolation.hpp"
+#include "core/interpolation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
-
-#include "utilities/exception.hpp"
+#include <string>
 
 double Interpolate(const InterpolationRange& range,
                    double amount,
@@ -52,6 +50,14 @@ double Interpolate(const InterpolationRange& range,
       // Eases in using inverse logarithmic scaling
       double logPercentage = std::log(percentage + 1.0) / logBase;
       return amount - (1.0 - logPercentage) * amount;
+    }
+
+    case InterpolationMode::Accelerate:
+      return percentage * percentage * amount;
+
+    case InterpolationMode::Decelerate: {
+      double inversePercentage = 1.0 - percentage;
+      return (1.0 - inversePercentage * inversePercentage) * amount;
     }
 
     default:
