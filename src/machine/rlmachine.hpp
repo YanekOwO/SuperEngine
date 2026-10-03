@@ -25,12 +25,13 @@
 
 #pragma once
 
+#include "core/frame_counter.hpp"
 #include "core/kidoku_table.hpp"
 #include "machine/call_stack.hpp"
 #include "machine/instruction.hpp"
 #include "machine/iscriptor.hpp"
 #include "machine/module_manager.hpp"
-#include "machine/rlenvironment.hpp"
+#include "utilities/stopwatch.hpp"
 
 #include <boost/serialization/split_member.hpp>
 
@@ -57,6 +58,20 @@ class EventListener;
 class Debugger;
 struct LongopListenerAdapter;
 class rlSceneRenderer;
+
+// Generic values
+//
+// "RealLive provides two generic settings to permit games using the standard
+// system command menu to include custom options in it. The meaning of each
+// generic flag is left up to the programmer. Valid values are 0 to 4."
+struct Generic {
+  int val1 = 0;
+  int val2 = 0;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, const unsigned int ver) { ar & val1 & val2; }
+};
 
 // The RealLive virtual machine implementation. This class is the main user
 // facing class which contains all state regarding integer/string memory, flow
@@ -221,9 +236,13 @@ class RLMachine {
   // bytecode.
   void ReplayGraphicsStackCommand();
 
-  // -----------------------------------------------------------------------
-  // Temporary 'environment' field, planned to remove this later
-  RLEnvironment& GetEnvironment();
+  Generic& GetGenerics();
+
+  Stopwatch& GetTimer(int layer, int idx);
+
+  FrameCounter* GetFrameCounter(int layer, int idx);
+  void SetFrameCounter(int layer, int idx, FrameCounter counter);
+  void ClearFrameCounter(int layer, int idx);
 
  private:
   // States whether the RLMachine is in the halted state (and thus won't
@@ -255,7 +274,9 @@ class RLMachine {
 
   std::shared_ptr<rlSceneRenderer> renderer_;
 
-  RLEnvironment env_;
+  Generic generic_;
+  std::map<std::pair<int, int>, Stopwatch> rltimer_;
+  std::map<std::pair<int, int>, FrameCounter> frame_counter_;
 
   // Override defaults
   bool mark_savepoints_ = true;
@@ -287,10 +308,10 @@ class RLMachine {
   BOOST_SERIALIZATION_SPLIT_MEMBER();
 
   void save(auto& ar, const unsigned int file_version) const {
-    ar& LineNumber() & savepoint_call_stack_ & env_;
+    ar& LineNumber() & savepoint_call_stack_ & generic_;
   }
 
   void load(auto& ar, const unsigned int file_version) {
-    ar & line_ & call_stack_ & env_;
+    ar & line_ & call_stack_ & generic_;
   }
 };

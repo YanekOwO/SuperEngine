@@ -39,19 +39,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <sstream>
 
-#include "core/memory.hpp"
-#include "core/memory_internal/serialization_global.hpp"
-#include "libreallive/intmemref.hpp"
-#include "machine/rlenvironment.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
-#include "systems/event_system.hpp"
-#include "utilities/dynamic_bitset_serialize.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/gettext.hpp"
 
@@ -64,7 +57,7 @@ namespace Serialization {
 //   bug in its implementation of vectors of primitive types which made
 //   archives not-backwards (or forwards) compatible. Thankfully, the save
 //   games themselves don't use that feature.
-const int CURRENT_GLOBAL_VERSION = 3;
+constexpr int CURRENT_GLOBAL_VERSION = 3;
 
 fs::path buildGlobalMemoryFilename(RLMachine& machine) {
   return machine.GetSystem().GameSaveDirectory() / "global.sav.gz";
@@ -89,7 +82,7 @@ void saveGlobalMemoryTo(std::ostream& oss, RLMachine& machine) {
   System& sys = machine.GetSystem();
 
   oa << CURRENT_GLOBAL_VERSION << machine.GetMemory().GetGlobalMemory()
-     << machine.GetKidokus() << machine.GetEnvironment()
+     << machine.GetKidokus() << machine.GetGenerics()
      << const_cast<const SystemGlobals&>(sys.globals())
      << const_cast<const GraphicsSystemGlobals&>(sys.graphics().globals())
      << const_cast<const TextSystemGlobals&>(sys.text().globals())
@@ -142,7 +135,7 @@ void loadGlobalMemoryFrom(std::istream& iss, RLMachine& machine) {
   machine.GetMemory().PartialReset(std::move(global_memory));
 
   ia >> machine.GetKidokus();
-  ia >> machine.GetEnvironment();
+  ia >> machine.GetGenerics();
 
   // When Karmic Koala came out, support for all boost earlier than 1.36 was
   // dropped. For years, I had used boost 1.35 on Ubuntu. It turns out that

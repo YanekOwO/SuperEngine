@@ -62,7 +62,7 @@ struct InitFrame : public RLOpcode<IntConstant_T,
     FrameCounter fc(
         std::make_shared<Clock>(),
         Interpolation(Range(frameMin, frameMax), type_, mode_), time);
-    machine.GetEnvironment().SetFrameCounter(layer_, counter, std::move(fc));
+    machine.SetFrameCounter(layer_, counter, std::move(fc));
   }
 };
 
@@ -71,7 +71,7 @@ struct ReadFrame : public RLStoreOpcode<IntConstant_T> {
   explicit ReadFrame(int layer) : layer_(layer) {}
 
   int operator()(RLMachine& machine, int counter) {
-    auto fc = machine.GetEnvironment().GetFrameCounter(layer_, counter);
+    auto fc = machine.GetFrameCounter(layer_, counter);
     if (!fc)
       return 0;
 
@@ -84,7 +84,7 @@ struct FrameActive : public RLStoreOpcode<IntConstant_T> {
   explicit FrameActive(int layer) : layer_(layer) {}
 
   int operator()(RLMachine& machine, int counter) {
-    auto fc = machine.GetEnvironment().GetFrameCounter(layer_, counter);
+    auto fc = machine.GetFrameCounter(layer_, counter);
     if (!fc)
       return 0;
 
@@ -98,7 +98,7 @@ struct AnyFrameActive : public RLStoreOpcode<IntConstant_T> {
 
   int operator()(RLMachine& machine, int counter /*?*/) {
     for (int i = 0; i < 255; ++i) {
-      auto fc = machine.GetEnvironment().GetFrameCounter(layer_, i);
+      auto fc = machine.GetFrameCounter(layer_, i);
       if (fc && fc->IsActive())
         return 1;
     }
@@ -111,7 +111,7 @@ struct ClearFrame_0 : public RLOpcode<IntConstant_T> {
   explicit ClearFrame_0(int layer) : layer_(layer) {}
 
   void operator()(RLMachine& machine, int counter) {
-    machine.GetEnvironment().ClearFrameCounter(layer_, counter);
+    machine.ClearFrameCounter(layer_, counter);
   }
 };
 
@@ -120,7 +120,7 @@ struct ClearFrame_1 : public RLOpcode<IntConstant_T, IntConstant_T> {
   explicit ClearFrame_1(int layer) : layer_(layer) {}
 
   void operator()(RLMachine& machine, int counter, int new_value) {
-    auto fc = machine.GetEnvironment().GetFrameCounter(layer_, counter);
+    auto fc = machine.GetFrameCounter(layer_, counter);
     fc->SetFrame(new_value);
   }
 };
@@ -131,7 +131,7 @@ struct ClearAllFrames_0 : public RLOpcode<IntConstant_T> {
 
   void operator()(RLMachine& machine, int new_value) {
     for (int i = 0; i < 255; ++i) {
-      if (auto fc = machine.GetEnvironment().GetFrameCounter(layer_, i)) {
+      if (auto fc = machine.GetFrameCounter(layer_, i)) {
         fc->SetFrame(new_value);
       }
     }
@@ -144,7 +144,7 @@ struct ClearAllFrames_1 : public RLOpcode<> {
 
   void operator()(RLMachine& machine) {
     for (int i = 0; i < 255; ++i)
-      machine.GetEnvironment().ClearFrameCounter(layer_, i);
+      machine.ClearFrameCounter(layer_, i);
   }
 };
 
@@ -161,7 +161,7 @@ struct ReadFrames : public RLStoreOpcode<Argc_T<FrameDataInReadFrames>> {
     for (auto& frame : frames) {
       int counter = get<0>(frame);
 
-      if (auto fc = machine.GetEnvironment().GetFrameCounter(layer_, counter)) {
+      if (auto fc = machine.GetFrameCounter(layer_, counter)) {
         auto val = static_cast<int>(fc->ReadFrame());
         *(get<1>(frame)) = val;
 

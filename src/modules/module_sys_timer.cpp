@@ -55,7 +55,7 @@ struct ResetTimer : public RLOpcode<DefaultIntValue_T<0>> {
   explicit ResetTimer(const int in) : layer_(in) {}
 
   void operator()(RLMachine& machine, int counter) {
-    auto& timer = machine.GetEnvironment().GetTimer(layer_, counter);
+    auto& timer = machine.GetTimer(layer_, counter);
     timer.Apply(Stopwatch::Action::Reset);
     timer.Apply(Stopwatch::Action::Run);
   }
@@ -66,7 +66,7 @@ bool TimerIsDone(RLMachine& machine,
                  int counter,
                  unsigned int target_time) {
   auto duration = chr::duration_cast<chr::milliseconds>(
-      machine.GetEnvironment().GetTimer(layer, counter).GetReading());
+      machine.GetTimer(layer, counter).GetReading());
   return duration.count() > target_time;
 }
 
@@ -77,7 +77,7 @@ struct Sys_time : public RLOpcode<IntConstant_T, DefaultIntValue_T<0>> {
 
   void operator()(RLMachine& machine, int time, int counter) {
     const auto duration = chr::duration_cast<chr::milliseconds>(
-        machine.GetEnvironment().GetTimer(layer_, counter).GetReading());
+        machine.GetTimer(layer_, counter).GetReading());
     if (duration.count() < numeric_cast<unsigned int>(time)) {
       auto wait_op = std::make_shared<WaitLongOperation>(machine);
       if (in_time_c_)
@@ -95,7 +95,7 @@ struct Timer : public RLStoreOpcode<DefaultIntValue_T<0>> {
 
   int operator()(RLMachine& machine, int counter) {
     const auto duration = chr::duration_cast<chr::milliseconds>(
-        machine.GetEnvironment().GetTimer(layer_, counter).GetReading());
+        machine.GetTimer(layer_, counter).GetReading());
 
     return numeric_cast<int>(duration.count());
   }
@@ -107,7 +107,7 @@ struct CmpTimer : public RLStoreOpcode<IntConstant_T, DefaultIntValue_T<0>> {
 
   int operator()(RLMachine& machine, int val, int counter) {
     const auto duration = chr::duration_cast<chr::milliseconds>(
-        machine.GetEnvironment().GetTimer(layer_, counter).GetReading());
+        machine.GetTimer(layer_, counter).GetReading());
     return duration.count() > val;
   }
 };
@@ -122,7 +122,7 @@ struct SetTimer : public RLOpcode<IntConstant_T, DefaultIntValue_T<0>> {
       logger(Severity::Warn) << "Implementation might be wrong. val = " << val;
     }
 
-    auto& timer = machine.GetEnvironment().GetTimer(layer_, counter);
+    auto& timer = machine.GetTimer(layer_, counter);
     timer.Apply(Stopwatch::Action::Reset);
     timer.Apply(Stopwatch::Action::Run);
   }

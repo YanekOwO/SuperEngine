@@ -352,25 +352,25 @@ struct ChangeSoundSettings : public RLOpcode<IntConstant_T> {
 
 struct SetGeneric1 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int value) {
-    auto& generics = machine.GetEnvironment().GetGenerics();
+    auto& generics = machine.GetGenerics();
     generics.val1 = value;
   }
 };
 struct SetGeneric2 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int value) {
-    auto& generics = machine.GetEnvironment().GetGenerics();
+    auto& generics = machine.GetGenerics();
     generics.val2 = value;
   }
 };
 struct GetGeneric1 : public RLStoreOpcode<IntConstant_T> {
   int operator()(RLMachine& machine, int value) {
-    const auto& generics = machine.GetEnvironment().GetGenerics();
+    const auto& generics = machine.GetGenerics();
     return generics.val1;
   }
 };
 struct GetGeneric2 : public RLStoreOpcode<IntConstant_T> {
   int operator()(RLMachine& machine, int value) {
-    const auto& generics = machine.GetEnvironment().GetGenerics();
+    const auto& generics = machine.GetGenerics();
     return generics.val2;
   }
 };

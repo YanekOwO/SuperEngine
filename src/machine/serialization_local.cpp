@@ -40,25 +40,16 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
-#include <string>
 
-#include "core/memory.hpp"
-#include "core/memory_internal/serialization_local.hpp"
-#include "libreallive/archive.hpp"
-#include "libreallive/intmemref.hpp"
+#include "core/object_internal/drawer/anm.hpp"
+#include "core/object_internal/drawer/gan.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/save_game_header.hpp"
 #include "machine/serialization.hpp"
-#include "machine/stack_frame.hpp"
-#include "core/object_internal/drawer/anm.hpp"
-#include "core/object_internal/drawer/file.hpp"
-#include "core/object_internal/drawer/gan.hpp"
-#include "core/object.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
-#include "systems/event_system.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/gettext.hpp"
 
@@ -68,7 +59,7 @@ namespace Serialization {
 
 RLMachine* g_current_machine = NULL;
 
-const int CURRENT_LOCAL_VERSION = 2;
+constexpr int CURRENT_LOCAL_VERSION = 2;
 
 System& currentSystem() {
   if (!g_current_machine)

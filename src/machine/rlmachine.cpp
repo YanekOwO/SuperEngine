@@ -47,6 +47,7 @@
 #include "systems/system_error.hpp"
 #include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
+#include "utilities/clock.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/string_utilities.hpp"
 
@@ -58,6 +59,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -91,8 +93,10 @@ RLMachine::RLMachine(std::shared_ptr<System> system,
     renderer_ = std::make_shared<rlSceneRenderer>(*this);
     system->graphics().BindSceneRenderer(renderer_);
 
-    // Setup runtime environment
-    env_.InitFrom(system->gameexe());
+    generic_.val1 =
+        system->gameexe()("INIT_ORIGINALSETING1_MOD").Int().value_or(0);
+    generic_.val2 =
+        system->gameexe()("INIT_ORIGINALSETING2_MOD").Int().value_or(0);
 
     // Initial value of the savepoint
     MarkSavepoint();
@@ -213,6 +217,61 @@ ScriptLocation RLMachine::Location() const {
 
 Gameexe& RLMachine::GetGameexe() { return system_.gameexe(); }
 
+Generic& RLMachine::GetGenerics() { return generic_; }
+
+Stopwatch& RLMachine::GetTimer(int layer, int idx) {
+  static DomainLogger logger("RLTimer");
+  if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
+    auto rec = logger(Severity::Warn);
+    rec << "Invalid key provided when requesting timer. ";
+    rec << "(layer=" << layer << " ,idx=" << idx << ')';
+  }
+
+  const auto key = std::make_pair(layer, idx);
+  static std::shared_ptr<Clock> clock = std::make_shared<Clock>();
+  if (!rltimer_.contains(key)) {
+    Stopwatch timer(clock);
+    timer.Apply(Stopwatch::Action::Run);
+    rltimer_.emplace(key, std::move(timer));
+  }
+  return rltimer_.find(key)->second;
+}
+
+FrameCounter* RLMachine::GetFrameCounter(int layer, int idx) {
+  static DomainLogger logger("FrameCounter");
+  if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
+    auto rec = logger(Severity::Warn);
+    rec << "Invalid key provided when requesting frame counter. ";
+    rec << "(layer=" << layer << " ,idx=" << idx << ')';
+  }
+
+  auto it = frame_counter_.find(std::make_pair(layer, idx));
+  return it == frame_counter_.end() ? nullptr : &it->second;
+}
+
+void RLMachine::SetFrameCounter(int layer, int idx, FrameCounter counter) {
+  static DomainLogger logger("FrameCounter");
+  if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
+    auto rec = logger(Severity::Warn);
+    rec << "Invalid key provided when requesting frame counter. ";
+    rec << "(layer=" << layer << " ,idx=" << idx << ')';
+  }
+
+  frame_counter_.insert_or_assign(std::make_pair(layer, idx),
+                                  std::move(counter));
+}
+
+void RLMachine::ClearFrameCounter(int layer, int idx) {
+  static DomainLogger logger("FrameCounter");
+  if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
+    auto rec = logger(Severity::Warn);
+    rec << "Invalid key provided when clearing frame counter. ";
+    rec << "(layer=" << layer << " ,idx=" << idx << ')';
+  }
+
+  frame_counter_.erase(std::make_pair(layer, idx));
+}
+
 void RLMachine::PushLongOperation(
     std::shared_ptr<LongOperation> long_operation) {
   const auto top_frame = call_stack_.Top();
@@ -332,8 +391,6 @@ void RLMachine::PerformTextout(std::string cp932str) {
 
   PushLongOperation(ptr);
 }
-
-RLEnvironment& RLMachine::GetEnvironment() { return env_; }
 
 // -----------------------------------------------------------------------
 
