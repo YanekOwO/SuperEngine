@@ -120,6 +120,46 @@ TEST(InterpolationTests, QuadraticEasingModes) {
               100.0, EPS);
 }
 
+TEST(InterpolationTests, PlaybackTypes) {
+  Interpolation one_shot(Range(10.0, 20.0), InterpolationType::OneShot);
+  EXPECT_DOUBLE_EQ(one_shot.ValueAt(-0.5), 10.0);
+  EXPECT_DOUBLE_EQ(one_shot.ValueAt(0.5), 15.0);
+  EXPECT_DOUBLE_EQ(one_shot.ValueAt(1.5), 20.0);
+  EXPECT_TRUE(one_shot.IsOneShot());
+
+  Interpolation loop(Range(10.0, 20.0), InterpolationType::Loop);
+  EXPECT_DOUBLE_EQ(loop.ValueAt(-0.5), 10.0);
+  EXPECT_DOUBLE_EQ(loop.ValueAt(0.5), 15.0);
+  EXPECT_DOUBLE_EQ(loop.ValueAt(1.0), 10.0);
+  EXPECT_DOUBLE_EQ(loop.ValueAt(1.5), 15.0);
+  EXPECT_FALSE(loop.IsOneShot());
+
+  Interpolation turn(Range(10.0, 20.0), InterpolationType::Turn);
+  EXPECT_DOUBLE_EQ(turn.ValueAt(-0.5), 10.0);
+  EXPECT_DOUBLE_EQ(turn.ValueAt(0.5), 15.0);
+  EXPECT_DOUBLE_EQ(turn.ValueAt(1.0), 20.0);
+  EXPECT_DOUBLE_EQ(turn.ValueAt(1.5), 15.0);
+  EXPECT_DOUBLE_EQ(turn.ValueAt(2.0), 10.0);
+}
+
+TEST(InterpolationTests, PlaybackTypesApplyEasing) {
+  Interpolation accelerating_loop(Range(0.0, 100.0), InterpolationType::Loop,
+                                  InterpolationMode::Accelerate);
+  Interpolation decelerating_turn(Range(0.0, 100.0), InterpolationType::Turn,
+                                  InterpolationMode::Decelerate);
+
+  EXPECT_DOUBLE_EQ(accelerating_loop.ValueAt(0.5), 25.0);
+  EXPECT_DOUBLE_EQ(decelerating_turn.ValueAt(0.5), 75.0);
+  EXPECT_DOUBLE_EQ(decelerating_turn.ValueAt(1.5), 75.0);
+}
+
+TEST(InterpolationTests, InvalidInterpolationType) {
+  Interpolation interpolation(Range(0.0, 1.0),
+                              static_cast<InterpolationType>(999));
+
+  EXPECT_THROW(interpolation.ValueAt(0.5), std::invalid_argument);
+}
+
 TEST(InterpolationTests, Clamped) {
   {
     InterpolationRange range(10.0, 5.0, 20.0);  // current < start

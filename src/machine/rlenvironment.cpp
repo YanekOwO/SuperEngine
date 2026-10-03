@@ -29,6 +29,8 @@
 #include "log/domain_logger.hpp"
 #include "utilities/clock.hpp"
 
+#include <utility>
+
 Generic& RLEnvironment::GetGenerics() { return generic_; }
 
 void RLEnvironment::InitFrom(Gameexe& gexe) {
@@ -54,8 +56,7 @@ Stopwatch& RLEnvironment::GetTimer(int layer, int idx) {
   return rltimer_.find(key)->second;
 }
 
-std::shared_ptr<FrameCounter> RLEnvironment::GetFrameCounter(int layer,
-                                                             int idx) {
+FrameCounter* RLEnvironment::GetFrameCounter(int layer, int idx) {
   static DomainLogger logger("FrameCounter");
   if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
     auto rec = logger(Severity::Warn);
@@ -63,11 +64,13 @@ std::shared_ptr<FrameCounter> RLEnvironment::GetFrameCounter(int layer,
     rec << "(layer=" << layer << " ,idx=" << idx << ')';
   }
 
-  return frame_counter_[std::make_pair(layer, idx)];
+  auto it = frame_counter_.find(std::make_pair(layer, idx));
+  return it == frame_counter_.end() ? nullptr : &it->second;
 }
+
 void RLEnvironment::SetFrameCounter(int layer,
                                     int idx,
-                                    std::shared_ptr<FrameCounter> counter) {
+                                    FrameCounter counter) {
   static DomainLogger logger("FrameCounter");
   if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
     auto rec = logger(Severity::Warn);
@@ -75,5 +78,17 @@ void RLEnvironment::SetFrameCounter(int layer,
     rec << "(layer=" << layer << " ,idx=" << idx << ')';
   }
 
-  frame_counter_[std::make_pair(layer, idx)] = counter;
+  frame_counter_.insert_or_assign(std::make_pair(layer, idx),
+                                  std::move(counter));
+}
+
+void RLEnvironment::ClearFrameCounter(int layer, int idx) {
+  static DomainLogger logger("FrameCounter");
+  if (layer < 0 || layer >= 2 || idx < 0 || idx >= 255) {
+    auto rec = logger(Severity::Warn);
+    rec << "Invalid key provided when clearing frame counter. ";
+    rec << "(layer=" << layer << " ,idx=" << idx << ')';
+  }
+
+  frame_counter_.erase(std::make_pair(layer, idx));
 }

@@ -173,31 +173,27 @@ struct SiglusWipe {
     bool cancelled = false;
   };
 
-  std::shared_ptr<FrameCounter> MakeWipeFrameCounter(
-      const WipeParams& params,
-      std::shared_ptr<Clock> clock) {
-    if (!clock)
-      return nullptr;
-
-    std::shared_ptr<FrameCounter> counter;
+  FrameCounter MakeWipeFrameCounter(const WipeParams& params,
+                                    std::shared_ptr<Clock> clock) {
+    InterpolationMode mode = InterpolationMode::Linear;
     switch (params.speed_mode) {
       case 1:
-        counter = std::make_shared<AcceleratingFrameCounter>(
-            std::move(clock), 0, 1, params.wipe_time);
+        mode = InterpolationMode::Accelerate;
         break;
       case 2:
-        counter = std::make_shared<DeceleratingFrameCounter>(
-            std::move(clock), 0, 1, params.wipe_time);
+        mode = InterpolationMode::Decelerate;
         break;
       case 0:
       default:
-        counter = std::make_shared<SimpleFrameCounter>(std::move(clock), 0, 1,
-                                                       params.wipe_time);
         break;
     }
 
-    counter->BeginTimer(std::chrono::milliseconds(0) -
-                        std::chrono::milliseconds(params.start_time));
+    FrameCounter counter(
+        std::move(clock),
+        Interpolation(Range(0, 1), InterpolationType::OneShot, mode),
+        params.wipe_time);
+    counter.BeginTimer(std::chrono::milliseconds(0) -
+                       std::chrono::milliseconds(params.start_time));
     return counter;
   }
 
@@ -207,7 +203,7 @@ struct SiglusWipe {
              Stage* stage,
              WipeParams params,
              std::weak_ptr<ActiveWipe> active,
-             std::shared_ptr<FrameCounter> progress_counter)
+             FrameCounter progress_counter)
         : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
           system_(system),
           stage_(stage),
@@ -238,10 +234,8 @@ struct SiglusWipe {
           co_return 0;
         }
 
-        if (progress_counter_ && stage_) {
-          float progress = progress_counter_->ReadFrame();
-          stage_->SetTransitionRenderAlpha(progress, 1.0 - progress);
-        }
+        float progress = progress_counter_.ReadFrame();
+        stage_->SetTransitionRenderAlpha(progress, 1.0 - progress);
 
         const WaitOutcome outcome =
             co_await WaitFor(kPollInterval, ShouldInterruptOnInput());
@@ -303,7 +297,7 @@ struct SiglusWipe {
     WipeParams params_;
     std::weak_ptr<ActiveWipe> active_;
     unsigned int start_ticks_ = 0;
-    std::shared_ptr<FrameCounter> progress_counter_;
+    FrameCounter progress_counter_;
   };
 
   sr::Value Start(sr::VM& vm, WipeParams params) {
@@ -331,7 +325,7 @@ struct SiglusWipe {
 
     auto progress_counter =
         MakeWipeFrameCounter(params, system_->event().GetClock());
-    const double initial_progress = progress_counter->ReadFrame();
+    const double initial_progress = progress_counter.ReadFrame();
     stage_->SetTransitionRenderAlpha(initial_progress, 1.0 - initial_progress);
 
     const bool wait_flag = params.wait_flag;

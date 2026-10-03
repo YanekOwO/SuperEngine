@@ -27,7 +27,6 @@
 #include "core/frame_counter.hpp"
 
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,15 +35,11 @@ class ObjectParameter;
 struct Mutator {
   using SetFn = std::function<void(ObjectParameter&, int)>;
   SetFn setter_;
-  std::unique_ptr<FrameCounter> fc_;
-  Mutator(SetFn setter, std::unique_ptr<FrameCounter> fc);
-  ~Mutator();
-  Mutator(Mutator&&) noexcept = default;
-  Mutator& operator=(Mutator&&) noexcept = default;
-  Mutator(const Mutator&) = delete;
-  Mutator& operator=(const Mutator&) = delete;
+  FrameCounter fc_;
 
-  bool Update(ObjectParameter& pm) const;
+  Mutator(SetFn setter, FrameCounter fc);
+
+  bool Update(ObjectParameter& pm);
 };
 
 class ObjectMutator {

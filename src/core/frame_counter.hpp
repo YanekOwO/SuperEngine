@@ -25,9 +25,10 @@
 
 #pragma once
 
+#include "core/interpolation.hpp"
+
 #include <chrono>
 #include <memory>
-#include <utility>
 
 class Clock;
 
@@ -42,130 +43,37 @@ class Clock;
 class FrameCounter {
  public:
   FrameCounter(std::shared_ptr<Clock> clock,
-               int frame_min,
-               int frame_max,
+               Interpolation interpolation,
                int milliseconds);
-  virtual ~FrameCounter();
 
-  virtual std::unique_ptr<FrameCounter> Clone() const = 0;
+  // Returns the current frame value.
+  float ReadFrame();
 
-  // Returns the current frame value
-  virtual float ReadFrame() = 0;
+  // Stops the timer and freezes it at |value|.
+  void SetFrame(int value);
 
-  inline void SetFrame(int value) { value_ = static_cast<float>(value); }
-
-  // Start or stop the timer
+  // Starts or restarts the timer, optionally after |delay|.
   void BeginTimer(
       std::chrono::milliseconds delay = std::chrono::milliseconds(0));
 
-  // Terminate the frame counter
-  // One-shot counters should yield the final value; Looping counters should
-  // freeze the current value
+  // Terminates the frame counter. One-shot counters yield the final value;
+  // repeating counters freeze at their current value.
   void EndTimer();
 
   inline bool IsFinished() const { return !is_active_; }
-  inline bool IsActive() const {
-    // Sometimes we call ReadFrame() internally to see if we've ended
-    // but it's up to derived classes to end themselves or not.
-    return is_active_;
-  }
-  inline void SetActive(bool active) { is_active_ = active; }
+  inline bool IsActive() const { return is_active_; }
 
- protected:
+ private:
   // Computes an un-clamped fraction of how far along we are, i.e.
   // 0.0 at start_time_, 1.0 at exactly total_time_, and >1.0 if time is beyond
-  // total_time_. If total_time_ == 0 or is_active_ == false, it returns 1.0 by
-  // default.
+  // total_time_.
   double ComputeNormalizedTime() const;
 
-  // Optionally used by derived classes to clamp fraction to [0..1] if they want
-  // a one-shot timer.
-  double ClampFractionToOneShot(double fraction);
-
-  // Data members
   std::shared_ptr<Clock> clock_;
-
+  Interpolation interpolation_;
   float value_;
-  int min_value_;
-  int max_value_;
   bool is_active_;
 
   std::chrono::milliseconds start_time_;
   std::chrono::milliseconds total_time_;
-};
-
-enum class FrameCounterEasing {
-  Linear,
-  Accelerate,
-  Decelerate,
-};
-
-class SimpleFrameCounter : public FrameCounter {
- public:
-  SimpleFrameCounter(std::shared_ptr<Clock> clock,
-                     int frame_min,
-                     int frame_max,
-                     int milliseconds)
-      : FrameCounter(std::move(clock), frame_min, frame_max, milliseconds) {}
-
-  virtual float ReadFrame() override;
-  std::unique_ptr<FrameCounter> Clone() const override;
-};
-
-class LoopFrameCounter : public FrameCounter {
- public:
-  LoopFrameCounter(std::shared_ptr<Clock> clock,
-                   int frame_min,
-                   int frame_max,
-                   int milliseconds,
-                   FrameCounterEasing easing = FrameCounterEasing::Linear)
-      : FrameCounter(std::move(clock), frame_min, frame_max, milliseconds),
-        easing_(easing) {}
-
-  virtual float ReadFrame() override;
-  std::unique_ptr<FrameCounter> Clone() const override;
-
- private:
-  FrameCounterEasing easing_;
-};
-
-class TurnFrameCounter : public FrameCounter {
- public:
-  TurnFrameCounter(std::shared_ptr<Clock> clock,
-                   int frame_min,
-                   int frame_max,
-                   int milliseconds,
-                   FrameCounterEasing easing = FrameCounterEasing::Linear)
-      : FrameCounter(std::move(clock), frame_min, frame_max, milliseconds),
-        easing_(easing) {}
-
-  virtual float ReadFrame() override;
-  std::unique_ptr<FrameCounter> Clone() const override;
-
- private:
-  FrameCounterEasing easing_;
-};
-
-class AcceleratingFrameCounter : public FrameCounter {
- public:
-  AcceleratingFrameCounter(std::shared_ptr<Clock> clock,
-                           int frame_min,
-                           int frame_max,
-                           int milliseconds)
-      : FrameCounter(std::move(clock), frame_min, frame_max, milliseconds) {}
-
-  virtual float ReadFrame() override;
-  std::unique_ptr<FrameCounter> Clone() const override;
-};
-
-class DeceleratingFrameCounter : public FrameCounter {
- public:
-  DeceleratingFrameCounter(std::shared_ptr<Clock> clock,
-                           int frame_min,
-                           int frame_max,
-                           int milliseconds)
-      : FrameCounter(std::move(clock), frame_min, frame_max, milliseconds) {}
-
-  virtual float ReadFrame() override;
-  std::unique_ptr<FrameCounter> Clone() const override;
 };

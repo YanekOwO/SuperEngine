@@ -72,3 +72,36 @@ double InterpolateBetween(const InterpolationRange& range,
   double to_add = value.end - value.start;
   return value.start + Interpolate(range, to_add, mode);
 }
+
+double Interpolation::ValueAt(double normalized_time) const {
+  double percentage = normalized_time;
+
+  switch (type_) {
+    case InterpolationType::OneShot:
+      break;
+
+    case InterpolationType::Loop: {
+      if (percentage <= 0.0) {
+        percentage = 0.0;
+      } else {
+        percentage -= std::floor(percentage);
+      }
+    } break;
+
+    case InterpolationType::Turn: {
+      if (percentage <= 0.0) {
+        percentage = 0.0;
+      } else {
+        double cycle = std::fmod(percentage, 2.0);
+        percentage = 1.0 - std::fabs(1.0 - cycle);
+      }
+    } break;
+
+    default:
+      throw std::invalid_argument("Invalid interpolation type: " +
+                                  std::to_string(static_cast<int>(type_)));
+  }
+
+  return InterpolateBetween(InterpolationRange(0.0, percentage, 1.0), range_,
+                            mode_);
+}

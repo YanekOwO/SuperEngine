@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include "core/frame_counter.hpp"
 #include "utilities/stopwatch.hpp"
 
 #include <boost/serialization/serialization.hpp>
@@ -33,7 +34,6 @@
 #include <utility>
 
 class Gameexe;
-class FrameCounter;
 
 // Generic values
 //
@@ -61,17 +61,16 @@ class RLEnvironment {
 
   Stopwatch& GetTimer(int layer, int idx);
 
-  std::shared_ptr<FrameCounter> GetFrameCounter(int layer, int idx);
-  void SetFrameCounter(int layer,
-                       int idx,
-                       std::shared_ptr<FrameCounter> counter);
+  FrameCounter* GetFrameCounter(int layer, int idx);
+  void SetFrameCounter(int layer, int idx, FrameCounter counter);
+  void ClearFrameCounter(int layer, int idx);
 
  private:
   Generic generic_;
 
   std::map<std::pair<int, int>, Stopwatch> rltimer_;
 
-  std::map<std::pair<int, int>, std::shared_ptr<FrameCounter>> frame_counter_;
+  std::map<std::pair<int, int>, FrameCounter> frame_counter_;
 
   friend class boost::serialization::access;
   void serialize(auto& ar, const unsigned int ver) { ar & generic_; }

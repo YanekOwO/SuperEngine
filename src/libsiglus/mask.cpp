@@ -33,39 +33,26 @@
 namespace libsiglus {
 namespace {
 
-std::unique_ptr<FrameCounter> MakeFrameCounter(MaskValue::EventType event_type,
-                                               int duration,
-                                               int start,
-                                               int end,
-                                               int speed_type,
-                                               std::shared_ptr<Clock> clock) {
-  FrameCounterEasing easing = FrameCounterEasing::Linear;
+FrameCounter MakeFrameCounter(MaskValue::EventType event_type,
+                              int duration,
+                              int start,
+                              int end,
+                              int speed_type,
+                              std::shared_ptr<Clock> clock) {
+  InterpolationMode mode = InterpolationMode::Linear;
   if (speed_type == 1)
-    easing = FrameCounterEasing::Accelerate;
+    mode = InterpolationMode::Accelerate;
   else if (speed_type == 2)
-    easing = FrameCounterEasing::Decelerate;
+    mode = InterpolationMode::Decelerate;
 
-  if (event_type == MaskValue::EventType::Loop) {
-    return std::make_unique<LoopFrameCounter>(std::move(clock), start, end,
-                                              duration, easing);
-  }
-  if (event_type == MaskValue::EventType::Turn) {
-    return std::make_unique<TurnFrameCounter>(std::move(clock), start, end,
-                                              duration, easing);
-  }
+  InterpolationType type = InterpolationType::OneShot;
+  if (event_type == MaskValue::EventType::Loop)
+    type = InterpolationType::Loop;
+  else if (event_type == MaskValue::EventType::Turn)
+    type = InterpolationType::Turn;
 
-  switch (speed_type) {
-    case 1:
-      return std::make_unique<AcceleratingFrameCounter>(std::move(clock), start,
-                                                        end, duration);
-    case 2:
-      return std::make_unique<DeceleratingFrameCounter>(std::move(clock), start,
-                                                        end, duration);
-    case 0:
-    default:
-      return std::make_unique<SimpleFrameCounter>(std::move(clock), start, end,
-                                                  duration);
-  }
+  return FrameCounter(std::move(clock),
+                      Interpolation(Range(start, end), type, mode), duration);
 }
 
 }  // namespace

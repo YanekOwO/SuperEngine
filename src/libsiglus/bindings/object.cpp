@@ -72,6 +72,18 @@ constexpr int kBtnNormal = 0;
 constexpr int kBtnSelect = 3;
 constexpr int kBtnDisable = 4;
 
+InterpolationMode GetSiglusInterpolationMode(int speed_type) {
+  switch (speed_type) {
+    case 1:
+      return InterpolationMode::Accelerate;
+    case 2:
+      return InterpolationMode::Decelerate;
+    case 0:
+    default:
+      return InterpolationMode::Linear;
+  }
+}
+
 int RequiredInt(const sr::Value& value, std::string_view name) {
   std::optional<int> result = AsInt(value);
   if (!result)
@@ -80,57 +92,35 @@ int RequiredInt(const sr::Value& value, std::string_view name) {
   return *result;
 }
 
-std::unique_ptr<FrameCounter> MakeSiglusFrameCounter(
-    int duration,
-    int delay,
-    int start_val,
-    int end_val,
-    int type,
-    std::shared_ptr<Clock> clock) {
-  std::unique_ptr<FrameCounter> fc;
-  switch (type) {
-    case 1:
-      fc = std::make_unique<AcceleratingFrameCounter>(
-          std::move(clock), start_val, end_val, duration);
-      break;
-    case 2:
-      fc = std::make_unique<DeceleratingFrameCounter>(
-          std::move(clock), start_val, end_val, duration);
-      break;
-    case 0:
-    default:
-      fc = std::make_unique<SimpleFrameCounter>(std::move(clock), start_val,
-                                                end_val, duration);
-      break;
-  }
-  fc->BeginTimer(std::chrono::milliseconds(delay));
+FrameCounter MakeSiglusFrameCounter(int duration,
+                                    int delay,
+                                    int start_val,
+                                    int end_val,
+                                    int type,
+                                    std::shared_ptr<Clock> clock) {
+  FrameCounter fc(
+      std::move(clock),
+      Interpolation(Range(start_val, end_val), InterpolationType::OneShot,
+                    GetSiglusInterpolationMode(type)),
+      duration);
+  fc.BeginTimer(std::chrono::milliseconds(delay));
   return fc;
 }
 
-FrameCounterEasing GetSiglusEasing(int speed_type) {
-  switch (speed_type) {
-    case 1:
-      return FrameCounterEasing::Accelerate;
-    case 2:
-      return FrameCounterEasing::Decelerate;
-    case 0:
-    default:
-      return FrameCounterEasing::Linear;
-  }
-}
-
-template <typename Counter>
-std::unique_ptr<FrameCounter> MakeSiglusRepeatingFrameCounter(
+FrameCounter MakeSiglusRepeatingFrameCounter(
+    InterpolationType type,
     int duration,
     int delay,
     int start_value,
     int end_value,
     int speed_type,
     std::shared_ptr<Clock> clock) {
-  auto counter =
-      std::make_unique<Counter>(std::move(clock), start_value, end_value,
-                                duration, GetSiglusEasing(speed_type));
-  counter->BeginTimer(std::chrono::milliseconds(delay));
+  FrameCounter counter(
+      std::move(clock),
+      Interpolation(Range(start_value, end_value), type,
+                    GetSiglusInterpolationMode(speed_type)),
+      duration);
+  counter.BeginTimer(std::chrono::milliseconds(delay));
   return counter;
 }
 
@@ -630,9 +620,9 @@ class ObjectEvent {
     obj.EndObjectMutatorMatching(-1, name, 0);
     std::vector<Mutator> mutators;
     mutators.emplace_back(
-        setter_, MakeSiglusRepeatingFrameCounter<LoopFrameCounter>(
-                     loop_time, delay, start_value, end_value, speed_type,
-                     std::move(clock)));
+        setter_, MakeSiglusRepeatingFrameCounter(
+                     InterpolationType::Loop, loop_time, delay, start_value,
+                     end_value, speed_type, std::move(clock)));
     obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name));
   }
 
@@ -648,9 +638,9 @@ class ObjectEvent {
     obj.EndObjectMutatorMatching(-1, name, 0);
     std::vector<Mutator> mutators;
     mutators.emplace_back(
-        setter_, MakeSiglusRepeatingFrameCounter<TurnFrameCounter>(
-                     loop_time, delay, start_value, end_value, speed_type,
-                     std::move(clock)));
+        setter_, MakeSiglusRepeatingFrameCounter(
+                     InterpolationType::Turn, loop_time, delay, start_value,
+                     end_value, speed_type, std::move(clock)));
     obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name));
   }
 
@@ -731,8 +721,8 @@ class ObjectRepnoEvent {
             int loop_time,
             int delay,
             int speed_type) {
-    StartRepeatingEvent<LoopFrameCounter>(start_value, end_value, loop_time,
-                                          delay, speed_type);
+    StartRepeatingEvent(InterpolationType::Loop, start_value, end_value,
+                        loop_time, delay, speed_type);
   }
 
   void turn(int start_value,
@@ -740,8 +730,8 @@ class ObjectRepnoEvent {
             int loop_time,
             int delay,
             int speed_type) {
-    StartRepeatingEvent<TurnFrameCounter>(start_value, end_value, loop_time,
-                                          delay, speed_type);
+    StartRepeatingEvent(InterpolationType::Turn, start_value, end_value,
+                        loop_time, delay, speed_type);
   }
 
   void end() {
@@ -763,8 +753,8 @@ class ObjectRepnoEvent {
   }
 
  private:
-  template <typename Counter>
-  void StartRepeatingEvent(int start_value,
+  void StartRepeatingEvent(InterpolationType type,
+                           int start_value,
                            int end_value,
                            int loop_time,
                            int delay,
@@ -779,9 +769,9 @@ class ObjectRepnoEvent {
         [setter = setter_, repno = repno_](ObjectParameter& param, int value) {
           setter(param, repno, value);
         },
-        MakeSiglusRepeatingFrameCounter<Counter>(loop_time, delay, start_value,
-                                                 end_value, speed_type,
-                                                 std::move(clock)));
+        MakeSiglusRepeatingFrameCounter(type, loop_time, delay, start_value,
+                                        end_value, speed_type,
+                                        std::move(clock)));
     obj.AddObjectMutator(ObjectMutator(std::move(mutators), repno_, name));
   }
 

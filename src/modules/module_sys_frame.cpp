@@ -37,24 +37,32 @@
 #include "modules/module_sys.hpp"
 #include "utilities/clock.hpp"
 
+#include <utility>
+
 namespace {
 
-template <typename FRAMECLASS>
 struct InitFrame : public RLOpcode<IntConstant_T,
                                    IntConstant_T,
                                    IntConstant_T,
                                    IntConstant_T> {
   const int layer_;
-  explicit InitFrame(int layer) : layer_(layer) {}
+  const InterpolationType type_;
+  const InterpolationMode mode_;
+
+  explicit InitFrame(int layer,
+                     InterpolationType type = InterpolationType::OneShot,
+                     InterpolationMode mode = InterpolationMode::Linear)
+      : layer_(layer), type_(type), mode_(mode) {}
 
   void operator()(RLMachine& machine,
                   int counter,
                   int frameMin,
                   int frameMax,
                   int time) {
-    auto fc = std::make_shared<FRAMECLASS>(std::make_shared<Clock>(), frameMin,
-                                           frameMax, time);
-    machine.GetEnvironment().SetFrameCounter(layer_, counter, fc);
+    FrameCounter fc(
+        std::make_shared<Clock>(),
+        Interpolation(Range(frameMin, frameMax), type_, mode_), time);
+    machine.GetEnvironment().SetFrameCounter(layer_, counter, std::move(fc));
   }
 };
 
@@ -103,7 +111,7 @@ struct ClearFrame_0 : public RLOpcode<IntConstant_T> {
   explicit ClearFrame_0(int layer) : layer_(layer) {}
 
   void operator()(RLMachine& machine, int counter) {
-    machine.GetEnvironment().SetFrameCounter(layer_, counter, nullptr);
+    machine.GetEnvironment().ClearFrameCounter(layer_, counter);
   }
 };
 
@@ -113,7 +121,6 @@ struct ClearFrame_1 : public RLOpcode<IntConstant_T, IntConstant_T> {
 
   void operator()(RLMachine& machine, int counter, int new_value) {
     auto fc = machine.GetEnvironment().GetFrameCounter(layer_, counter);
-    fc->SetActive(false);
     fc->SetFrame(new_value);
   }
 };
@@ -125,7 +132,6 @@ struct ClearAllFrames_0 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int new_value) {
     for (int i = 0; i < 255; ++i) {
       if (auto fc = machine.GetEnvironment().GetFrameCounter(layer_, i)) {
-        fc->SetActive(false);
         fc->SetFrame(new_value);
       }
     }
@@ -138,7 +144,7 @@ struct ClearAllFrames_1 : public RLOpcode<> {
 
   void operator()(RLMachine& machine) {
     for (int i = 0; i < 255; ++i)
-      machine.GetEnvironment().SetFrameCounter(layer_, i, nullptr);
+      machine.GetEnvironment().ClearFrameCounter(layer_, i);
   }
 };
 
@@ -176,13 +182,17 @@ struct ReadFrames : public RLStoreOpcode<Argc_T<FrameDataInReadFrames>> {
 
 void AddSysFrameOpcodes(RLModule& m) {
   // Normal frame counter operations
-  m.AddOpcode(500, 0, "InitFrame", new InitFrame<SimpleFrameCounter>(0));
-  m.AddOpcode(501, 0, "InitFrameLoop", new InitFrame<LoopFrameCounter>(0));
-  m.AddOpcode(502, 0, "InitFrameTurn", new InitFrame<TurnFrameCounter>(0));
+  m.AddOpcode(500, 0, "InitFrame", new InitFrame(0));
+  m.AddOpcode(501, 0, "InitFrameLoop",
+              new InitFrame(0, InterpolationType::Loop));
+  m.AddOpcode(502, 0, "InitFrameTurn",
+              new InitFrame(0, InterpolationType::Turn));
   m.AddOpcode(503, 0, "InitFrameAccel",
-              new InitFrame<AcceleratingFrameCounter>(0));
+              new InitFrame(0, InterpolationType::OneShot,
+                            InterpolationMode::Accelerate));
   m.AddOpcode(504, 0, "InitFrameDecel",
-              new InitFrame<DeceleratingFrameCounter>(0));
+              new InitFrame(0, InterpolationType::OneShot,
+                            InterpolationMode::Decelerate));
   m.AddOpcode(510, 0, "ReadFrame", new ReadFrame(0));
   m.AddOpcode(511, 0, "FrameActive", new FrameActive(0));
   m.AddOpcode(512, 0, "AnyFrameActive", new AnyFrameActive(0));
@@ -192,13 +202,17 @@ void AddSysFrameOpcodes(RLModule& m) {
   m.AddOpcode(514, 1, "ClearAllFrames", new ClearAllFrames_1(0));
 
   // Extended frame counter operations
-  m.AddOpcode(520, 0, "InitExFrame", new InitFrame<SimpleFrameCounter>(1));
-  m.AddOpcode(521, 0, "InitExFrameLoop", new InitFrame<LoopFrameCounter>(1));
-  m.AddOpcode(522, 0, "InitExFrameTurn", new InitFrame<TurnFrameCounter>(1));
+  m.AddOpcode(520, 0, "InitExFrame", new InitFrame(1));
+  m.AddOpcode(521, 0, "InitExFrameLoop",
+              new InitFrame(1, InterpolationType::Loop));
+  m.AddOpcode(522, 0, "InitExFrameTurn",
+              new InitFrame(1, InterpolationType::Turn));
   m.AddOpcode(523, 0, "InitExFrameAccel",
-              new InitFrame<AcceleratingFrameCounter>(1));
+              new InitFrame(1, InterpolationType::OneShot,
+                            InterpolationMode::Accelerate));
   m.AddOpcode(524, 0, "InitExFrameDecel",
-              new InitFrame<DeceleratingFrameCounter>(1));
+              new InitFrame(1, InterpolationType::OneShot,
+                            InterpolationMode::Decelerate));
   m.AddOpcode(530, 0, "ReadExFrame", new ReadFrame(1));
   m.AddOpcode(531, 0, "ExFrameActive", new FrameActive(1));
   m.AddOpcode(532, 0, "AnyExFrameActive", new AnyFrameActive(1));
@@ -208,28 +222,30 @@ void AddSysFrameOpcodes(RLModule& m) {
   m.AddOpcode(534, 1, "ClearAllExFrames", new ClearAllFrames_1(1));
 
   // Multiple Dispatch operations on normal frame counters
-  m.AddOpcode(600, 0, "InitFrames",
-              new MultiDispatch(new InitFrame<SimpleFrameCounter>(0)));
+  m.AddOpcode(600, 0, "InitFrames", new MultiDispatch(new InitFrame(0)));
   m.AddOpcode(601, 0, "InitFramesLoop",
-              new MultiDispatch(new InitFrame<LoopFrameCounter>(0)));
+              new MultiDispatch(new InitFrame(0, InterpolationType::Loop)));
   m.AddOpcode(602, 0, "InitFramesTurn",
-              new MultiDispatch(new InitFrame<TurnFrameCounter>(0)));
+              new MultiDispatch(new InitFrame(0, InterpolationType::Turn)));
   m.AddOpcode(603, 0, "InitFramesAccel",
-              new MultiDispatch(new InitFrame<AcceleratingFrameCounter>(0)));
+              new MultiDispatch(new InitFrame(0, InterpolationType::OneShot,
+                                              InterpolationMode::Accelerate)));
   m.AddOpcode(604, 0, "InitFramesDecel",
-              new MultiDispatch(new InitFrame<DeceleratingFrameCounter>(0)));
+              new MultiDispatch(new InitFrame(0, InterpolationType::OneShot,
+                                              InterpolationMode::Decelerate)));
   m.AddOpcode(610, 0, "ReadFrames", new ReadFrames(0));
 
   // Multiple Dispatch operations on normal frame counters
-  m.AddOpcode(620, 0, "InitExFrames",
-              new MultiDispatch(new InitFrame<SimpleFrameCounter>(1)));
+  m.AddOpcode(620, 0, "InitExFrames", new MultiDispatch(new InitFrame(1)));
   m.AddOpcode(621, 0, "InitExFramesLoop",
-              new MultiDispatch(new InitFrame<LoopFrameCounter>(1)));
+              new MultiDispatch(new InitFrame(1, InterpolationType::Loop)));
   m.AddOpcode(622, 0, "InitExFramesTurn",
-              new MultiDispatch(new InitFrame<TurnFrameCounter>(1)));
+              new MultiDispatch(new InitFrame(1, InterpolationType::Turn)));
   m.AddOpcode(623, 0, "InitExFramesAccel",
-              new MultiDispatch(new InitFrame<AcceleratingFrameCounter>(1)));
+              new MultiDispatch(new InitFrame(1, InterpolationType::OneShot,
+                                              InterpolationMode::Accelerate)));
   m.AddOpcode(624, 0, "InitExFramesDecel",
-              new MultiDispatch(new InitFrame<DeceleratingFrameCounter>(1)));
+              new MultiDispatch(new InitFrame(1, InterpolationType::OneShot,
+                                              InterpolationMode::Decelerate)));
   m.AddOpcode(630, 0, "ReadExFrames", new ReadFrames(1));
 }

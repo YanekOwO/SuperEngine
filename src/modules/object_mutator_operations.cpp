@@ -37,30 +37,30 @@
 #include "systems/system.hpp"
 #include "utilities/clock.hpp"
 
-std::unique_ptr<FrameCounter> MakeFrameCounter(int duration,
-                                               int delay,
-                                               int start_val,
-                                               int end_val,
-                                               int type,
-                                               std::shared_ptr<Clock> clock) {
-  std::unique_ptr<FrameCounter> fc = nullptr;
+FrameCounter MakeFrameCounter(int duration,
+                              int delay,
+                              int start_val,
+                              int end_val,
+                              int type,
+                              std::shared_ptr<Clock> clock) {
+  InterpolationMode mode = InterpolationMode::Linear;
   switch (type) {
     case 1:
-      fc = std::make_unique<DeceleratingFrameCounter>(
-          std::move(clock), start_val, end_val, duration);
+      mode = InterpolationMode::Decelerate;
       break;
     case 2:
-      fc = std::make_unique<AcceleratingFrameCounter>(
-          std::move(clock), start_val, end_val, duration);
+      mode = InterpolationMode::Accelerate;
       break;
-
     case 0:
     default:
-      fc = std::make_unique<SimpleFrameCounter>(std::move(clock), start_val,
-                                                end_val, duration);
       break;
   }
-  fc->BeginTimer(std::chrono::milliseconds(delay));
+
+  FrameCounter fc(
+      std::move(clock),
+      Interpolation(Range(start_val, end_val), InterpolationType::OneShot, mode),
+      duration);
+  fc.BeginTimer(std::chrono::milliseconds(delay));
   return fc;
 }
 

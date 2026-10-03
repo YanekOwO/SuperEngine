@@ -37,12 +37,12 @@ class GraphicsObject;
 class ObjectParameter;
 class Clock;
 
-std::unique_ptr<FrameCounter> MakeFrameCounter(int duration,
-                                               int delay,
-                                               int start_val,
-                                               int end_val,
-                                               int type,
-                                               std::shared_ptr<Clock> clock);
+FrameCounter MakeFrameCounter(int duration,
+                              int delay,
+                              int start_val,
+                              int end_val,
+                              int type,
+                              std::shared_ptr<Clock> clock);
 
 class Op_ObjectMutatorInt : public RLOpcode<IntConstant_T,
                                             IntConstant_T,

@@ -32,6 +32,12 @@ enum class InterpolationMode {
   Decelerate = 4,  // f(t) = 1 - (1-t)^2
 };
 
+enum class InterpolationType {
+  OneShot,
+  Loop,
+  Turn,
+};
+
 struct Range {
   double start = 0.0;
   double end = 1.0;
@@ -57,3 +63,23 @@ double Interpolate(const InterpolationRange& range,
 double InterpolateBetween(const InterpolationRange& time,
                           const Range& value,
                           InterpolationMode mode);
+
+class Interpolation {
+ public:
+  explicit Interpolation(Range range,
+                         InterpolationType type = InterpolationType::OneShot,
+                         InterpolationMode mode = InterpolationMode::Linear)
+      : range_(range), type_(type), mode_(mode) {}
+
+  double ValueAt(double normalized_time) const;
+
+  inline bool IsOneShot() const { return type_ == InterpolationType::OneShot; }
+  inline bool IsConstant() const { return range_.start == range_.end; }
+  inline double StartValue() const { return range_.start; }
+  inline double EndValue() const { return range_.end; }
+
+ private:
+  Range range_;
+  InterpolationType type_;
+  InterpolationMode mode_;
+};

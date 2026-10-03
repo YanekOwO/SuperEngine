@@ -31,14 +31,13 @@
 #include <functional>
 #include <utility>
 
-Mutator::Mutator(SetFn setter, std::unique_ptr<FrameCounter> fc)
+Mutator::Mutator(SetFn setter, FrameCounter fc)
     : setter_(std::move(setter)), fc_(std::move(fc)) {}
-Mutator::~Mutator() = default;
 
-bool Mutator::Update(ObjectParameter& pm) const {
-  float value = fc_->ReadFrame();
+bool Mutator::Update(ObjectParameter& pm) {
+  float value = fc_.ReadFrame();
   std::invoke(setter_, pm, static_cast<int>(value));
-  return fc_->IsFinished();
+  return fc_.IsFinished();
 }
 
 ObjectMutator::ObjectMutator(std::vector<Mutator> mut,
@@ -47,18 +46,14 @@ ObjectMutator::ObjectMutator(std::vector<Mutator> mut,
     : mutators_(std::move(mut)), repr_(repr), name_(std::move(name)) {}
 
 ObjectMutator ObjectMutator::DeepCopy() const {
-  std::vector<Mutator> mutators;
-  mutators.reserve(mutators_.size());
-  for (const auto& it : mutators_)
-    mutators.emplace_back(it.setter_, it.fc_->Clone());
-  return ObjectMutator(std::move(mutators), repr_, name_);
+  return ObjectMutator(mutators_, repr_, name_);
 }
 
 void ObjectMutator::OnComplete(DoneFn fn) { on_complete_ = std::move(fn); }
 
 bool ObjectMutator::Update(ObjectParameter& pm) {
   auto it = std::remove_if(mutators_.begin(), mutators_.end(),
-                           [&pm](const auto& it) { return it.Update(pm); });
+                           [&pm](auto& it) { return it.Update(pm); });
   mutators_.erase(it, mutators_.end());
   const bool done = mutators_.empty();
   if (done && on_complete_)
@@ -68,7 +63,7 @@ bool ObjectMutator::Update(ObjectParameter& pm) {
 
 void ObjectMutator::SetToEnd(ObjectParameter& pm) {
   for (auto& it : mutators_) {
-    it.fc_->EndTimer();
+    it.fc_.EndTimer();
     it.Update(pm);
   }
 

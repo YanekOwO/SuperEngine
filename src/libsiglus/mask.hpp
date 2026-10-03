@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,7 @@ class MaskValue {
   void LoopEvent(int start, int end, int duration, int delay, int speed_type);
   void TurnEvent(int start, int end, int duration, int delay, int speed_type);
   void EndEvent();
-  bool CheckEvent() const { return frame_counter_ != nullptr; }
+  bool CheckEvent() const { return frame_counter_.has_value(); }
   void Execute();
 
  private:
@@ -64,7 +65,7 @@ class MaskValue {
   std::shared_ptr<Clock> clock_;
   int value_ = 0;
   int render_value_ = 0;
-  std::unique_ptr<FrameCounter> frame_counter_;
+  std::optional<FrameCounter> frame_counter_;
 };
 
 class MaskElement {
