@@ -33,6 +33,7 @@ using ::testing::Return;
 
 #include <atomic>
 #include <future>
+#include <limits>
 #include <random>
 
 constexpr auto sample_rate = 44100;
@@ -67,6 +68,9 @@ class NoiseGenerator : public IAudioDecoder {
   AudioData DecodeAll() override { return AudioData{GetSpec(), buffer_}; }
 
   AudioData DecodeNext() override {
+    if (++decode_count_ > max_decode_calls_)
+      throw std::runtime_error("DecodeNext call limit exceeded");
+
     static constexpr int chunk_size = 1024;
     int end_position = std::min(position_ + chunk_size, total_samples_);
 
@@ -107,6 +111,8 @@ class NoiseGenerator : public IAudioDecoder {
 
   std::vector<avsample_flt_t> buffer_;
   pcm_count_t position_;
+  size_t decode_count_ = 0;
+  size_t max_decode_calls_ = std::numeric_limits<size_t>::max();
   const int sample_rate_;
   const double frequency_;
   const pcm_count_t total_samples_;
@@ -393,6 +399,20 @@ TEST_F(AudioPlayerTest, SetPLoop) {
   expect.resize(3 * quarter_samples);
 
   ASSERT_EQ(result.SampleCount(), expect.size());
+  EXPECT_LE(Deviation(std::get<std::vector<float>>(result.data), expect), 1e-4);
+}
+
+TEST_F(AudioPlayerTest, SetPLoopWithOpenEndedTrack) {
+  static constexpr size_t requested_samples = 512;
+  decoder->max_decode_calls_ = 1;
+
+  player->SetPLoop(0, std::numeric_limits<size_t>::max(), 0);
+  auto result = player->LoadPCM(requested_samples);
+
+  ASSERT_EQ(result.SampleCount(), requested_samples);
+  EXPECT_EQ(decoder->decode_count_, 1);
+  std::vector<float> expect(decoder->buffer_.begin(),
+                            decoder->buffer_.begin() + requested_samples);
   EXPECT_LE(Deviation(std::get<std::vector<float>>(result.data), expect), 1e-4);
 }
 

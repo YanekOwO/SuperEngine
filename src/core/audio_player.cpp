@@ -239,6 +239,12 @@ void AudioPlayer::SetLoopImpl(size_t ab_loop_a, size_t ab_loop_b) {
 }
 
 void AudioPlayer::SetPLoop(size_t from, size_t to, size_t loop) {
+  // Gameexe uses -1 for an open-ended track. It reaches this size_t API as
+  // size_t::max(), which cannot be safely converted back to the signed frame
+  // positions used by ClipFrame.
+  if (to == std::numeric_limits<size_t>::max())
+    to = npos;
+
   if (!(from < to && loop < to)) {
     std::ostringstream oss;
     oss << "Invalid p-loop: (";
