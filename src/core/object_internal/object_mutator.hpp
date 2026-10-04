@@ -24,33 +24,25 @@
 
 #pragma once
 
-#include "core/frame_counter.hpp"
+#include "core/mutator.hpp"
 
 #include <functional>
 #include <string>
-#include <vector>
 
 class ObjectParameter;
 
-struct Mutator {
-  using SetFn = std::function<void(ObjectParameter&, int)>;
-  SetFn setter_;
-  FrameCounter fc_;
-
-  Mutator(SetFn setter, FrameCounter fc);
-
-  bool Update(ObjectParameter& pm);
-};
+using ObjectParameterMutator =
+    Mutator<std::function<void(ObjectParameter&, int)>, ObjectParameter>;
 
 class ObjectMutator {
   using DoneFn = std::function<void(ObjectParameter&)>;
-  std::vector<Mutator> mutators_;
+  ObjectParameterMutator mutator_;
   int repr_;
   std::string name_;
   DoneFn on_complete_;
 
  public:
-  ObjectMutator(std::vector<Mutator> mut,
+  ObjectMutator(ObjectParameterMutator mut,
                 int repr = 0,
                 std::string name = "unknown");
 

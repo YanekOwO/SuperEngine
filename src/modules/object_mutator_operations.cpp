@@ -56,10 +56,10 @@ FrameCounter MakeFrameCounter(int duration,
       break;
   }
 
-  FrameCounter fc(
-      std::move(clock),
-      Interpolation(Range(start_val, end_val), InterpolationType::OneShot, mode),
-      duration);
+  FrameCounter fc(std::move(clock),
+                  Interpolation(Range(start_val, end_val),
+                                InterpolationType::OneShot, mode),
+                  duration);
   fc.BeginTimer(std::chrono::milliseconds(delay));
   return fc;
 }
@@ -106,13 +106,19 @@ void Op_ObjectMutatorInt::operator()(RLMachine& machine,
   std::shared_ptr<Clock> clock = machine.GetSystem().event().GetClock();
   GraphicsObject& obj = GetGraphicsObject(machine, this, object);
 
+  // If there's a currently running mutator that matches the incoming
+  // operation, ignore the new operation. Kud Wafter's ED relies on this
+  // behavior.
+  if (obj.IsMutatorRunningMatching(-1, name_))
+    return;
+
   int startval = std::invoke(getter_, obj.Param());
 
-  std::vector<Mutator> mutators;
-  mutators.emplace_back(
-      setter_, MakeFrameCounter(duration_time, delay, startval, endval, type,
-                                std::move(clock)));
-  ObjectMutator mutator(std::move(mutators), -1, name_);
+  ObjectMutator mutator(
+      ObjectParameterMutator(
+          setter_, MakeFrameCounter(duration_time, delay, startval, endval,
+                                    type, std::move(clock))),
+      -1, name_);
   obj.AddObjectMutator(std::move(mutator));
 }
 
@@ -135,13 +141,15 @@ void Op_ObjectMutatorRepnoInt::operator()(RLMachine& machine,
   std::shared_ptr<Clock> clock = machine.GetSystem().event().GetClock();
   GraphicsObject& obj = GetGraphicsObject(machine, this, object);
 
+  if (obj.IsMutatorRunningMatching(repno, name_))
+    return;
+
   int startval = std::invoke(getter_, obj.Param(), repno);
-  std::vector<Mutator> mutators;
-  mutators.emplace_back(
-      std::bind(setter_, _1, repno, _2),
-      MakeFrameCounter(duration_time, delay, startval, endval, type,
-                       std::move(clock)));
-  ObjectMutator mutator(std::move(mutators), repno, name_);
+  ObjectMutator mutator(
+      ObjectParameterMutator(std::bind(setter_, _1, repno, _2),
+                             MakeFrameCounter(duration_time, delay, startval,
+                                              endval, type, std::move(clock))),
+      repno, name_);
 
   obj.AddObjectMutator(std::move(mutator));
 }
@@ -172,18 +180,22 @@ void Op_ObjectMutatorIntInt::operator()(RLMachine& machine,
   GraphicsObject& obj = GetGraphicsObject(machine, this, object);
   ObjectParameter& pm = obj.Param();
 
+  if (obj.IsMutatorRunningMatching(-1, name_))
+    return;
+
   int startval_one = std::invoke(getter_one_, pm);
   int startval_two = std::invoke(getter_two_, pm);
 
-  std::vector<Mutator> mutators;
-  mutators.emplace_back(
-      setter_one_, MakeFrameCounter(duration_time, delay, startval_one,
-                                    endval_one, type, clock));
-  mutators.emplace_back(
-      setter_two_, MakeFrameCounter(duration_time, delay, startval_two,
-                                    endval_two, type, std::move(clock)));
-
-  obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name_));
+  obj.AddObjectMutator(ObjectMutator(
+      ObjectParameterMutator(
+          setter_one_, MakeFrameCounter(duration_time, delay, startval_one,
+                                        endval_one, type, clock)),
+      -1, name_));
+  obj.AddObjectMutator(ObjectMutator(
+      ObjectParameterMutator(
+          setter_two_, MakeFrameCounter(duration_time, delay, startval_two,
+                                        endval_two, type, std::move(clock))),
+      -1, name_));
 }
 
 // -----------------------------------------------------------------------

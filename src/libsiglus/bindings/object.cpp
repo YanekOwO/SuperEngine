@@ -107,19 +107,17 @@ FrameCounter MakeSiglusFrameCounter(int duration,
   return fc;
 }
 
-FrameCounter MakeSiglusRepeatingFrameCounter(
-    InterpolationType type,
-    int duration,
-    int delay,
-    int start_value,
-    int end_value,
-    int speed_type,
-    std::shared_ptr<Clock> clock) {
-  FrameCounter counter(
-      std::move(clock),
-      Interpolation(Range(start_value, end_value), type,
-                    GetSiglusInterpolationMode(speed_type)),
-      duration);
+FrameCounter MakeSiglusRepeatingFrameCounter(InterpolationType type,
+                                             int duration,
+                                             int delay,
+                                             int start_value,
+                                             int end_value,
+                                             int speed_type,
+                                             std::shared_ptr<Clock> clock) {
+  FrameCounter counter(std::move(clock),
+                       Interpolation(Range(start_value, end_value), type,
+                                     GetSiglusInterpolationMode(speed_type)),
+                       duration);
   counter.BeginTimer(std::chrono::milliseconds(delay));
   return counter;
 }
@@ -281,8 +279,7 @@ class SiglusObject {
 
   void change_file(std::string filename) {
     if (!graphics_)
-      throw std::runtime_error(
-          "Object.change_file requires a graphics system");
+      throw std::runtime_error("Object.change_file requires a graphics system");
     if (filename.empty())
       throw std::runtime_error("Object.change_file filename is empty");
 
@@ -601,11 +598,11 @@ class ObjectEvent {
 
     obj.EndObjectMutatorMatching(-1, name, 0);
     const int start = getter_(obj.Param());
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(
-        setter_, MakeSiglusFrameCounter(duration_time, delay, start, end_value,
-                                        type, std::move(clock)));
-    obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name));
+    obj.AddObjectMutator(ObjectMutator(
+        ObjectParameterMutator(
+            setter_, MakeSiglusFrameCounter(duration_time, delay, start,
+                                            end_value, type, std::move(clock))),
+        -1, name));
   }
 
   void loop(int start_value,
@@ -618,12 +615,12 @@ class ObjectEvent {
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(-1, name, 0);
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(
-        setter_, MakeSiglusRepeatingFrameCounter(
-                     InterpolationType::Loop, loop_time, delay, start_value,
-                     end_value, speed_type, std::move(clock)));
-    obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name));
+    obj.AddObjectMutator(ObjectMutator(
+        ObjectParameterMutator(
+            setter_, MakeSiglusRepeatingFrameCounter(
+                         InterpolationType::Loop, loop_time, delay, start_value,
+                         end_value, speed_type, std::move(clock))),
+        -1, name));
   }
 
   void turn(int start_value,
@@ -636,12 +633,12 @@ class ObjectEvent {
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(-1, name, 0);
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(
-        setter_, MakeSiglusRepeatingFrameCounter(
-                     InterpolationType::Turn, loop_time, delay, start_value,
-                     end_value, speed_type, std::move(clock)));
-    obj.AddObjectMutator(ObjectMutator(std::move(mutators), -1, name));
+    obj.AddObjectMutator(ObjectMutator(
+        ObjectParameterMutator(
+            setter_, MakeSiglusRepeatingFrameCounter(
+                         InterpolationType::Turn, loop_time, delay, start_value,
+                         end_value, speed_type, std::move(clock))),
+        -1, name));
   }
 
   void end() {
@@ -706,14 +703,15 @@ class ObjectRepnoEvent {
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
     const int start = getter_(obj.Param(), repno_);
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(
-        [setter = setter_, repno = repno_](ObjectParameter& param, int value) {
-          setter(param, repno, value);
-        },
-        MakeSiglusFrameCounter(duration_time, delay, start, end_value, type,
-                               std::move(clock)));
-    obj.AddObjectMutator(ObjectMutator(std::move(mutators), repno_, name));
+    obj.AddObjectMutator(ObjectMutator(
+        ObjectParameterMutator(
+            [setter = setter_, repno = repno_](ObjectParameter& param,
+                                               int value) {
+              setter(param, repno, value);
+            },
+            MakeSiglusFrameCounter(duration_time, delay, start, end_value, type,
+                                   std::move(clock))),
+        repno_, name));
   }
 
   void loop(int start_value,
@@ -764,15 +762,14 @@ class ObjectRepnoEvent {
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(
-        [setter = setter_, repno = repno_](ObjectParameter& param, int value) {
-          setter(param, repno, value);
-        },
-        MakeSiglusRepeatingFrameCounter(type, loop_time, delay, start_value,
-                                        end_value, speed_type,
-                                        std::move(clock)));
-    obj.AddObjectMutator(ObjectMutator(std::move(mutators), repno_, name));
+    obj.AddObjectMutator(ObjectMutator(
+        ObjectParameterMutator([setter = setter_, repno = repno_](
+                                   ObjectParameter& param,
+                                   int value) { setter(param, repno, value); },
+                               MakeSiglusRepeatingFrameCounter(
+                                   type, loop_time, delay, start_value,
+                                   end_value, speed_type, std::move(clock))),
+        repno_, name));
   }
 
   void Verify() {

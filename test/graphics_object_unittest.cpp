@@ -25,10 +25,32 @@
 
 #include "core/object.hpp"
 #include "core/object_internal/object_mutator.hpp"
+#include "mock_clock.hpp"
 #include "mock_graphics_object_data.hpp"
 
+#include <chrono>
 #include <memory>
 #include <optional>
+
+using std::chrono_literals::operator""ms;
+
+namespace {
+
+ObjectParameterMutator MakeMutator(
+    std::function<void(ObjectParameter&, int)> setter,
+    std::shared_ptr<Clock> clock,
+    int start,
+    int end,
+    int duration_ms) {
+  return ObjectParameterMutator(
+      std::move(setter),
+      FrameCounter(std::move(clock),
+                   Interpolation(Range(start, end), InterpolationType::OneShot,
+                                 InterpolationMode::Linear),
+                   duration_ms));
+}
+
+}  // namespace
 
 class GraphicsObjectTest : public ::testing::Test {
  protected:
@@ -298,9 +320,60 @@ TEST_F(GraphicsObjectTest, ExplicitInvalidChildMaskOverridesParentMask) {
 }
 
 TEST_F(GraphicsObjectTest, EndObjectMutatorMatching) {
-  obj.AddObjectMutator(ObjectMutator({}, -1, "fade"));
+  auto clock = std::make_shared<MockClock>();
+  obj.AddObjectMutator(ObjectMutator(
+      MakeMutator([](ObjectParameter& pm, int value) { pm.SetX(value); }, clock,
+                  10, 100, 1000),
+      -1, "fade"));
+  obj.AddObjectMutator(ObjectMutator(
+      MakeMutator([](ObjectParameter& pm, int value) { pm.SetY(value); }, clock,
+                  20, 200, 1000),
+      -1, "fade"));
+
+  EXPECT_EQ(obj.CountMutators(), 2);
   EXPECT_TRUE(obj.IsMutatorRunningMatching(-1, "fade"));
 
   obj.EndObjectMutatorMatching(-1, "fade", 0);
+
   EXPECT_FALSE(obj.IsMutatorRunningMatching(-1, "fade"));
+  EXPECT_EQ(obj.CountMutators(), 0);
+  EXPECT_EQ(obj.Param().x(), 100);
+  EXPECT_EQ(obj.Param().y(), 200);
+}
+
+TEST_F(GraphicsObjectTest, MatchingMutatorsRunIndependently) {
+  auto clock = std::make_shared<MockClock>();
+  obj.AddObjectMutator(ObjectMutator(
+      MakeMutator([](ObjectParameter& pm, int value) { pm.SetX(value); }, clock,
+                  10, 100, 100),
+      -1, "move"));
+
+  int completion_count = 0;
+  ObjectMutator y_mutator(
+      MakeMutator([](ObjectParameter& pm, int value) { pm.SetY(value); }, clock,
+                  20, 220, 200),
+      -1, "move");
+  y_mutator.OnComplete(
+      [&completion_count](ObjectParameter&) { ++completion_count; });
+  obj.AddObjectMutator(std::move(y_mutator));
+
+  EXPECT_EQ(obj.CountMutators(), 2);
+
+  clock->AdvanceTime(100ms);
+  obj.ExecuteMutators();
+  EXPECT_EQ(obj.Param().x(), 100);
+  EXPECT_EQ(obj.Param().y(), 120);
+  EXPECT_EQ(obj.CountMutators(), 1);
+  EXPECT_TRUE(obj.IsMutatorRunningMatching(-1, "move"));
+  EXPECT_EQ(completion_count, 0);
+
+  clock->AdvanceTime(100ms);
+  obj.ExecuteMutators();
+  EXPECT_EQ(obj.Param().y(), 220);
+  EXPECT_EQ(obj.CountMutators(), 0);
+  EXPECT_FALSE(obj.IsMutatorRunningMatching(-1, "move"));
+  EXPECT_EQ(completion_count, 1);
+
+  obj.ExecuteMutators();
+  EXPECT_EQ(completion_count, 1);
 }

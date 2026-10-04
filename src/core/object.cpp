@@ -207,10 +207,7 @@ void GraphicsObject::EnsureChildCapacity(std::size_t count) {
 }
 
 void GraphicsObject::AddObjectMutator(ObjectMutator mutator) {
-  // If there's a currently running mutator that matches the incoming mutator,
-  // we ignore the incoming mutator. Kud Wafter's ED relies on this behavior.
-  if (!IsMutatorRunningMatching(mutator.repr(), mutator.name()))
-    object_mutators_.emplace_back(std::move(mutator));
+  object_mutators_.emplace_back(std::move(mutator));
 }
 
 bool GraphicsObject::IsMutatorRunningMatching(int repno,

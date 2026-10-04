@@ -133,7 +133,8 @@ class GraphicsObject {
   void ExecuteMutators();
 
   // Adds a mutator to the list of active mutators. GraphicsSystem takes
-  // ownership of the passed in object.
+  // ownership of the passed in object. Callers are responsible for deciding
+  // whether a matching operation may be added.
   void AddObjectMutator(ObjectMutator mutator);
 
   // Returns true if a mutator matching the following parameters is currently

@@ -24,48 +24,31 @@
 
 #include "core/object_internal/object_mutator.hpp"
 
-#include "core/frame_counter.hpp"
 #include "core/object_internal/object_parameter.hpp"
 
-#include <algorithm>
 #include <functional>
 #include <utility>
 
-Mutator::Mutator(SetFn setter, FrameCounter fc)
-    : setter_(std::move(setter)), fc_(std::move(fc)) {}
-
-bool Mutator::Update(ObjectParameter& pm) {
-  float value = fc_.ReadFrame();
-  std::invoke(setter_, pm, static_cast<int>(value));
-  return fc_.IsFinished();
-}
-
-ObjectMutator::ObjectMutator(std::vector<Mutator> mut,
+ObjectMutator::ObjectMutator(ObjectParameterMutator mut,
                              int repr,
                              std::string name)
-    : mutators_(std::move(mut)), repr_(repr), name_(std::move(name)) {}
+    : mutator_(std::move(mut)), repr_(repr), name_(std::move(name)) {}
 
 ObjectMutator ObjectMutator::DeepCopy() const {
-  return ObjectMutator(mutators_, repr_, name_);
+  return ObjectMutator(mutator_, repr_, name_);
 }
 
 void ObjectMutator::OnComplete(DoneFn fn) { on_complete_ = std::move(fn); }
 
 bool ObjectMutator::Update(ObjectParameter& pm) {
-  auto it = std::remove_if(mutators_.begin(), mutators_.end(),
-                           [&pm](auto& it) { return it.Update(pm); });
-  mutators_.erase(it, mutators_.end());
-  const bool done = mutators_.empty();
+  const bool done = mutator_.Update(pm);
   if (done && on_complete_)
     std::invoke(on_complete_, pm);
   return done;
 }
 
 void ObjectMutator::SetToEnd(ObjectParameter& pm) {
-  for (auto& it : mutators_) {
-    it.fc_.EndTimer();
-    it.Update(pm);
-  }
+  mutator_.SetToEnd(pm);
 
   if (on_complete_)
     std::invoke(on_complete_, pm);

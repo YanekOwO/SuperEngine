@@ -299,23 +299,25 @@ class objEveAdjust : public RLOpcode<IntConstant_T,
     std::shared_ptr<Clock> clock = machine.GetSystem().event().GetClock();
 
     GraphicsObject& object = GetGraphicsObject(machine, this, obj);
+    if (object.IsMutatorRunningMatching(repno, "objEveAdjust"))
+      return;
+
     int start_x = object.Param().x_adjustment(repno);
     int start_y = object.Param().y_adjustment(repno);
 
-    Mutator mutator_x(
+    ObjectParameterMutator mutator_x(
         std::bind(CreateSetter<&ObjectParameter::adjustment_offsets_x>(), _1,
                   repno, _2),
         MakeFrameCounter(duration_time, delay, start_x, x, type, clock));
-    Mutator mutator_y(
+    ObjectParameterMutator mutator_y(
         std::bind(CreateSetter<&ObjectParameter::adjustment_offsets_y>(), _1,
                   repno, _2),
         MakeFrameCounter(duration_time, delay, start_y, y, type,
                          std::move(clock)));
-    std::vector<Mutator> mutators;
-    mutators.emplace_back(std::move(mutator_x));
-    mutators.emplace_back(std::move(mutator_y));
     object.AddObjectMutator(
-        ObjectMutator(std::move(mutators), repno, "objEveAdjust"));
+        ObjectMutator(std::move(mutator_x), repno, "objEveAdjust"));
+    object.AddObjectMutator(
+        ObjectMutator(std::move(mutator_y), repno, "objEveAdjust"));
   }
 };
 
@@ -343,29 +345,45 @@ static void objEveDisplay_impl(GraphicsObject& object,
   }
 
   pm.SetVisible(true);
-  std::vector<Mutator> mutators;
+  if (object.IsMutatorRunningMatching(-1, "objEveDisplay"))
+    return;
+
+  const bool hide_on_complete = display == 0;
   if (tr_mod) {
-    mutators.emplace_back(
-        CreateSetter<&ObjectParameter::alpha_source>(),
-        MakeFrameCounter(duration_time, delay, tr_start, tr_end, 0, clock));
+    ObjectMutator alpha_mutator(
+        ObjectParameterMutator(
+            CreateSetter<&ObjectParameter::alpha_source>(),
+            MakeFrameCounter(duration_time, delay, tr_start, tr_end, 0, clock)),
+        -1, "objEveDisplay");
+    if (!move_mod && hide_on_complete) {
+      alpha_mutator.OnComplete(
+          [](ObjectParameter& pm) { pm.SetVisible(false); });
+    }
+    object.AddObjectMutator(std::move(alpha_mutator));
   }
 
   if (move_mod) {
-    mutators.emplace_back(
-        CreateSetter<&ObjectParameter::position_x>(),
-        MakeFrameCounter(duration_time, delay, move_start_x, move_end_x, 0,
-                         clock));
-    mutators.emplace_back(
-        CreateSetter<&ObjectParameter::position_y>(),
-        MakeFrameCounter(duration_time, delay, move_start_y, move_end_y, 0,
-                         clock));
+    object.AddObjectMutator(
+        ObjectMutator(ObjectParameterMutator(
+                          CreateSetter<&ObjectParameter::position_x>(),
+                          MakeFrameCounter(duration_time, delay, move_start_x,
+                                           move_end_x, 0, clock)),
+                      -1, "objEveDisplay"));
+
+    ObjectMutator y_mutator(
+        ObjectParameterMutator(
+            CreateSetter<&ObjectParameter::position_y>(),
+            MakeFrameCounter(duration_time, delay, move_start_y, move_end_y, 0,
+                             std::move(clock))),
+        -1, "objEveDisplay");
+    if (hide_on_complete) {
+      y_mutator.OnComplete([](ObjectParameter& pm) { pm.SetVisible(false); });
+    }
+    object.AddObjectMutator(std::move(y_mutator));
   }
 
-  ObjectMutator om(std::move(mutators), -1, "objEveDisplay");
-  if (display == 0) {
-    om.OnComplete([](ObjectParameter& pm) { pm.SetVisible(false); });
-  }
-  object.AddObjectMutator(std::move(om));
+  if (!tr_mod && !move_mod && hide_on_complete)
+    pm.SetVisible(false);
 }
 
 struct objEveDisplay_1 : public RLOpcode<IntConstant_T,
