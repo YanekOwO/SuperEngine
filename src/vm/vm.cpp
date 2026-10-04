@@ -358,7 +358,7 @@ void VM::Return(Fiber& f) {
 void VM::ExecuteFiber(Fiber* fib) {
   fib->state = FiberState::Running;
 
-  while (!stop_requested_ && !fib->frames.empty()) {
+  for (int i = 0; i < 256 && !stop_requested_ && !fib->frames.empty(); ++i) {
     auto& frame = fib->frames.back();
     auto* chunk = frame.fn->chunk;
     auto& ip = frame.ip;
@@ -882,7 +882,7 @@ void VM::SweepDeadFibres() {
     std::shared_ptr<Promise> promise = f->completion_promise;
     bool has_pending_result = promise->GetWakeCount() == 0;
     if (has_pending_result) {
-      [[unlikely]] if (!promise->result.has_value())
+      if (!promise->result.has_value()) [[unlikely]]
         last_ = nil;  // unreachable
       else if (promise->result->has_value())
         last_ = promise->result->value();  // success case
