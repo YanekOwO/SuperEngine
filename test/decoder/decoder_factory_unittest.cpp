@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2024 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,11 +27,12 @@
 #include <gtest/gtest.h>
 
 #include "core/avdec/audio_decoder.hpp"
+#include "core/avdec/wav.hpp"
+#include "utilities/file.hpp"
 
-#include <filesystem>
-#include <functional>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace fs = std::filesystem;
 using std::string_literals::operator""s;
@@ -150,4 +152,23 @@ TEST_F(ADecFactoryTest, CreateNohint) {
 
 TEST_F(ADecFactoryTest, InvalidData) {
   EXPECT_THROW(factory.Create("invalid data"sv, "aac"s), std::runtime_error);
+}
+
+TEST(AudioDecoderPathTest, UsesCaseInsensitiveExtensionAsFormatHint) {
+  const AVSpec spec{.sample_rate = 8000,
+                    .sample_format = AV_SAMPLE_FMT::S16,
+                    .channel_count = 1};
+  const std::vector<avsample_s16_t> samples{1, -2, 3, -4};
+  const AudioData source{.spec = spec, .data = samples};
+  const ScopedTemporary tmp;
+  const fs::path path = tmp.dir() / "audio.WAV";
+
+  auto wav = EncodeWav(source);
+  WriteFile(path, wav);
+  AudioDecoder decoder(path);
+
+  EXPECT_EQ(decoder.GetSpec(), spec);
+  EXPECT_EQ(decoder.Seek(0, SEEKDIR::BEG), SEEK_RESULT::PRECISE_SEEK);
+  const AudioData decoded = decoder.DecodeAll();
+  EXPECT_EQ(std::get<std::vector<avsample_s16_t>>(decoded.data), samples);
 }

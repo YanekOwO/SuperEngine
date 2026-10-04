@@ -25,9 +25,6 @@
 #pragma once
 
 #include "core/avdec/iadec.hpp"
-#include "core/avdec/nwa.hpp"
-#include "core/avdec/ogg.hpp"
-#include "core/avdec/wav.hpp"
 #include "core/avspec.hpp"
 #include "utilities/mapped_file.hpp"
 

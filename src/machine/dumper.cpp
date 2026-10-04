@@ -27,6 +27,7 @@
 #include "core/avdec/audio_decoder.hpp"
 #include "core/avdec/image_decoder.hpp"
 #include "core/avdec/video_encoder.hpp"
+#include "core/avdec/wav.hpp"
 #include "libreallive/elements/bytecode.hpp"
 #include "libreallive/elements/command.hpp"
 #include "libreallive/scenario.hpp"
@@ -35,7 +36,6 @@
 
 #include <format>
 #include <functional>
-#include <future>
 
 namespace fs = std::filesystem;
 using namespace std::placeholders;

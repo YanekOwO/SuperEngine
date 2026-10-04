@@ -24,7 +24,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,6 +41,8 @@ std::filesystem::path CorrectPathCase(std::filesystem::path Path);
 
 std::vector<char> LoadFile(const std::filesystem::path& file_path);
 std::string LoadFileStr(const std::filesystem::path& file_path);
+void WriteFile(const std::filesystem::path& file_path,
+               std::span<std::uint8_t> data);
 
 class ScopedCurrentPath {
  public:
@@ -47,4 +51,15 @@ class ScopedCurrentPath {
 
  private:
   std::filesystem::path previous_;
+};
+
+class ScopedTemporary {
+ public:
+  ScopedTemporary();
+  ~ScopedTemporary();
+
+  inline std::filesystem::path dir() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
 };

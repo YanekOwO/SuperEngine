@@ -25,17 +25,18 @@
 #include "utilities/file.hpp"
 
 #include <boost/algorithm/string.hpp>
+#include <boost/filesystem.hpp>
 #include <filesystem>
 
 #include <fstream>
-#include <sstream>
 #include <stack>
+#include <stdexcept>
 #include <string>
-
-#include "utilities/exception.hpp"
+#include <system_error>
 
 using boost::to_upper;
 namespace fs = std::filesystem;
+namespace bfs = boost::filesystem;
 
 // -----------------------------------------------------------------------
 
@@ -140,4 +141,30 @@ std::string LoadFileStr(const std::filesystem::path& path) {
   }
 
   return buffer;
+}
+
+void WriteFile(const std::filesystem::path& path,
+               std::span<std::uint8_t> data) {
+  std::ofstream file(path, std::ios::binary);
+  if (!file)
+    throw std::runtime_error("Failed to open file: " + path.string());
+
+  if (!file.write(reinterpret_cast<const char*>(data.data()), data.size()))
+    throw std::runtime_error("Failed to write file: " + path.string());
+
+  file.close();
+  if (!file)
+    throw std::runtime_error("Failed to close file: " + path.string());
+}
+
+ScopedTemporary::ScopedTemporary() {
+  auto pth =
+      bfs::temp_directory_path() / bfs::unique_path("rlvm-audio-%%%%-%%%%");
+  path_ = pth.native();
+  fs::create_directory(path_);
+}
+
+ScopedTemporary::~ScopedTemporary() {
+  std::error_code ec;
+  fs::remove_all(path_, ec);
 }

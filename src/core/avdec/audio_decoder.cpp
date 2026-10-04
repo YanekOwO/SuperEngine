@@ -25,10 +25,11 @@
 #include "core/avdec/audio_decoder.hpp"
 
 #include "core/avdec/ffmpeg.hpp"
+#include "core/avdec/nwa.hpp"
+#include "core/avdec/ogg.hpp"
+#include "core/avdec/wav.hpp"
 
-#include <algorithm>
-
-namespace fs = std::filesystem;
+#include <cctype>
 
 // -----------------------------------------------------------------------
 // class ADecoderFactory
@@ -59,13 +60,13 @@ static decoder_constructor_t ffmpeg_audio = [](std::string_view data) {
 
 std::unordered_map<std::string, decoder_constructor_t>
     ADecoderFactory::default_decoder_map_ = {
-        {"ogg", ogg}, {".ogg", ogg}, {"nwa", nwa}, {".nwa", nwa},
-        {"wav", wav}, {".wav", wav}, {"owp", owp}, {".owp", owp},
-        {"wmv", ffmpeg_audio}, {".wmv", ffmpeg_audio},
-        {"asf", ffmpeg_audio}, {".asf", ffmpeg_audio},
-        {"avi", ffmpeg_audio}, {".avi", ffmpeg_audio},
-        {"mpg", ffmpeg_audio}, {".mpg", ffmpeg_audio},
-        {"mpeg", ffmpeg_audio}, {".mpeg", ffmpeg_audio}};
+        {"ogg", ogg},           {".ogg", ogg},          {"nwa", nwa},
+        {".nwa", nwa},          {"wav", wav},           {".wav", wav},
+        {"owp", owp},           {".owp", owp},          {"wmv", ffmpeg_audio},
+        {".wmv", ffmpeg_audio}, {"asf", ffmpeg_audio},  {".asf", ffmpeg_audio},
+        {"avi", ffmpeg_audio},  {".avi", ffmpeg_audio}, {"mpg", ffmpeg_audio},
+        {".mpg", ffmpeg_audio}, {"mpeg", ffmpeg_audio}, {".mpeg", ffmpeg_audio},
+        {"mp3", ffmpeg_audio},  {".mp3", ffmpeg_audio}};
 
 ADecoderFactory::ADecoderFactory() : decoder_map_(&default_decoder_map_) {}
 
@@ -73,6 +74,8 @@ decoder_t ADecoderFactory::Create(std::string_view data,
                                   std::optional<std::string> format_hint) {
   using std::string_literals::operator""s;
   std::string format = format_hint.value_or("unknown"s);
+  std::transform(format.begin(), format.end(), format.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
 
   try {
     const auto& fn = decoder_map_->at(format);
@@ -109,7 +112,9 @@ AudioDecoder::AudioDecoder(std::filesystem::path filepath,
                            const std::string& format) {
   auto file = std::make_shared<MappedFile>(filepath);
   dataholder_ = file;
-  decoderimpl_ = factory_.Create(file->Read(), format);
+  const std::string format_hint =
+      format.empty() ? filepath.extension().string() : format;
+  decoderimpl_ = factory_.Create(file->Read(), format_hint);
 }
 
 AudioDecoder::AudioDecoder(std::string filestr, const std::string& format)
