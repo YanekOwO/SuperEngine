@@ -263,11 +263,10 @@ class SiglusObject {
       std::vector<CompositeGraphicsObjectLayer> layers;
       for (const CompositeObjectPart& part :
            ParseCompositeObjectName(filename)) {
-        layers.push_back(
-            {.surface = graphics_->LoadSurfaceFromFile(part.file_name),
-             .offset = Point(part.x, part.y),
-             .cut_no = part.cut_no,
-             .blend_type = part.blend_type});
+        layers.push_back({.surface = graphics_->GetSurfaceNamed(part.file_name),
+                          .offset = Point(part.x, part.y),
+                          .cut_no = part.cut_no,
+                          .blend_type = part.blend_type});
       }
       drawer = std::make_unique<CompositeGraphicsObject>(std::move(layers));
     } else {
@@ -1326,6 +1325,22 @@ void BindObject(SiglusRuntime& runtime) {
       sb::arg("cut_no") = 0);
   obj.def("get_file_path",
           [](SiglusObject* obj) { return obj->object().FilePath(); });
+  obj.def("set_clip", [](SiglusObject* obj, int use, int left, int top,
+                         int right, int bottom) {
+    auto clip = Rect::GRP(left, top, right, bottom);
+    if (use)
+      obj->param().SetClipRect(clip);
+    else
+      obj->param();
+  });
+  obj.def("set_src_clip", [](SiglusObject* obj, int use, int left, int top,
+                             int right, int bottom) {
+    auto clip = Rect::GRP(left, top, right, bottom);
+    if (use)
+      obj->param().SetOwnClipRect(clip);
+    else
+      obj->param().ClearOwnClipRect();
+  });
   obj.def("set_center_rep", &SiglusObject::set_center_rep);
   obj.def("set_scale", &SiglusObject::set_scale);
   obj.def("set_pos", &SiglusObject::set_pos);
@@ -1409,8 +1424,7 @@ void BindObject(SiglusRuntime& runtime) {
     o.EndAllMutators();
   });
   obj.def("alleve_wait",
-          [event = runtime.system->event_ptr().get()](SiglusObject* obj,
-                                                      sr::VM& vm) -> sr::Value {
+          [event = event.get()](SiglusObject* obj, sr::VM& vm) -> sr::Value {
             return MakePollingWaitFuture(
                 vm,
                 [obj] {
