@@ -86,6 +86,7 @@ class SoundSystem {
                bool loop,
                int fade_in_ms,
                int fade_out_ms);
+  void BgmPrepare(const std::string& bgm_name, bool loop);
   void BgmStop();
   void BgmPause();
   void BgmUnPause();

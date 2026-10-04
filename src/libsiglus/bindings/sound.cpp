@@ -44,8 +44,6 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
 
-namespace {
-
 class PlaybackState {
  public:
   static constexpr int kFree = 0;
@@ -238,8 +236,6 @@ static int ParseKoeStop(std::vector<sr::Value> raw_args) {
   return fade_ms;
 }
 
-}  // namespace
-
 class SiglusGlobalKoe {
  public:
   explicit SiglusGlobalKoe(System* sys) : system_(sys) {}
@@ -302,8 +298,16 @@ class SiglusBgm {
     bgm_table_->SetListen(registered_name_, true, false);
   }
 
-  void SetReady(std::string name) {
-    registered_name_ = std::move(name);
+  void Prepare(const BgmPlayParams& params, bool loop) {
+    if (!params.has_name)
+      return;
+
+    registered_name_ = params.registered_name;
+    playback_.Set(PlaybackState::kPause);
+
+    if (system_)
+      system_->sound().BgmPrepare(registered_name_, loop);
+
     bgm_table_->SetListen(registered_name_, true, false);
   }
 
@@ -342,12 +346,6 @@ class SiglusBgm {
     if (system_)
       system_->sound().SetBgmVolumeScript(volume_, params.fade_ms);
   }
-  int GetVolume() const { return volume_; }
-
-  void SetVolumeMax(int value) { volume_max_ = value; }
-  void SetVolumeMin(int value) { volume_min_ = value; }
-  int GetVolumeMax() const { return volume_max_; }
-  int GetVolumeMin() const { return volume_min_; }
 
   std::string GetRegistName() const {
     if (!registered_name_.empty())
@@ -421,10 +419,6 @@ class SiglusPcmch {
 
     SetVolume(params.volume, params.fade_ms);
   }
-
-  void SetVolMax(int fade_ms) { SetVolume(kVolumeMax, fade_ms); }
-  void SetVolMin(int fade_ms) { SetVolume(kVolumeMin, fade_ms); }
-  int GetVolume() const { return volume_; }
 
   void Play(PcmPlayParams params) {
     if (!params.has_name)
@@ -562,9 +556,13 @@ void BindSound(SiglusRuntime& runtime) {
   bgm.def(
       "ready",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
-        if (args.empty())
-          return;
-        bgm->SetReady(AsString(args[0]));
+        bgm->Prepare(BgmPlayParams::ParseFrom(std::move(args)), true);
+      },
+      sb::vararg);
+  bgm.def(
+      "ready_oneshot",
+      [](SiglusBgm* bgm, std::vector<sr::Value> args) {
+        bgm->Prepare(BgmPlayParams::ParseFrom(std::move(args)), false);
       },
       sb::vararg);
   bgm.def(
@@ -621,7 +619,7 @@ void BindSound(SiglusRuntime& runtime) {
       "set_volume",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
         bgm->SetVolume(
-            BgmSetVolumeParams::ParseFrom(std::move(args), bgm->GetVolume()));
+            BgmSetVolumeParams::ParseFrom(std::move(args), bgm->volume_));
       },
       sb::vararg);
   bgm.def(
@@ -629,7 +627,8 @@ void BindSound(SiglusRuntime& runtime) {
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
         if (args.empty())
           return;
-        bgm->SetVolumeMax(AsInt(args[0]).value_or(bgm->GetVolumeMax()));
+        const int value = AsInt(args[0]).value_or(bgm->volume_max_);
+        bgm->volume_max_ = value;
       },
       sb::vararg);
   bgm.def(
@@ -637,13 +636,14 @@ void BindSound(SiglusRuntime& runtime) {
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
         if (args.empty())
           return;
-        bgm->SetVolumeMin(AsInt(args[0]).value_or(bgm->GetVolumeMin()));
+        const int value = AsInt(args[0]).value_or(bgm->volume_max_);
+        bgm->volume_min_ = value;
       },
       sb::vararg);
   bgm.def(
       "get_volume",
       [](SiglusBgm* bgm, std::vector<sr::Value>) -> int {
-        return bgm->GetVolume();
+        return bgm->volume_;
       },
       sb::vararg);
   bgm.def(
@@ -756,27 +756,27 @@ void BindSound(SiglusRuntime& runtime) {
       "set_volume",
       [](SiglusPcmch* pcmch, std::vector<sr::Value> args) {
         pcmch->SetVolume(
-            PcmVolumeParams::ParseFrom(std::move(args), pcmch->GetVolume()));
+            PcmVolumeParams::ParseFrom(std::move(args), pcmch->volume_));
       },
       sb::vararg);
   pcmch.def(
       "set_vol_max",
       [](SiglusPcmch* pcmch, std::vector<sr::Value> args) {
         const int fade_ms = args.empty() ? 0 : AsInt(args[0]).value_or(0);
-        pcmch->SetVolMax(fade_ms);
+        pcmch->SetVolume(pcmch->kVolumeMax, fade_ms);
       },
       sb::vararg);
   pcmch.def(
       "set_vol_min",
       [](SiglusPcmch* pcmch, std::vector<sr::Value> args) {
         const int fade_ms = args.empty() ? 0 : AsInt(args[0]).value_or(0);
-        pcmch->SetVolMin(fade_ms);
+        pcmch->SetVolume(pcmch->kVolumeMin, fade_ms);
       },
       sb::vararg);
   pcmch.def(
       "get_volume",
       [](SiglusPcmch* pcmch, std::vector<sr::Value>) -> int {
-        return pcmch->GetVolume();
+        return pcmch->volume_;
       },
       sb::vararg);
 

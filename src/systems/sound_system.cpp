@@ -286,6 +286,13 @@ void SoundSystem::BgmPlay(const std::string& bgm_name,
   }
 }
 
+void SoundSystem::BgmPrepare(const std::string& bgm_name, bool loop) {
+  player_t player = LoadMusic(bgm_name);
+  player->SetLoopTimes(loop ? -1 : 0);
+  player->Pause();
+  sound_impl_->PlayBgm(player);
+}
+
 void SoundSystem::BgmStop() {
   player_t player = sound_impl_->GetBgm();
   if (player)
@@ -504,9 +511,7 @@ void SoundSystem::PlayMovieAudio(const std::filesystem::path& path,
   sound_impl_->PlayMovieAudio(player);
 }
 
-void SoundSystem::StopMovieAudio() {
-  sound_impl_->StopMovieAudio();
-}
+void SoundSystem::StopMovieAudio() { sound_impl_->StopMovieAudio(); }
 
 bool SoundSystem::MovieAudioPlaying() const {
   player_t player = sound_impl_->GetMovieAudio();

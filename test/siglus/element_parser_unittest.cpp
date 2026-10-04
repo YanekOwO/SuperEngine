@@ -499,6 +499,11 @@ TEST_F(ElementParserTest, Bgm) {
     EXPECT_EQ(chain(elm), "bgm.play(str:song02,int:1,int:2)");
   }
   {
+    ElementCode elm{42, 17};
+    elm.ForceBind({0, {v("song02")}});
+    EXPECT_EQ(chain(elm), "bgm.ready_oneshot(str:song02)");
+  }
+  {
     ElementCode elm{42, 4};
     elm.ForceBind({1, {v(4000)}});
     EXPECT_EQ(chain(elm), "bgm.stop(int:4000)");
