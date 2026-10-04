@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/util.hpp"
 
+#include "core/interpolation.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/source_buffer.hpp"
 #include "vm/exception.hpp"
@@ -39,6 +40,50 @@
 #include <utility>
 
 namespace libsiglus::binding {
+
+InterpolationMode GetInterpolationMode(int speed_type) {
+  switch (speed_type) {
+    case 1:
+      return InterpolationMode::Accelerate;
+    case 2:
+      return InterpolationMode::Decelerate;
+    case 0:
+    default:
+      return InterpolationMode::Linear;
+  }
+}
+
+FrameCounter MakeFrameCounter(int duration,
+                              int delay,
+                              int start_val,
+                              int end_val,
+                              int speed_type,
+                              std::shared_ptr<Clock> clock) {
+  FrameCounter fc(
+      std::move(clock),
+      Interpolation(Range(start_val, end_val), InterpolationType::OneShot,
+                    GetInterpolationMode(speed_type)),
+      duration);
+  fc.BeginTimer(std::chrono::milliseconds(delay));
+  return fc;
+}
+
+FrameCounter MakeRepeatingFrameCounter(InterpolationType type,
+                                       int duration,
+                                       int delay,
+                                       int start_value,
+                                       int end_value,
+                                       int speed_type,
+                                       std::shared_ptr<Clock> clock) {
+  FrameCounter counter(std::move(clock),
+                       Interpolation(Range(start_value, end_value), type,
+                                     GetInterpolationMode(speed_type)),
+                       duration);
+  counter.BeginTimer(std::chrono::milliseconds(delay));
+  return counter;
+}
+
+// ------------------------------------------------------------------------------
 
 namespace sr = serilang;
 

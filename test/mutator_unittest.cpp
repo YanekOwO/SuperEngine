@@ -44,7 +44,18 @@ static inline FrameCounter MakeCounter(
 
 struct TestContext {
   int value = 0;
+  int other = 0;
 };
+
+TEST(MutatorTest, MatchesEqualityComparableSetter) {
+  auto clock = std::make_shared<MockClock>();
+  using Parameter = int TestContext::*;
+  Mutator<Parameter, TestContext> mutator(&TestContext::value,
+                                          MakeCounter(clock, 0, 10, 100));
+
+  EXPECT_TRUE(mutator.Matches(&TestContext::value));
+  EXPECT_FALSE(mutator.Matches(&TestContext::other));
+}
 
 TEST(MutatorTest, ContextFreeSetterTracksCompletion) {
   auto clock = std::make_shared<MockClock>();

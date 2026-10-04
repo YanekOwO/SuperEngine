@@ -21,21 +21,24 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "core/interpolation.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/mask.hpp"
+#include "libsiglus/bindings/util.hpp"
 #include "libsiglus/bindings/wait_helpers.hpp"
-#include "libsiglus/mask.hpp"
+#include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
+#include "vm/object.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
 #include <functional>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -43,123 +46,114 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-namespace {
-
-class MaskHandle {
- public:
-  MaskHandle(std::shared_ptr<MaskList> list, int index)
-      : list_(std::move(list)), index_(index) {
-    (void)Get();
-  }
-
-  MaskElement& Get() { return list_->At(index_); }
-  const MaskElement& Get() const { return list_->At(index_); }
-
- private:
+struct MaskHandle {
   std::shared_ptr<MaskList> list_;
   int index_;
+
+  Mask& Get() { return list_->At(index_); }
+  const Mask& Get() const { return list_->At(index_); }
 };
 
-class MaskEventHandle {
- public:
-  MaskEventHandle(MaskValue* value, EventSystem* event)
-      : value_(value), event_(event) {}
-
-  void Set(int value, int duration, int delay, int speed_type) {
-    Get().SetEvent(value, duration, delay, speed_type);
-  }
-  void Loop(int start, int end, int duration, int delay, int speed_type) {
-    Get().LoopEvent(start, end, duration, delay, speed_type);
-  }
-  void Turn(int start, int end, int duration, int delay, int speed_type) {
-    Get().TurnEvent(start, end, duration, delay, speed_type);
-  }
-  void End() { Get().EndEvent(); }
-  int Check() const { return Get().CheckEvent() ? 1 : 0; }
-
-  sr::Value Wait(sr::VM& vm, std::vector<sr::Value>) {
-    MaskValue* value = value_;
-    return MakePollingWaitFuture(
-        vm, [value] { return !value || !value->CheckEvent(); }, false, event_);
-  }
-  sr::Value WaitKey(sr::VM& vm, std::vector<sr::Value>) {
-    MaskValue* value = value_;
-    return MakePollingWaitFuture(
-        vm, [value] { return !value || !value->CheckEvent(); }, true, event_);
-  }
-
- private:
-  MaskValue& Get() {
-    if (!value_)
-      throw std::runtime_error("mask event has no value");
-    return *value_;
-  }
-  const MaskValue& Get() const {
-    if (!value_)
-      throw std::runtime_error("mask event has no value");
-    return *value_;
-  }
-
-  MaskValue* value_;
+struct MaskEventHandle {
+  MaskHandle mask_;
+  Mask::Parameter parameter_;
   EventSystem* event_;
-};
 
-class MaskListHandle {
- public:
-  using Factory = std::function<sr::Value(int)>;
-
-  MaskListHandle(std::shared_ptr<MaskList> list, Factory factory)
-      : list_(std::move(list)), factory_(std::move(factory)) {}
-
-  sr::Value Get(int index) {
-    (void)list_->At(index);
-    return factory_(index);
+  EventSystem& GetEvent() {
+    if (!event_)
+      throw std::runtime_error("mask event requires an event system");
+    return *event_;
   }
-  int Size() const { return static_cast<int>(list_->size()); }
-
- private:
-  std::shared_ptr<MaskList> list_;
-  Factory factory_;
+  inline Mask& Get() { return mask_.Get(); }
 };
-
-}  // namespace
 
 void BindMask(SiglusRuntime& runtime) {
-  if (!runtime.mask_list)
+  std::shared_ptr<MaskList> list = runtime.mask_list;
+  if (!list)
     throw std::runtime_error("mask binding requires mask state");
 
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
-  sb::class_<MaskHandle> mask_class(m, "Mask", false);
-  sb::class_<MaskListHandle> list_class(m, "MaskList", false);
-
   EventSystem* event = runtime.system ? &runtime.system->event() : nullptr;
   GraphicsSystem* graphics =
       runtime.system ? &runtime.system->graphics() : nullptr;
-  std::shared_ptr<MaskList> list = runtime.mask_list;
 
-  event_class.def("set", &MaskEventHandle::Set, sb::arg("value"),
-                  sb::arg("duration"), sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("set_real", &MaskEventHandle::Set, sb::arg("value"),
-                  sb::arg("duration"), sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("loop", &MaskEventHandle::Loop, sb::arg("start"),
-                  sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
-                  sb::arg("speed_type"));
-  event_class.def("loop_real", &MaskEventHandle::Loop, sb::arg("start"),
-                  sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
-                  sb::arg("speed_type"));
-  event_class.def("turn", &MaskEventHandle::Turn, sb::arg("start"),
-                  sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
-                  sb::arg("speed_type"));
-  event_class.def("turn_real", &MaskEventHandle::Turn, sb::arg("start"),
-                  sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
-                  sb::arg("speed_type"));
-  event_class.def("end", &MaskEventHandle::End);
-  event_class.def("check", &MaskEventHandle::Check);
-  event_class.def("wait", &MaskEventHandle::Wait, sb::vararg);
-  event_class.def("wait_key", &MaskEventHandle::WaitKey, sb::vararg);
+  // ------------------------------------------------------------------------------
+  // MaskEvent
+  sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
+  // starting oneshot event
+  auto mask_eve_set = [](MaskEventHandle* h, int value, int duration, int delay,
+                         int speed_type) {
+    Mask& mask = h->Get();
+    mask.EndMutator(h->parameter_);
 
+    const int start = mask.Param().*(h->parameter_);
+    auto fc = MakeRepeatingFrameCounter(InterpolationType::OneShot, duration,
+                                        delay, start, value, speed_type,
+                                        h->GetEvent().GetClock());
+    mask.AddMutator(Mask::ParameterMutator(h->parameter_, fc));
+  };
+  event_class.def("set", mask_eve_set, sb::arg("value"), sb::arg("duration"),
+                  sb::arg("delay"), sb::arg("speed_type"));
+  event_class.def("set_real", mask_eve_set, sb::arg("value"),
+                  sb::arg("duration"), sb::arg("delay"), sb::arg("speed_type"));
+  // starting loop event
+  auto mask_eve_repeat = [](InterpolationType type) {
+    return [type](MaskEventHandle* h, int start, int end, int duration,
+                  int delay, int speed_type) {
+      Mask& mask = h->Get();
+      mask.EndMutator(h->parameter_);
+      auto fc = MakeRepeatingFrameCounter(type, duration, delay, start, end,
+                                          speed_type, h->GetEvent().GetClock());
+      mask.AddMutator(Mask::ParameterMutator(h->parameter_, fc));
+    };
+  };
+  event_class.def("loop", mask_eve_repeat(InterpolationType::Loop),
+                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
+                  sb::arg("delay"), sb::arg("speed_type"));
+  event_class.def("loop_real", mask_eve_repeat(InterpolationType::Loop),
+                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
+                  sb::arg("delay"), sb::arg("speed_type"));
+  event_class.def("turn", mask_eve_repeat(InterpolationType::Turn),
+                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
+                  sb::arg("delay"), sb::arg("speed_type"));
+  event_class.def("turn_real", mask_eve_repeat(InterpolationType::Turn),
+                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
+                  sb::arg("delay"), sb::arg("speed_type"));
+  // end event
+  event_class.def("end", [](MaskEventHandle* h) {
+    Mask& mask = h->Get();
+    mask.EndMutator(h->parameter_);
+  });
+  // check if the event is still running
+  event_class.def("check", [](MaskEventHandle* h) {
+    const Mask& mask = h->Get();
+    const bool is_running = mask.IsMutatorRunning(h->parameter_);
+    return is_running ? 1 : 0;
+  });
+  // wait until event finishes
+  event_class.def(
+      "wait",
+      [](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        auto check = [mask = h->mask_, param = h->parameter_] {
+          return !mask.Get().IsMutatorRunning(param);
+        };
+        return MakePollingWaitFuture(vm, check, false, h->event_);
+      },
+      sb::vararg);
+  event_class.def(
+      "wait_key",
+      [](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        auto check = [mask = h->mask_, param = h->parameter_] {
+          return !mask.Get().IsMutatorRunning(param);
+        };
+        return MakePollingWaitFuture(vm, check, true, h->event_);
+      },
+      sb::vararg);
+
+  // ------------------------------------------------------------------------------
+  // Mask
+  sb::class_<MaskHandle> mask_class(m, "Mask");
   mask_class.def("init", [](MaskHandle* mask) { mask->Get().Reset(); });
   mask_class.def(
       "create",
@@ -172,31 +166,41 @@ void BindMask(SiglusRuntime& runtime) {
         mask->Get().Create(std::move(filename), std::move(surface));
       },
       sb::arg("filename"));
-  mask_class.def(
-      "x", [](const MaskHandle* mask) { return mask->Get().x().GetValue(); });
+  mask_class.def("x",
+                 [](const MaskHandle* mask) { return mask->Get().Param().x; });
   mask_class.def("set_x", [](MaskHandle* mask, int value) {
-    mask->Get().x().SetValue(value);
+    mask->Get().Param().x = value;
   });
-  mask_class.def(
-      "y", [](const MaskHandle* mask) { return mask->Get().y().GetValue(); });
+  mask_class.def("y",
+                 [](const MaskHandle* mask) { return mask->Get().Param().y; });
   mask_class.def("set_y", [](MaskHandle* mask, int value) {
-    mask->Get().y().SetValue(value);
+    mask->Get().Param().y = value;
   });
   mask_class.subcls("x_eve", event_class, [event](MaskHandle* mask) {
-    return std::make_unique<MaskEventHandle>(&mask->Get().x(), event);
+    return std::make_unique<MaskEventHandle>(*mask, &Mask::Parameters::x,
+                                             event);
   });
   mask_class.subcls("y_eve", event_class, [event](MaskHandle* mask) {
-    return std::make_unique<MaskEventHandle>(&mask->Get().y(), event);
+    return std::make_unique<MaskEventHandle>(*mask, &Mask::Parameters::y,
+                                             event);
   });
 
-  list_class.add_gc_root(mask_class);
-  MaskListHandle::Factory make_mask = [mask_class,
-                                       list](int index) mutable -> sr::Value {
-    return sr::Value(mask_class.make_inst(list, index));
+  // ------------------------------------------------------------------------------
+  // MaskList
+  struct MaskListHandle {
+    std::shared_ptr<MaskList> list;
   };
-  auto mask_list = list_class.inst("mask", list, std::move(make_mask));
-  mask_list.def("__getitem__", &MaskListHandle::Get, sb::arg("index"));
-  mask_list.def("size", &MaskListHandle::Size);
+  sb::class_<MaskListHandle> list_class(m, "MaskList");
+  auto mask_list = list_class.inst("mask", list);  // top level |mask| element
+  mask_list.def(
+      "__getitem__",
+      [mask_class](MaskListHandle* h, int index) mutable {
+        sr::NativeInstance* mask_handle = mask_class.make_inst(h->list, index);
+        return sr::Value(mask_handle);
+      },
+      sb::arg("index"));
+  mask_list.def("size",
+                [](MaskListHandle* h) -> int { return h->list->size(); });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "1_mask", BindMask)

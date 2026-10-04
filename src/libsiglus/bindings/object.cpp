@@ -72,54 +72,12 @@ constexpr int kBtnNormal = 0;
 constexpr int kBtnSelect = 3;
 constexpr int kBtnDisable = 4;
 
-InterpolationMode GetSiglusInterpolationMode(int speed_type) {
-  switch (speed_type) {
-    case 1:
-      return InterpolationMode::Accelerate;
-    case 2:
-      return InterpolationMode::Decelerate;
-    case 0:
-    default:
-      return InterpolationMode::Linear;
-  }
-}
-
 int RequiredInt(const sr::Value& value, std::string_view name) {
   std::optional<int> result = AsInt(value);
   if (!result)
     throw std::runtime_error("Object.create expected int for " +
                              std::string(name));
   return *result;
-}
-
-FrameCounter MakeSiglusFrameCounter(int duration,
-                                    int delay,
-                                    int start_val,
-                                    int end_val,
-                                    int type,
-                                    std::shared_ptr<Clock> clock) {
-  FrameCounter fc(
-      std::move(clock),
-      Interpolation(Range(start_val, end_val), InterpolationType::OneShot,
-                    GetSiglusInterpolationMode(type)),
-      duration);
-  fc.BeginTimer(std::chrono::milliseconds(delay));
-  return fc;
-}
-
-FrameCounter MakeSiglusRepeatingFrameCounter(InterpolationType type,
-                                             int duration,
-                                             int delay,
-                                             int start_value,
-                                             int end_value,
-                                             int speed_type,
-                                             std::shared_ptr<Clock> clock) {
-  FrameCounter counter(std::move(clock),
-                       Interpolation(Range(start_value, end_value), type,
-                                     GetSiglusInterpolationMode(speed_type)),
-                       duration);
-  counter.BeginTimer(std::chrono::milliseconds(delay));
-  return counter;
 }
 
 struct MovieCreateParams {
@@ -600,8 +558,8 @@ class ObjectEvent {
     const int start = getter_(obj.Param());
     obj.AddObjectMutator(ObjectMutator(
         ObjectParameterMutator(
-            setter_, MakeSiglusFrameCounter(duration_time, delay, start,
-                                            end_value, type, std::move(clock))),
+            setter_, MakeFrameCounter(duration_time, delay, start, end_value,
+                                      type, std::move(clock))),
         -1, name));
   }
 
@@ -617,7 +575,7 @@ class ObjectEvent {
     obj.EndObjectMutatorMatching(-1, name, 0);
     obj.AddObjectMutator(ObjectMutator(
         ObjectParameterMutator(
-            setter_, MakeSiglusRepeatingFrameCounter(
+            setter_, MakeRepeatingFrameCounter(
                          InterpolationType::Loop, loop_time, delay, start_value,
                          end_value, speed_type, std::move(clock))),
         -1, name));
@@ -635,7 +593,7 @@ class ObjectEvent {
     obj.EndObjectMutatorMatching(-1, name, 0);
     obj.AddObjectMutator(ObjectMutator(
         ObjectParameterMutator(
-            setter_, MakeSiglusRepeatingFrameCounter(
+            setter_, MakeRepeatingFrameCounter(
                          InterpolationType::Turn, loop_time, delay, start_value,
                          end_value, speed_type, std::move(clock))),
         -1, name));
@@ -703,15 +661,15 @@ class ObjectRepnoEvent {
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
     const int start = getter_(obj.Param(), repno_);
-    obj.AddObjectMutator(ObjectMutator(
-        ObjectParameterMutator(
-            [setter = setter_, repno = repno_](ObjectParameter& param,
-                                               int value) {
-              setter(param, repno, value);
-            },
-            MakeSiglusFrameCounter(duration_time, delay, start, end_value, type,
-                                   std::move(clock))),
-        repno_, name));
+    obj.AddObjectMutator(
+        ObjectMutator(ObjectParameterMutator(
+                          [setter = setter_, repno = repno_](
+                              ObjectParameter& param, int value) {
+                            setter(param, repno, value);
+                          },
+                          MakeFrameCounter(duration_time, delay, start,
+                                           end_value, type, std::move(clock))),
+                      repno_, name));
   }
 
   void loop(int start_value,
@@ -763,12 +721,13 @@ class ObjectRepnoEvent {
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
     obj.AddObjectMutator(ObjectMutator(
-        ObjectParameterMutator([setter = setter_, repno = repno_](
-                                   ObjectParameter& param,
-                                   int value) { setter(param, repno, value); },
-                               MakeSiglusRepeatingFrameCounter(
-                                   type, loop_time, delay, start_value,
-                                   end_value, speed_type, std::move(clock))),
+        ObjectParameterMutator(
+            [setter = setter_, repno = repno_](ObjectParameter& param,
+                                               int value) {
+              setter(param, repno, value);
+            },
+            MakeRepeatingFrameCounter(type, loop_time, delay, start_value,
+                                      end_value, speed_type, std::move(clock))),
         repno_, name));
   }
 

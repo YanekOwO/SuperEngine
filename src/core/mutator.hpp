@@ -66,6 +66,12 @@ class Mutator {
     Update(context);
   }
 
+  bool Matches(const Setter& setter) const
+    requires std::equality_comparable<Setter>
+  {
+    return setter_ == setter;
+  }
+
  private:
   void Apply(int value)
     requires std::same_as<Context, void>

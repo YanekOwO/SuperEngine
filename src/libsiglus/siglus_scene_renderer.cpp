@@ -23,10 +23,10 @@
 
 #include "libsiglus/siglus_scene_renderer.hpp"
 
+#include "core/mask.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/object_mask.hpp"
 #include "core/stage.hpp"
-#include "libsiglus/mask.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -109,12 +109,11 @@ void SiglusSceneRenderer::RenderQueuedObjects() {
     if (!masks)
       return std::nullopt;
     try {
-      const MaskElement& mask = masks->At(index);
+      const Mask& mask = masks->At(index);
       if (!mask.surface())
         return std::nullopt;
       return ObjectMask{.surface = mask.surface(),
-                        .origin = Point(mask.x().GetRenderValue(),
-                                        mask.y().GetRenderValue())};
+                        .origin = Point(mask.Param().x, mask.Param().y)};
     } catch (const std::out_of_range&) {
       return std::nullopt;
     }

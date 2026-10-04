@@ -29,6 +29,7 @@
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/kidoku_table.hpp"
+#include "core/mask.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/archive.hpp"
@@ -37,7 +38,6 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
 #include "libsiglus/intern_name.hpp"
-#include "libsiglus/mask.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "log/domain_logger.hpp"
 #include "m6/vm_factory.hpp"
@@ -50,12 +50,10 @@
 #include "utilities/mapped_file.hpp"
 #include "utilities/string_utilities.hpp"
 #include "vm/function.hpp"
-#include "vm/instruction.hpp"
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
-#include <array>
 #include <boost/algorithm/string/predicate.hpp>
 #include <chrono>
 #include <filesystem>
@@ -78,8 +76,6 @@ namespace sr = serilang;
 namespace sb = srbind;
 
 static DomainLogger logger("SiglusFactory");
-
-namespace {}  // namespace
 
 // Load Gameexe.ini config
 static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
@@ -146,8 +142,7 @@ SiglusRuntime SGVMFactory::Create() {
   const int mask_count = gexe("MASK.CNT").Int().value_or(16);
   if (mask_count < 0 || mask_count > 256)
     throw std::runtime_error("MASK.CNT must be between 0 and 256");
-  rt.mask_list = std::make_shared<MaskList>(
-      static_cast<std::size_t>(mask_count), rt.system->event().GetClock());
+  rt.mask_list = std::make_shared<MaskList>(mask_count);
   rt.renderer = std::make_shared<SiglusSceneRenderer>(*rt.stage, *rt.system,
                                                       rt.mask_list);
   rt.system->graphics().BindSceneRenderer(rt.renderer);

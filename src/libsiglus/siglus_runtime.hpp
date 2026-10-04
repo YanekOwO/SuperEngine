@@ -48,10 +48,10 @@ class StrListFacade;
 class BgmTable;
 class KidokuTable;
 class IPlatformImplementor;
+class MaskList;
 
 namespace libsiglus {
 class Archive;
-class MaskList;
 class SiglusSceneRenderer;
 
 struct SiglusRuntime {

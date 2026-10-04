@@ -32,14 +32,12 @@
 class GraphicsObject;
 class Stage;
 class System;
+class MaskList;
 
 template <typename T>
 class LazyArray;
 
 namespace libsiglus {
-
-class SiglusSceneRendererTest;
-class MaskList;
 
 class SiglusSceneRenderer final : public ISceneRenderer {
  public:
@@ -51,8 +49,6 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   void RenderScene() override;
 
  private:
-  friend class SiglusSceneRendererTest;
-
   using ToRenderVec = std::vector<
       std::tuple<int, int, int, int, int, GraphicsObject*, double, int>>;
 

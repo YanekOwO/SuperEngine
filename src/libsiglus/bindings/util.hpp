@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include "core/frame_counter.hpp"
+#include "core/interpolation.hpp"
+
 #include <functional>
 #include <optional>
 #include <string>
@@ -37,6 +40,21 @@ class Dict;
 };  // namespace serilang
 
 namespace libsiglus::binding {
+
+InterpolationMode GetInterpolationMode(int speed_type);
+FrameCounter MakeFrameCounter(int duration,
+                              int delay,
+                              int start_val,
+                              int end_val,
+                              int type,
+                              std::shared_ptr<Clock> clock);
+FrameCounter MakeRepeatingFrameCounter(InterpolationType type,
+                                       int duration,
+                                       int delay,
+                                       int start_value,
+                                       int end_value,
+                                       int speed_type,
+                                       std::shared_ptr<Clock> clock);
 
 // for code injection
 serilang::Value Execute(serilang::VM& vm, std::string src);

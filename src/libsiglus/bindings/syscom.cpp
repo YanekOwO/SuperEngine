@@ -21,14 +21,15 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/registry.hpp"
+
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
+#include "core/mask.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/flow.hpp"
-#include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
-#include "libsiglus/mask.hpp"
 #include "platforms/implementor.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/graphics_system.hpp"
