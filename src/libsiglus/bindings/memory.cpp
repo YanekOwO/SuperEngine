@@ -195,14 +195,15 @@ void BindMemory(SiglusRuntime& rt) {
   bind_str_bank("GN", StrBank::global_name);
 
   auto frame_stack = std::make_shared<std::vector<Memory::Stack>>();
-  rt.reset_local_memory = [&memory, frame_stack, gameexe = rt.gameexe]() {
-    memory.PartialReset(LocalMemory{});
-    memory.PartialReset(Memory::Stack{.L = std::vector<int>(2000),
-                                      .K = std::vector<std::string>(2000)});
-    frame_stack->clear();
-    if (gameexe)
-      memory.LoadFrom(*gameexe);
-  };
+  rt.reset_local_memory.emplace_back(
+      [&memory, frame_stack, gameexe = rt.gameexe]() {
+        memory.PartialReset(LocalMemory{});
+        memory.PartialReset(Memory::Stack{.L = std::vector<int>(2000),
+                                          .K = std::vector<std::string>(2000)});
+        frame_stack->clear();
+        if (gameexe)
+          memory.LoadFrom(*gameexe);
+      });
   m.def(
       "__builtin_push_frame",
       [&memory, frame_stack](Value newl, Value newk) {

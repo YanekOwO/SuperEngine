@@ -25,6 +25,7 @@
 
 #include "core/asset_scanner.hpp"
 #include "core/button_action_table.hpp"
+#include "core/counter.hpp"
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
@@ -139,10 +140,18 @@ SiglusRuntime SGVMFactory::Create() {
   rt.system->text().set_active_window(default_window);
   rt.stage = std::make_unique<Stage>(rt.system->graphics().GetObjectLayerSize(),
                                      gexe("EFFECT.CNT").Int().value_or(0));
-  const int mask_count = gexe("MASK.CNT").Int().value_or(16);
-  if (mask_count < 0 || mask_count > 256)
-    throw std::runtime_error("MASK.CNT must be between 0 and 256");
-  rt.mask_list = std::make_shared<MaskList>(mask_count);
+
+  int counter_count = gexe("COUNTER.CNT").Int().value_or(16);
+  if (counter_count < 0)
+    counter_count = 0;
+  rt.counter_list =
+      std::make_shared<CounterList>(static_cast<std::size_t>(counter_count));
+
+  int mask_count = gexe("MASK.CNT").Int().value_or(16);
+  if (mask_count < 0)
+    mask_count = 0;
+  rt.mask_list =
+      std::make_shared<MaskList>(static_cast<std::size_t>(mask_count));
   rt.renderer = std::make_shared<SiglusSceneRenderer>(*rt.stage, *rt.system,
                                                       rt.mask_list);
   rt.system->graphics().BindSceneRenderer(rt.renderer);

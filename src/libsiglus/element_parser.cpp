@@ -440,21 +440,17 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
 
     case Type::Counter: {
       static const auto mp = make_flatmap<Builder>(
-          {id[0] | b(Type::Callable, Member("set")),
-           id[1] | b(Type::Int, Member("get")),
-           id[2] | b(Type::None, Member("reset")),
-           id[3] | b(Type::None, Member("start")),
-           id[9] | b(Type::None, Member("start_real")),
-           id[10] | b(Type::Callable, Member("start_frame")),
-           id[11] | b(Type::Callable, Member("start_frame_real")),
-           id[12] | b(Type::Callable, Member("start_frame_loop")),
-           id[13] | b(Type::Callable, Member("start_frame_loop_real")),
-           id[4] | b(Type::None, Member("stop")),
-           id[5] | b(Type::None, Member("resume")),
-           id[6] | b(Type::Callable, Member("wait")),
-           id[8] | b(Type::Callable, Member("wait_key")),
-           id[7] | b(Type::Int, Member("check_value")),
-           id[14] | b(Type::Int, Member("check_active"))});
+          {id[0] | b_callable("set"), id[1] | b_callable("get", Type::Int),
+           id[2] | b_callable("reset"), id[3] | b_callable("start"),
+           id[9] | b_callable("start_real"), id[10] | b_callable("start_frame"),
+           id[11] | b_callable("start_frame_real"),
+           id[12] | b_callable("start_frame_loop"),
+           id[13] | b_callable("start_frame_loop_real"),
+           id[4] | b_callable("stop"), id[5] | b_callable("resume"),
+           id[6] | b_callable("wait", Type::None, AWAIT),
+           id[8] | b_callable("wait_key", Type::Int, AWAIT),
+           id[7] | b_callable("check_value", Type::Int),
+           id[14] | b_callable("check_active", Type::Int)});
       return &mp;
     }
 

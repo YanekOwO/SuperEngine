@@ -188,8 +188,8 @@ L[0] = 33;
 K[0] = "stack";
 )");
 
-  ASSERT_TRUE(runtime.reset_local_memory);
-  runtime.reset_local_memory();
+  for (auto& cb : runtime.reset_local_memory)
+    cb();
 
   EXPECT_EQ(runtime.memory->Read(IntBank::A, 0), 0);
   EXPECT_EQ(runtime.memory->Read(StrBank::S, 0), "");

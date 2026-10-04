@@ -135,8 +135,9 @@ void BindSyscom(SiglusRuntime& runtime) {
 
         auto restart = [sys, stage, input, mask_list, reset_local_memory, &vm,
                         thunk, preserve = params.preserve_backlog] {
-          if (reset_local_memory)
-            reset_local_memory();
+          for (auto& cb : reset_local_memory)
+            if (cb)
+              cb();
           if (stage)
             stage->Reset();
           if (mask_list)
@@ -277,6 +278,6 @@ void BindSyscom(SiglusRuntime& runtime) {
   m.def("get_mov_volume", [] { return 1; });
 }
 
-RLVM_REGISTER(SiglusBindingRegistry, "syscom", BindSyscom)
+RLVM_REGISTER(SiglusBindingRegistry, "4_syscom", BindSyscom)
 
 }  // namespace libsiglus::binding

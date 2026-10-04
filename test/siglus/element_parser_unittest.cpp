@@ -544,6 +544,47 @@ TEST_F(ElementParserTest, BgmWaitCallsAreAwaitable) {
   }
 }
 
+TEST_F(ElementParserTest, CounterOperationsAreCalls) {
+  EXPECT_EQ(chain(40, -1, 1, 1), "counter[int:1].get()");
+  EXPECT_EQ(chain(40, -1, 1, 2), "counter[int:1].reset()");
+  EXPECT_EQ(chain(40, -1, 1, 9), "counter[int:1].start_real()");
+  EXPECT_EQ(chain(40, -1, 1, 14), "counter[int:1].check_active()");
+
+  {
+    ElementCode elm{40, -1, 1, 0};
+    elm.ForceBind({0, {v(42)}});
+    EXPECT_EQ(chain(elm), "counter[int:1].set(int:42)");
+  }
+  {
+    ElementCode elm{40, -1, 1, 10};
+    elm.ForceBind({0, {v(10), v(20), v(100)}});
+    EXPECT_EQ(chain(elm), "counter[int:1].start_frame(int:10,int:20,int:100)");
+  }
+}
+
+TEST_F(ElementParserTest, CounterWaitCallsAreAwaitable) {
+  {
+    ElementCode elm{40, -1, 1, 6};
+    elm.ForceBind({0, {v(100)}});
+    auto parsed = chain(elm);
+    EXPECT_EQ(parsed, "counter[int:1].wait(int:100)");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  }
+  {
+    ElementCode elm{40, -1, 1, 8};
+    elm.ForceBind({0, {v(100)}});
+    auto parsed = chain(elm);
+    EXPECT_EQ(parsed, "counter[int:1].wait_key(int:100)");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  }
+}
+
 TEST_F(ElementParserTest, SimpleCallableIgnoresOl) {
   ElementCode elm{42, 0};
   elm.ForceBind({99, {v("song02"), v(1), v(2)}});

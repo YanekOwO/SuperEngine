@@ -48,6 +48,8 @@ class StrListFacade;
 class BgmTable;
 class KidokuTable;
 class IPlatformImplementor;
+class Counter;
+class CounterList;
 class MaskList;
 
 namespace libsiglus {
@@ -70,17 +72,19 @@ struct SiglusRuntime {
   std::shared_ptr<Gameexe> local_config, global_config;
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
+  std::shared_ptr<CounterList> counter_list;
   std::shared_ptr<MaskList> mask_list;
 
   std::shared_ptr<SiglusSceneRenderer> renderer;
   std::shared_ptr<EventListener> system_event_listener;
   std::shared_ptr<InputListener> input_event_listener;
   std::function<void()> exec_sdl_callback;
-  std::function<void()> reset_local_memory;
+  std::vector<std::function<void()>> reset_local_memory;
   std::shared_ptr<IPlatformImplementor> platform_implementor;
 
   std::shared_ptr<srbind::class_<IntListFacade>> ilist_cls;
   std::shared_ptr<srbind::class_<StrListFacade>> slist_cls;
+  std::function<serilang::Value(std::weak_ptr<Counter>)> make_counter;
 
   SiglusRuntime() = default;
   ~SiglusRuntime();
