@@ -34,6 +34,7 @@
 class RLMachine;
 class GraphicsObject;
 class Stage;
+class rlSceneRendererTest;
 
 class rlSceneRenderer final : public ISceneRenderer {
  public:
@@ -43,6 +44,9 @@ class rlSceneRenderer final : public ISceneRenderer {
   void RenderScene() override;
 
  private:
+  friend class rlSceneRendererTest;
+
+  static void RenderObject(GraphicsObject& object);
   bool ShouldRenderObject(size_t obj_number, const GraphicsObject& object);
 
   RLMachine& machine_;

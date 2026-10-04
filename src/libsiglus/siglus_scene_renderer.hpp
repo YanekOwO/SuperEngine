@@ -52,6 +52,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   using ToRenderVec = std::vector<
       std::tuple<int, int, int, int, int, GraphicsObject*, double, int>>;
 
+  static void RenderObject(GraphicsObject& object, const MaskList* mask_list);
   void RenderStageObjects(::Stage& stage, ToRenderVec& to_render);
   void QueueObjects(LazyArray<GraphicsObject>& objects,
                     int source_order,

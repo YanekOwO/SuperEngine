@@ -27,7 +27,9 @@
 #include "core/haikei.hpp"
 #include "core/hik.hpp"
 #include "core/object.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "core/stage.hpp"
+#include "log/domain_logger.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/object_settings.hpp"
@@ -36,6 +38,13 @@
 #include "systems/text_system.hpp"
 
 #include <algorithm>
+#include <optional>
+
+namespace {
+
+DomainLogger logger("rlSceneRenderer");
+
+}  // namespace
 
 rlSceneRenderer::rlSceneRenderer(RLMachine& machine) : machine_(machine) {}
 
@@ -77,12 +86,37 @@ void rlSceneRenderer::RenderScene() {
   }
   std::sort(to_render_.begin(), to_render_.end());
   for (const auto& [order, layer, depth, pos, obj] : to_render_) {
-    obj->Render();
+    RenderObject(*obj);
   }
 
   // Render text
   if (!graphics.is_interface_hidden())
     system.text().Render();
+}
+
+void rlSceneRenderer::RenderObject(GraphicsObject& root) {
+  const auto render_object = [&](const auto& self, GraphicsObject& object,
+                                 std::optional<ParentObjState> parent) -> void {
+    if (!object.Param().visible())
+      return;
+
+    if (object.HasDrawer())
+      object.GetDrawer().Render(object, parent);
+
+    if (!object.HasChildren())
+      return;
+
+    if (parent)
+      logger(Severity::Warn) << "Nested parents are not supported yet.";
+
+    const ParentObjState child_parent = ParentObjState::BuildFrom(object);
+    for (auto& child : object.GetChildren()) {
+      if (child)
+        self(self, *child, child_parent);
+    }
+  };
+
+  render_object(render_object, root, std::nullopt);
 }
 
 bool rlSceneRenderer::ShouldRenderObject(size_t obj_number,

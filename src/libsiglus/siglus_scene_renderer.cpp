@@ -25,8 +25,10 @@
 
 #include "core/mask.hpp"
 #include "core/object.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mask.hpp"
 #include "core/stage.hpp"
+#include "log/domain_logger.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -37,6 +39,8 @@
 #include <utility>
 
 namespace libsiglus {
+
+static DomainLogger logger("SiglusSceneRenderer");
 
 class ScopedRenderParameters {
  public:
@@ -104,21 +108,6 @@ void SiglusSceneRenderer::QueueObjects(LazyArray<GraphicsObject>& objects,
 void SiglusSceneRenderer::RenderQueuedObjects() {
   std::sort(to_render_.begin(), to_render_.end());
 
-  const ObjectMaskResolver resolve_mask =
-      [masks = mask_list_](int index) -> std::optional<ObjectMask> {
-    if (!masks)
-      return std::nullopt;
-    try {
-      const Mask& mask = masks->At(index);
-      if (!mask.surface())
-        return std::nullopt;
-      return ObjectMask{.surface = mask.surface(),
-                        .origin = Point(mask.Param().x, mask.Param().y)};
-    } catch (const std::out_of_range&) {
-      return std::nullopt;
-    }
-  };
-
   for (auto& object : to_render_) {
     const double alpha_multiplier = std::get<6>(object);
     if (alpha_multiplier <= 0.0)
@@ -128,8 +117,55 @@ void SiglusSceneRenderer::RenderQueuedObjects() {
     const int effect_layer = std::get<7>(object);
     ScopedRenderParameters parameters(graphics_object, alpha_multiplier,
                                       stage_.EffectsForLayer(effect_layer));
-    graphics_object.Render(std::nullopt, &resolve_mask);
+    RenderObject(graphics_object, mask_list_.get());
   }
+}
+
+void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
+                                       const MaskList* mask_list) {
+  const auto resolve_mask =
+      [mask_list](int index) -> std::optional<ObjectMask> {
+    if (!mask_list)
+      return std::nullopt;
+    try {
+      const Mask& mask = mask_list->At(index);
+      if (!mask.surface())
+        return std::nullopt;
+      return ObjectMask{.surface = mask.surface(),
+                        .origin = Point(mask.Param().x, mask.Param().y)};
+    } catch (const std::out_of_range&) {
+      return std::nullopt;
+    }
+  };
+
+  const auto render_object =
+      [&](const auto& self, GraphicsObject& object,
+          std::optional<ParentObjState> parent,
+          std::optional<ObjectMask> inherited_mask) -> void {
+    if (!object.Param().visible())
+      return;
+
+    std::optional<ObjectMask> mask = std::move(inherited_mask);
+    if (object.Param().mask_no >= 0)
+      mask = resolve_mask(object.Param().mask_no);
+
+    if (object.HasDrawer())
+      object.GetDrawer().Render(object, parent, mask);
+
+    if (!object.HasChildren())
+      return;
+
+    if (parent)
+      logger(Severity::Warn) << "Nested parents are not supported yet.";
+
+    const ParentObjState child_parent = ParentObjState::BuildFrom(object);
+    for (auto& child : object.GetChildren()) {
+      if (child)
+        self(self, *child, child_parent, mask);
+    }
+  };
+
+  render_object(render_object, root, std::nullopt, std::nullopt);
 }
 
 }  // namespace libsiglus

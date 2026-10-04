@@ -25,9 +25,7 @@
 
 #include "core/rect.hpp"
 
-#include <functional>
 #include <memory>
-#include <optional>
 
 class SDLSurface;
 
@@ -35,6 +33,3 @@ struct ObjectMask {
   std::shared_ptr<const SDLSurface> surface;
   Point origin;
 };
-
-using ObjectMaskResolver =
-    std::function<std::optional<ObjectMask>(int mask_number)>;
