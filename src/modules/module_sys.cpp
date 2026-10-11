@@ -36,7 +36,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <numbers>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -61,11 +63,11 @@
 #include "modules/module_sys_timetable2.hpp"
 #include "modules/module_sys_wait.hpp"
 #include "systems/graphics_system.hpp"
+#include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
-#include "systems/sdl/sdl_surface.hpp"
 #include "utilities/string_utilities.hpp"
 
 inline constexpr float PI = std::numbers::pi;
@@ -141,21 +143,25 @@ struct GetWakuAll : public RLStoreOpcode<> {
 };
 
 struct rnd_0 : public RLStoreOpcode<IntConstant_T> {
-  unsigned int seedp_;
-  rnd_0() : seedp_(time(NULL)) {}
+  std::mt19937 generator_;
+  rnd_0()
+      : generator_(static_cast<std::mt19937::result_type>(std::time(nullptr))) {
+  }
 
   int operator()(RLMachine& machine, int maxVal) {
-    return (int)(double(maxVal) * rand_r(&seedp_) / (RAND_MAX + 1.0));
+    return (int)(double(maxVal) * generator_() / (std::mt19937::max() + 1.0));
   }
 };
 
 struct rnd_1 : public RLStoreOpcode<IntConstant_T, IntConstant_T> {
-  unsigned int seedp_;
-  rnd_1() : seedp_(time(NULL)) {}
+  std::mt19937 generator_;
+  rnd_1()
+      : generator_(static_cast<std::mt19937::result_type>(std::time(nullptr))) {
+  }
 
   int operator()(RLMachine& machine, int minVal, int maxVal) {
-    return minVal +
-           (int)(double(maxVal - minVal) * rand_r(&seedp_) / (RAND_MAX + 1.0));
+    return minVal + (int)(double(maxVal - minVal) * generator_() /
+                          (std::mt19937::max() + 1.0));
   }
 };
 

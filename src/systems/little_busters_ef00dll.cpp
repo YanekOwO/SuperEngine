@@ -26,7 +26,9 @@
 
 #include "systems/little_busters_ef00dll.hpp"
 
+#include <ctime>
 #include <iostream>
+#include <random>
 #include <string>
 
 #include "libreallive/intmemref.hpp"
@@ -67,6 +69,9 @@ void LittleBustersEF00DLL::ConfigureEffect(int arg1,
                                            int arg2,
                                            int arg3,
                                            int arg4) {
+  static std::mt19937 generator(
+      static_cast<std::mt19937::result_type>(std::time(nullptr)));
+
   if (!lb_ef_param)
     lb_ef_param.reset(new double[sizeof(double) * 0x60 * 8]);
 
@@ -87,18 +92,19 @@ void LittleBustersEF00DLL::ConfigureEffect(int arg1,
   for (int i = 0; i < 8; i++) {
     double* param = lb_ef_param.get() + i * 0x60 + param_top * 3;
     for (int j = 0; j < param_size; j++) {
-      *param++ = random() % 800 - 400;
-      *param++ = random() % 600 - 300;
-      *param++ = random() % 700 - 350;
+      *param++ = std::uniform_int_distribution<int>(-400, 399)(generator);
+      *param++ = std::uniform_int_distribution<int>(-300, 299)(generator);
+      *param++ = std::uniform_int_distribution<int>(-350, 349)(generator);
     }
   }
   if (arg4 != 1)
     return;
-  int* dir = &random_dirtable[(random() & 3) * 8];
+  int* dir =
+      &random_dirtable[std::uniform_int_distribution<int>(0, 3)(generator) * 8];
   for (int i = 0; i < 8; i++) {
     double* param = lb_ef_param.get() + i * 0x60;
-    double x = random() % 600 - 300;
-    double y = random() % 480 - 240;
+    double x = std::uniform_int_distribution<int>(-300, 299)(generator);
+    double y = std::uniform_int_distribution<int>(-240, 239)(generator);
     if (x < 0)
       x -= 80;
     else
