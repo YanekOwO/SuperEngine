@@ -112,14 +112,17 @@ SystemGlobals::SystemGlobals()
 // -----------------------------------------------------------------------
 
 System::System(Gameexe& gameexe,
+               Stage& stage,
                std::shared_ptr<AssetScanner> scanner,
                SystemOptions options)
     : System(gameexe,
+             stage,
              std::move(scanner),
              MwndConfig::ParseReallive(gameexe),
              options) {}
 
 System::System(Gameexe& gameexe,
+               Stage& stage,
                std::shared_ptr<AssetScanner> scanner,
                MwndConfig mwnd_config,
                SystemOptions options)
@@ -156,7 +159,7 @@ System::System(Gameexe& gameexe,
 
   auto text_impl = std::make_unique<SDLTextImpl>();
   text_system_ = std::make_shared<TextSystem>(
-      *this, gameexe, std::move(text_impl), std::move(mwnd_config));
+      *this, stage, gameexe, std::move(text_impl), std::move(mwnd_config));
 
   auto sound_impl = std::make_unique<SDLSoundImpl>();
   sound_system_ = std::make_shared<SoundSystem>(*this, std::move(sound_impl));

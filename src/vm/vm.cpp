@@ -78,9 +78,6 @@ std::optional<Value> ResolveMagic(NativeInstance* inst, std::string_view name) {
   if (!inst || name.empty())
     return std::nullopt;
 
-  if (auto it = inst->fields.find(name); it != inst->fields.end())
-    return it->second;
-
   if (auto it = inst->klass->methods.find(name);
       it != inst->klass->methods.end())
     return it->second;

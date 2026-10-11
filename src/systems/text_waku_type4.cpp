@@ -58,6 +58,8 @@ TextWakuType4::TextWakuType4()
 void TextWakuType4::Execute() {
   if (overlay_)
     overlay_->Execute();
+
+  TextWaku::Execute();
 }
 
 void TextWakuType4::Render(Point box_location,
@@ -149,6 +151,8 @@ void TextWakuType4::Render(Point box_location,
   }
   if (overlay_)
     overlay_->Render(box_location, content_size, colour, is_filter);
+
+  TextWaku::Render(box_location, content_size, colour, is_filter);
 }
 
 Size TextWakuType4::GetSize(const Size& text_surface) const {

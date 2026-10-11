@@ -79,6 +79,7 @@ struct Generic {
 class RLMachine {
  public:
   RLMachine(std::shared_ptr<System> system,
+            std::unique_ptr<Stage> stage,
             std::shared_ptr<IScriptor> scriptor,
             std::unique_ptr<Memory> memory = nullptr);
   virtual ~RLMachine();

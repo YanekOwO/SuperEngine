@@ -48,6 +48,8 @@ class TextPage {
   TextPage(Gameexe& gexe, std::shared_ptr<TextWindow> window);
   ~TextPage();
 
+  const std::shared_ptr<TextWindow>& window() const { return text_window_; }
+
   // Returns the number of characters printed with Character() and Name().
   int number_of_chars_on_page() const { return number_of_chars_on_page_; }
 

@@ -33,6 +33,7 @@
 #include <array>
 #include <cstddef>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -101,6 +102,8 @@ struct StageElement {
   storage_type storage;
 };
 
+class TextWindow;
+
 class Stage {
  public:
   struct TransitionRenderRange {
@@ -113,6 +116,11 @@ class Stage {
         int effect_size = 0,
         int group_size = 0,
         int quake_size = 0);
+
+  // Message windows, ordered by their window number.
+  // TODO: Make mwnd a StageElement, Reallive uses only one array of windows,
+  // Siglus uses next/fg/bg with fg[DEFAULT_MWND_NO] as default current window
+  std::map<int, std::shared_ptr<TextWindow>> mwnd;
 
   // Foreground, background and next objects
   StageElement<GraphicsObject> objects;

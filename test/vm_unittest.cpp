@@ -26,10 +26,12 @@
 
 #include "mock_clock.hpp"
 
+#include "vm/dict.hpp"
 #include "vm/disassembler.hpp"
 #include "vm/function.hpp"
 #include "vm/future.hpp"
 #include "vm/instruction.hpp"
+#include "vm/list.hpp"
 #include "vm/object.hpp"
 #include "vm/promise.hpp"
 #include "vm/string.hpp"

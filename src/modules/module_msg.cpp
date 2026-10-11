@@ -58,7 +58,7 @@ struct Msg_pause : public RLOpcode<> {
   void operator()(RLMachine& machine) {
     TextSystem& text = machine.GetSystem().text();
     int windowNum = text.active_window();
-    std::shared_ptr<TextWindow> textWindow = text.GetTextWindow(windowNum);
+    std::shared_ptr<TextWindow> textWindow = text.GetMwnd(windowNum);
 
     if (textWindow->action_on_pause()) {
       machine.PushLongOperation(std::make_shared<NewParagraphAfterLongop>(
@@ -87,7 +87,7 @@ struct SetFontColour : public RLOpcode<DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, int textColorNum) {
     Gameexe& gexe = machine.GetSystem().gameexe();
     if (gexe("COLOR_TABLE", textColorNum).Exists()) {
-      machine.GetSystem().text().GetCurrentWindow()->SetDefaultTextColor(
+      machine.GetSystem().text().GetCurrentMwnd()->SetDefaultTextColor(
           gexe("COLOR_TABLE", textColorNum).ToIntVec());
     }
   }
@@ -125,7 +125,7 @@ struct msgClear : public RLOpcode<> {
     TextSystem& text = machine.GetSystem().text();
     int active_window = text.active_window();
     text.Snapshot();
-    text.GetTextWindow(active_window)->ClearWin();
+    text.GetMwnd(active_window)->ClearWin();
     text.NewPageOnWindow(active_window);
   }
 };
@@ -140,7 +140,7 @@ struct msgClearAll : public RLOpcode<> {
     for (int window : active_windows) {
       // TODO(erg): Found this during refactoring? Just entirely wrong? Dates
       // all the way back to 2007 in 6938e517e8423e391eeba0fe4b294ad64434243d.
-      text.GetTextWindow(active_window)->ClearWin();
+      text.GetMwnd(active_window)->ClearWin();
       text.NewPageOnWindow(window);
     }
   }
@@ -172,7 +172,7 @@ struct GetTextPos : public RLOpcode<IntReference_T, IntReference_T> {
                   IntReferenceIterator x,
                   IntReferenceIterator y) {
     std::shared_ptr<TextWindow> textWindow =
-        machine.GetSystem().text().GetCurrentWindow();
+        machine.GetSystem().text().GetCurrentMwnd();
 
     if (textWindow) {
       *x = textWindow->insertion_point_x();

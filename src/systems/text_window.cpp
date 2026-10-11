@@ -131,20 +131,45 @@ TextWindow::~TextWindow() = default;
 
 void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
   ASSERTX_NE(waku.get(), nullptr);
+  if (textbox_waku_)
+    waku->ResetObjectsFrom(*textbox_waku_);
   waku_set_ = waku_set;
   textbox_waku_ = std::move(waku);
 }
 
 void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
   ASSERTX_NE(waku.get(), nullptr);
+  if (namebox_waku_)
+    waku->ResetObjectsFrom(*namebox_waku_);
   name_waku_set_ = waku_set;
   namebox_waku_ = std::move(waku);
 }
 
-void TextWindow::Execute() {
-  if (IsVisible() && !system_.graphics().is_interface_hidden()) {
-    textbox_waku_->Execute();
-  }
+void TextWindow::Execute(bool update_controls) {
+  const bool controls_visible = update_controls && IsVisible() &&
+                                !system_.graphics().is_interface_hidden();
+  const auto execute = [controls_visible](TextWaku* waku) {
+    if (!waku)
+      return;
+    if (controls_visible)
+      waku->Execute();
+    else
+      waku->TextWaku::Execute();
+  };
+  execute(textbox_waku_.get());
+  execute(namebox_waku_.get());
+}
+
+bool TextWindow::IsTextboxWakuVisible() const {
+  const auto& text = system_.text();
+  return textbox_waku_ && IsVisible() && text_surface_ &&
+         text.system_visible() && text.ShowWindow(window_num_) &&
+         !system_.graphics().is_interface_hidden();
+}
+
+bool TextWindow::IsNameboxWakuVisible() const {
+  return namebox_waku_ && IsTextboxWakuVisible() && name_surface_ &&
+         state_ == State::Normal;
 }
 
 void TextWindow::ShowWaitIcon(bool page) {
@@ -433,6 +458,7 @@ void TextWindow::Render() {
 
     Point textOrigin = GetTextSurfaceRect().origin();
 
+    textbox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
     textbox_waku_->Render(box, surface_size, GetColour(), GetIsFilter());
     RenderFaces(1);
 
@@ -447,13 +473,15 @@ void TextWindow::Render() {
           Rect r = GetNameboxWakuRect();
 
           if (namebox_waku_) {
+            namebox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
             // TODO(erg): The waku needs to be adjusted to be the minimum size
             // of the window in characters
             namebox_waku_->Render(r.origin(), GetNameboxTextArea(), GetColour(),
                                   GetIsFilter());
           }
 
-          auto [center_w, center_h] = namebox_waku_->ShouldCenter();
+          bool center_w = namebox_waku_->center_w_,
+               center_h = namebox_waku_->center_h_;
           if (!namebox_centering_)
             center_h = center_w = false;
           Point insertion_point = InsertionPoint(

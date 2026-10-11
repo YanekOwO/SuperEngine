@@ -53,6 +53,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -61,16 +62,19 @@
 // -----------------------------------------------------------------------
 static DomainLogger logger("RLMachine");
 RLMachine::RLMachine(std::shared_ptr<System> system,
+                     std::unique_ptr<Stage> stage,
                      std::shared_ptr<IScriptor> scriptor,
                      std::unique_ptr<Memory> memory)
     : memory_(memory ? std::move(memory) : std::make_unique<Memory>()),
       module_manager_(ModuleManager::CreatePrototype()),
       scriptor_(scriptor),
       system_(*system),
+      stage_(std::move(stage)),
       call_stack_(*memory_),
       savepoint_call_stack_(*memory_) {
   if (system) {
-    stage_ = std::make_unique<Stage>(system->graphics().GetObjectLayerSize());
+    if (!stage_)
+      throw std::invalid_argument("RLMachine requires a stage");
     auto backend = system->graphics().GetBackend();
     haikei_ = std::make_unique<Haikei>(
         system->graphics().screen_size(),

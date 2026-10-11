@@ -69,7 +69,7 @@ class TextWindow {
   inline TextLayout& Layout() { return layout_; }
   inline TextLayout const& Layout() const { return layout_; }
 
-  void Execute();
+  void Execute(bool update_controls = true);
   void ShowWaitIcon(bool page);
   void HideWaitIcon();
   void SetWakuMainFile(const std::string& file);
@@ -83,6 +83,10 @@ class TextWindow {
   int waku_set() const { return waku_set_; }
   void SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
   void SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
+  TextWaku* GetTextboxWaku() const { return textbox_waku_.get(); }
+  TextWaku* GetNameboxWaku() const { return namebox_waku_.get(); }
+  bool IsTextboxWakuVisible() const;
+  bool IsNameboxWakuVisible() const;
 
   // Sets the size of the font. Represented by #WINDOW.xxx.MOJI.SIZE.
   void set_font_size_to_default() {

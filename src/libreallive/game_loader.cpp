@@ -25,6 +25,7 @@
 
 #include "core/event_listener.hpp"
 #include "core/gameexe.hpp"
+#include "core/stage.hpp"
 #include "libreallive/archive.hpp"
 #include "libreallive/scriptor.hpp"
 #include "log/domain_logger.hpp"
@@ -32,8 +33,8 @@
 #include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/event_system.hpp"
+#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "utilities/file.hpp"
 
@@ -93,10 +94,12 @@ GameLoader::GameLoader(fs::path gameroot,
   archive_ = std::make_shared<libreallive::Archive>(
       seenPath.string(), (*gameexe_)("REGNAME").Str().value_or(""));
 
+  auto stage =
+      std::make_unique<Stage>((*gameexe_)("OBJECT_MAX").Int().value_or(256));
   SystemOptions system_options;
   system_options.fast_forward = fast_forward;
   system_ = std::make_shared<System>(
-      *gameexe_,
+      *gameexe_, *stage,
       std::make_shared<AssetScanner>(AssetScanner::BuildFromGameexe(*gameexe_)),
       system_options);
 
@@ -128,7 +131,8 @@ GameLoader::GameLoader(fs::path gameroot,
   scriptor->SetDefaultScenarioConfig(std::move(default_config));
 
   // instantiate virtual machine
-  machine_ = std::make_shared<RLMachine>(system_, scriptor, std::move(memory));
+  machine_ = std::make_shared<RLMachine>(system_, std::move(stage), scriptor,
+                                         std::move(memory));
   system_->machine_ = machine_.get();
   machine_->GetCallStack().Push(
       StackFrame(scriptor->Load(first_seen), StackFrame::TYPE_ROOT));

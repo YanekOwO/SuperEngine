@@ -526,7 +526,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
                                       kMaximumConfigEntries);
   const int face_count = std::clamp(gexe("WAKU.FACE.CNT").Int().value_or(0), 0,
                                     kMaximumConfigEntries);
-  const int object_count = std::clamp(gexe("WAKU.OBJECT.CNT").Int().value_or(0),
+  const int object_count = std::clamp(gexe("WAKU.OBJECT.CNT").Int().value_or(1),
                                       0, kMaximumConfigEntries);
   for (int id = 0; id < waku_count; ++id) {
     auto source = gexe("WAKU", id);
@@ -607,6 +607,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
 
   if (result.wakus_.empty()) {
     Waku waku;
+    waku.object_count = object_count;
     waku.filter_rendering = FilterRendering::AlphaBlend;
     waku.filter_colour = RGBAColour(0, 0, 255, 128);
     result.wakus_[{0, 0}] = std::move(waku);

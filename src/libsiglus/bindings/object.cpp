@@ -676,12 +676,13 @@ struct ObjectEventPropertyBinder {
     std::function<void(ObjectParameter&, int)> property_setter =
         std::move(setter);
     std::string field_name = name;
-    object.subcls(field_name, event_class,
-                  [name = std::move(name), getter = std::move(property_getter),
-                   setter = std::move(property_setter)](ObjectHandle* h) {
-                    return std::make_unique<ObjectEventHandle>(h->object, name,
-                                                               getter, setter);
-                  });
+    object.add_gc_root(event_class);
+    object.def(field_name.c_str(), [event = event_class, name = std::move(name),
+                                    getter = std::move(property_getter),
+                                    setter = std::move(property_setter)](
+                                       ObjectHandle* h) mutable {
+      return sr::Value(event.make_inst(h->object, name, getter, setter));
+    });
   }
 
   void Bind() {
@@ -867,31 +868,35 @@ void BindObject(SiglusMachine& runtime) {
       throw sr::RuntimeError("object.child size exceeds script integer range");
     return static_cast<int>(size);
   });
-  object.subcls("child", child, [](ObjectHandle* h) {
-    return std::make_unique<ObjectChildListHandle>(h->object);
+  object.add_gc_root(child);
+  object.def("child", [child](ObjectHandle* h) mutable {
+    return sr::Value(child.make_inst(h->object));
   });
 
   // FrameActionManager's C++ factory is opaque to the VM's garbage collector.
   (*vm.builtins_)["%%siglus_object_class"] = object.native_class();
-  frame_actions->SetObjectFactory([object](ActionOwner owner) mutable {
+  runtime.make_object = [object](ActionOwner owner) mutable {
     return sr::Value(object.make_inst(std::move(owner)));
-  });
-  object.subinst("frame_action", [frame_actions](ObjectHandle* h) {
+  };
+  frame_actions->SetObjectFactory(runtime.make_object);
+  object.def("frame_action", [frame_actions](ObjectHandle* h) {
     return frame_actions->MakeActionValue(
         ActionReference{h->object->GetFrameAction(), h->object});
   });
-  object.subinst("frame_action_ch", [frame_actions](ObjectHandle* h) {
+  object.def("frame_action_ch", [frame_actions](ObjectHandle* h) {
     return frame_actions->MakeListValue(h->object);
   });
 
   auto ilist_param = [&](const char* name, auto member) {
-    object.subcls(name, *runtime.ilist_cls, [member](ObjectHandle* h) {
-      auto getter = [object = h->object,
-                     member](sr::Fiber&) -> std::vector<int>& {
-        return std::invoke(member, object->Param());
-      };
-      return std::make_unique<SiglusIntListFacade>(std::move(getter));
-    });
+    object.add_gc_root(*runtime.ilist_cls);
+    object.def(name,
+               [ilist = *runtime.ilist_cls, member](ObjectHandle* h) mutable {
+                 auto getter = [object = h->object,
+                                member](sr::Fiber&) -> std::vector<int>& {
+                   return std::invoke(member, object->Param());
+                 };
+                 return sr::Value(ilist.make_inst(std::move(getter)));
+               });
   };
   ilist_param("F", &ObjectParameter::F);
   ilist_param("x_rep", &ObjectParameter::adjustment_offsets_x);
@@ -922,12 +927,12 @@ void BindObject(SiglusMachine& runtime) {
   auto bind_repno_event_list = [&](const char* name,
                                    ObjectRepnoEventHandle::Getter getter,
                                    ObjectRepnoEventHandle::Setter setter) {
-    object.subcls(name, repno_event_list,
-                  [name = std::string(name), getter = std::move(getter),
-                   setter = std::move(setter)](ObjectHandle* h) {
-                    return std::make_unique<ObjectRepnoEventListHandle>(
-                        h->object, name, getter, setter);
-                  });
+    object.add_gc_root(repno_event_list);
+    object.def(name, [list = repno_event_list, name = std::string(name),
+                      getter = std::move(getter),
+                      setter = std::move(setter)](ObjectHandle* h) mutable {
+      return sr::Value(list.make_inst(h->object, name, getter, setter));
+    });
   };
   bind_repno_event_list("x_rep_eve",
                         CreateGetter<&ObjectParameter::adjustment_offsets_x>(),

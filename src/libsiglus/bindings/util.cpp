@@ -26,6 +26,7 @@
 #include "core/interpolation.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/source_buffer.hpp"
+#include "vm/dict.hpp"
 #include "vm/exception.hpp"
 #include "vm/list.hpp"
 #include "vm/string.hpp"

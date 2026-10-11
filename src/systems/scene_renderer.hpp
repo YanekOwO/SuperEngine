@@ -24,6 +24,12 @@
 
 #pragma once
 
+#include "core/object.hpp"
+
+#include <optional>
+
+class MaskList;
+
 // Runtime-specific scene policy. GraphicsSystem owns the reusable frame
 // presentation machinery; implementations decide what scene state is advanced
 // and drawn for a particular VM/runtime.
@@ -33,4 +39,9 @@ class ISceneRenderer {
 
   virtual void ExecuteFrame() = 0;
   virtual void RenderScene() = 0;
+
+  virtual void RenderObject(
+      GraphicsObject& object,
+      const MaskList* mask_list = nullptr,
+      std::optional<ParentObjState> parent = std::nullopt) = 0;
 };

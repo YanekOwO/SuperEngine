@@ -700,8 +700,8 @@ StringReferenceIterator RlBabelDLL::GetSvar(int addr) {
 std::shared_ptr<TextWindow> RlBabelDLL::GetWindow(int id) {
   TextSystem& text_system = machine_.GetSystem().text();
   if (id >= 0) {
-    return text_system.GetTextWindow(id);
+    return text_system.GetMwnd(id);
   } else {
-    return text_system.GetCurrentWindow();
+    return text_system.GetCurrentMwnd();
   }
 }

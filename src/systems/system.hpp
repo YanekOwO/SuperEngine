@@ -41,6 +41,7 @@
 class GraphicsSystem;
 class EventSystem;
 class TextSystem;
+class Stage;
 class SoundSystem;
 class RLMachine;
 class Gameexe;
@@ -124,9 +125,11 @@ BOOST_CLASS_VERSION(SystemGlobals, 1)
 class System {
  public:
   System(Gameexe& gameexe,
+         Stage& stage,
          std::shared_ptr<AssetScanner> scanner = nullptr,
          SystemOptions options = {});
   System(Gameexe& gameexe,
+         Stage& stage,
          std::shared_ptr<AssetScanner> scanner,
          MwndConfig mwnd_config,
          SystemOptions options = {});

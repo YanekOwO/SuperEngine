@@ -224,6 +224,8 @@ bool SiglusSceneRenderer::QuakeRenderingStopped() const {
 void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
                                        const MaskList* mask_list,
                                        std::optional<ParentObjState> parent) {
+  if (!mask_list)
+    mask_list = mask_list_.get();
   const auto resolve_mask =
       [mask_list](int index) -> std::optional<ObjectMask> {
     if (!mask_list)

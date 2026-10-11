@@ -78,10 +78,17 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
                                                   TextWindow& window,
                                                   int setno,
                                                   int no) {
+  std::unique_ptr<TextWaku> waku = nullptr;
   const MwndConfig::Waku& config = config_.GetWaku(setno, no);
   if (config.style == MwndConfig::WakuStyle::Stretch)
-    return CreateWakuType4(system, window, config);
-  return CreateWakuNormal(system, window, config);
+    waku = CreateWakuType4(system, window, config);
+  else
+    waku = CreateWakuNormal(system, window, config);
+
+  waku->objects_.resize(config.object_count);
+  waku->renderer_ = system.graphics().GetSceneRenderer();
+
+  return waku;
 }
 
 std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(

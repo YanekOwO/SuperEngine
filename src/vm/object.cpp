@@ -189,8 +189,6 @@ NativeInstance::~NativeInstance() {
 
 void NativeInstance::MarkRoots(GCVisitor& visitor) {
   visitor.MarkSub(klass);
-  for (auto& [k, it] : fields)
-    visitor.MarkSub(it);
   if (klass->trace && foreign)
     klass->trace(visitor, foreign);
 }
@@ -202,71 +200,42 @@ std::string NativeInstance::Desc() const {
 }
 
 TempValue NativeInstance::Member(std::string_view mem) {
-  {
-    auto it = fields.find(mem);
-    if (it != fields.cend())
-      return it->second;
-  }
-
-  {
-    auto it = klass->methods.find(mem);
-    if (it != klass->methods.cend()) {
-      Value val = it->second;
-      if (IObject* obj = val.Get_if<IObject>()) {
-        auto t = obj->Type();
-        if (t == ObjType::Function || t == ObjType::Native)
-          return std::make_unique<BoundMethod>(Value(this), val);
-      }
-      return val;
+  if (auto it = klass->methods.find(mem); it != klass->methods.cend()) {
+    Value val = it->second;
+    if (IObject* obj = val.Get_if<IObject>()) {
+      auto t = obj->Type();
+      if (t == ObjType::Function || t == ObjType::Native)
+        return std::make_unique<BoundMethod>(Value(this), val);
     }
+    return val;
   }
 
   throw RuntimeError('\'' + Desc() + "' object has no member '" +
                      std::string(mem) + '\'');
 }
 
-void NativeInstance::SetMember(std::string_view mem, Value val) {
-  fields[std::string(mem)] = std::move(val);
-}
-
 void NativeInstance::GetItem(VM& vm, Fiber& f) {
   Value& idx = f.op_stack.back();
 
-  auto lookup = [this](std::string_view name) -> std::optional<Value> {
-    if (auto it = fields.find(name); it != fields.end())
-      return it->second;
-    if (auto it = klass->methods.find(name); it != klass->methods.end())
-      return it->second;
-    return std::nullopt;
-  };
-
-  auto callee = lookup("__getitem__");
-  if (!callee) {
+  auto callee = klass->methods.find("__getitem__");
+  if (callee == klass->methods.end()) {
     vm.Error(f, std::format("'{}' object has no item '{}'", Desc(), idx.Str()));
     return;
   }
 
-  f.op_stack.insert(f.op_stack.end() - 2, *callee);
+  f.op_stack.insert(f.op_stack.end() - 2, callee->second);
   f.op_stack.end()[-3].Call(vm, f, 2, 0);
 }
 
 void NativeInstance::SetItem(VM& vm, Fiber& f) {
-  auto lookup = [this](std::string_view name) -> std::optional<Value> {
-    if (auto it = fields.find(name); it != fields.end())
-      return it->second;
-    if (auto it = klass->methods.find(name); it != klass->methods.end())
-      return it->second;
-    return std::nullopt;
-  };
-
-  auto callee = lookup("__setitem__");
-  if (!callee) {
+  auto callee = klass->methods.find("__setitem__");
+  if (callee == klass->methods.end()) {
     vm.Error(
         f, std::format("'{}' object does not support item assignment", Desc()));
     return;
   }
 
-  f.op_stack.insert(f.op_stack.end() - 3, *callee);
+  f.op_stack.insert(f.op_stack.end() - 3, callee->second);
   f.op_stack.end()[-4].Call(vm, f, 3, 0);
 }
 

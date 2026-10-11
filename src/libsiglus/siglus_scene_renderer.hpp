@@ -50,14 +50,16 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   void ExecuteFrame() override;
   void RenderScene() override;
 
+  void RenderObject(
+      GraphicsObject& object,
+      const MaskList* mask_list = nullptr,
+      std::optional<ParentObjState> parent = std::nullopt) override;
+
  private:
   enum class ObjectRange { All, Below, Within, Above };
   using ToRenderVec =
       std::vector<std::tuple<int, int, int, int, GraphicsObject*>>;
 
-  static void RenderObject(GraphicsObject& object,
-                           const MaskList* mask_list,
-                           std::optional<ParentObjState> parent = std::nullopt);
   void RenderStageObjects();
   void RenderObjects(int stage_layer, ObjectRange range = ObjectRange::All);
   void RenderQueuedObjects(int stage_layer);

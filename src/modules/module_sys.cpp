@@ -137,7 +137,7 @@ struct PauseCursor : public RLOpcode<IntConstant_T> {
 struct GetWakuAll : public RLStoreOpcode<> {
   int operator()(RLMachine& machine) {
     std::shared_ptr<TextWindow> window =
-        machine.GetSystem().text().GetCurrentWindow();
+        machine.GetSystem().text().GetCurrentMwnd();
     return window->waku_set();
   }
 };

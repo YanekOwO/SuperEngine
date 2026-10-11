@@ -176,13 +176,12 @@ void BindMask(SiglusMachine& runtime) {
   mask_class.def("set_y", [](MaskHandle* mask, int value) {
     mask->Get().Param().y = value;
   });
-  mask_class.subcls("x_eve", event_class, [event](MaskHandle* mask) {
-    return std::make_unique<MaskEventHandle>(*mask, &Mask::Parameters::x,
-                                             event);
+  mask_class.add_gc_root(event_class);
+  mask_class.def("x_eve", [event_class, event](MaskHandle* mask) mutable {
+    return sr::Value(event_class.make_inst(*mask, &Mask::Parameters::x, event));
   });
-  mask_class.subcls("y_eve", event_class, [event](MaskHandle* mask) {
-    return std::make_unique<MaskEventHandle>(*mask, &Mask::Parameters::y,
-                                             event);
+  mask_class.def("y_eve", [event_class, event](MaskHandle* mask) mutable {
+    return sr::Value(event_class.make_inst(*mask, &Mask::Parameters::y, event));
   });
 
   // ------------------------------------------------------------------------------

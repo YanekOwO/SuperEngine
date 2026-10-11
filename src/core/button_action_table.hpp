@@ -38,21 +38,34 @@ std::optional<ButtonState> ParseState(std::string_view state);
 
 class ButtonActionTable {
  public:
+  // Button action template pattern: drawing settings for a single state.
   struct State {
+    // Pattern number, added to an object's |pat_no|.
     int pattern = 0;
+    // Drawing position correction in pixels, added to the base position.
     Point rep_pos = Point(0, 0);
+    // Transparency correction (0..255): an object's tr is multiplied by
+    // rep_tr / 255; 0 is fully transparent and 255 leaves tr unchanged.
     int rep_tr = 255;
+    // Brightness correction (0..255), added to an object's bright value.
     int rep_bright = 0;
+    // Darkness correction (0..255), added to an object's dark value.
     int rep_dark = 0;
 
     bool operator==(const State&) const = default;
   };
 
+  // Button action template
   struct Entry {
+    // NORMAL: the button is idle.
     State normal;
+    // HIT: the cursor hits the button, or its group designates it as hit.
     State hit;
+    // PUSH: the button is pushed, or its group has decided this button.
     State push;
+    // SELECT: the button is explicitly in the selected state.
     State select;
+    // DISABLE: the button is disabled and cannot accept button events.
     State disable;
 
     State GetState(ButtonState state) const;

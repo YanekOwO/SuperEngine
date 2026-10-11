@@ -549,133 +549,94 @@ struct SubParent {
   int value{0};
   explicit SubParent(int value_in) : value(value_in) {}
 };
-struct SubChild {
-  SubParent* parent = nullptr;
-  int value{0};
-
-  SubChild(SubParent* parent_in, int value_in)
-      : parent(parent_in), value(value_in) {}
-
-  int get() const { return value; }
-  int parent_value() const { return parent->value; }
-  void add_parent(int delta) { parent->value += delta; }
+struct FactoryParent {
+  std::shared_ptr<int> value;
+};
+struct FactoryChild {
+  std::shared_ptr<int> value;
+  int get() const { return *value; }
+  void set(int v) { *value = v; }
 };
 
-TEST_F(SrbindTest, Subcls_CreatesFieldWithParentFactory) {
-  class_<SubChild> child(mod, "__SubChild");
-  child.def("get", &SubChild::get)
-      .def("parent_value", &SubChild::parent_value)
-      .def("add_parent", &SubChild::add_parent, arg("delta"));
-
-  class_<SubParent> cp(mod, "SubParent");
-  cp.subcls("inst", child, [](SubParent* self) {
-      return std::make_unique<SubChild>(self, self->value + 1);
-    }).def(init<int>(), arg("value"));
-
-  Value inst_v = CallCallee(dict["SubParent"], {Value(41)});
-  auto* parent_inst = inst_v.Get_if<NativeInstance>();
-  ASSERT_NE(parent_inst, nullptr);
-  SubParent* parent = parent_inst->GetForeign<SubParent>();
-  ASSERT_NE(parent, nullptr);
-
-  Value child_v = GetMember(parent_inst, "inst");
-  auto* child_inst = child_v.Get_if<NativeInstance>();
-  ASSERT_NE(child_inst, nullptr);
-  auto* child_obj = child_inst->GetForeign<SubChild>();
-  ASSERT_NE(child_obj, nullptr);
-  EXPECT_EQ(child_obj->parent, parent);
-  EXPECT_EQ(CallCallee(GetMember(child_inst, "get")), 42);
-  EXPECT_EQ(CallCallee(GetMember(child_inst, "parent_value")), 41);
-
-  EXPECT_NO_THROW(CallCallee(GetMember(child_inst, "add_parent"), {Value(2)}));
-  EXPECT_EQ(parent->value, 43);
-  EXPECT_EQ(CallCallee(GetMember(child_inst, "parent_value")), 43);
-}
-
-TEST_F(SrbindTest, Subcls_CreatesDistinctChildren) {
-  int next_child_value = 0;
-  class_<SubChild> child(mod, "__SubChildDistinct");
-  child.def("get", &SubChild::get).def("parent_value", &SubChild::parent_value);
-
-  class_<SubParent> cp(mod, "SubParentDistinct");
-  cp.subcls("inst", child, [&](SubParent* self) {
-      return std::make_unique<SubChild>(self, ++next_child_value);
-    }).def(init<int>(), arg("value"));
-
-  auto* first = CallCallee(dict["SubParentDistinct"], {Value(10)})
-                    .Get_if<NativeInstance>();
-  ASSERT_NE(first, nullptr);
-  auto* second = CallCallee(dict["SubParentDistinct"], {Value(20)})
-                     .Get_if<NativeInstance>();
-  ASSERT_NE(second, nullptr);
-
-  auto* first_child = GetMember(first, "inst").Get_if<NativeInstance>();
-  auto* second_child = GetMember(second, "inst").Get_if<NativeInstance>();
-  ASSERT_NE(first_child, nullptr);
-  ASSERT_NE(second_child, nullptr);
-  EXPECT_NE(first_child, second_child);
-  EXPECT_EQ(first_child->GetForeign<SubChild>()->parent,
-            first->GetForeign<SubParent>());
-  EXPECT_EQ(second_child->GetForeign<SubChild>()->parent,
-            second->GetForeign<SubParent>());
-  EXPECT_EQ(CallCallee(GetMember(first_child, "get")), 1);
-  EXPECT_EQ(CallCallee(GetMember(second_child, "get")), 2);
-  EXPECT_EQ(CallCallee(GetMember(first_child, "parent_value")), 10);
-  EXPECT_EQ(CallCallee(GetMember(second_child, "parent_value")), 20);
-}
-
-TEST_F(SrbindTest, Subcls_CanRegisterAfterInit) {
-  class_<SubChild> child(mod, "__SubChildLate");
-  child.def("parent_value", &SubChild::parent_value);
-
-  class_<SubParent> cp(mod, "SubParentLate");
-  cp.def(init<int>(), arg("value"));
-  cp.subcls("late", child, [](SubParent* self) {
-    return std::make_unique<SubChild>(self, self->value);
+TEST_F(SrbindTest, FactoryCreatesHandlesLazilyWithSharedBackingState) {
+  int creations = 0;
+  class_<FactoryChild> child(mod, "FactoryChild", false);
+  child.def("get", &FactoryChild::get).def("set", &FactoryChild::set);
+  class_<FactoryParent> parent(mod, "FactoryParent");
+  parent.def(
+      init([](int value) {
+        return std::make_unique<FactoryParent>(std::make_shared<int>(value));
+      }),
+      arg("value"));
+  parent.add_gc_root(child);
+  parent.def("child", [child, &creations](FactoryParent* h) mutable {
+    ++creations;
+    return Value(child.make_inst(h->value));
   });
 
-  auto* parent_inst =
-      CallCallee(dict["SubParentLate"], {Value(55)}).Get_if<NativeInstance>();
-  ASSERT_NE(parent_inst, nullptr);
-  auto* child_inst = GetMember(parent_inst, "late").Get_if<NativeInstance>();
-  ASSERT_NE(child_inst, nullptr);
-  EXPECT_EQ(CallCallee(GetMember(child_inst, "parent_value")), 55);
+  auto* inst =
+      CallCallee(dict["FactoryParent"], {Value(41)}).Get_if<NativeInstance>();
+  ASSERT_NE(inst, nullptr);
+  EXPECT_EQ(creations, 0);
+  auto* first = CallCallee(GetMember(inst, "child")).Get_if<NativeInstance>();
+  auto* second = CallCallee(GetMember(inst, "child")).Get_if<NativeInstance>();
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_EQ(creations, 2);
+  CallCallee(GetMember(first, "set"), {Value(42)});
+  EXPECT_EQ(CallCallee(GetMember(second, "get")), 42);
 }
 
-TEST_F(SrbindTest, Subcls_NullFactoryThrows) {
-  class_<SubChild> child(mod, "__SubChildNull");
-
-  class_<SubParent> cp(mod, "SubParentNullChild");
-  cp.subcls("inst", child, [](SubParent*) -> SubChild* { return nullptr; });
-  cp.def(init<int>(), arg("value"));
-
-  EXPECT_THROW(std::ignore = CallCallee(dict["SubParentNullChild"], {Value(1)}),
-               error_type);
-}
-
-TEST_F(SrbindTest, Subcls_KeepsChildClassAliveBeforeInstance) {
+TEST_F(SrbindTest, FactoryHandleOwnsBackingStateAfterParentCollection) {
   module_ globals_mod(vm.gc_.get(), vm.globals_.get());
-  class_<SubChild> child(globals_mod, "__SubChildRooted");
-  child.def("get", &SubChild::get);
-
-  class_<SubParent> cp(globals_mod, "SubParentRooted");
-  cp.subcls("inst", child, [](SubParent* self) {
-      return std::make_unique<SubChild>(self, self->value);
-    }).def(init<int>(), arg("value"));
-
-  vm.globals_->erase("__SubChildRooted");
-
+  class_<FactoryChild> child(globals_mod, "FactoryOwnedChild", false);
+  child.def("get", &FactoryChild::get);
+  class_<FactoryParent> parent(globals_mod, "FactoryOwnedParent");
+  parent.add_gc_root(child);
+  parent.def("child", [child](FactoryParent* h) mutable {
+    return Value(child.make_inst(h->value));
+  });
+  auto owner = std::make_shared<int>(55);
+  auto* inst = parent.make_inst(owner);
+  (*vm.globals_)["saved_child"] = CallCallee(GetMember(inst, "child"));
+  owner.reset();
+  f->op_stack.clear();
+  vm.last_ = Value();
   vm.fibres_.push_back(f);
-  const size_t bytes_before_gc = gc->AllocatedBytes();
   vm.CollectGarbage();
-  EXPECT_EQ(gc->AllocatedBytes(), bytes_before_gc);
+  auto* retained = (*vm.globals_)["saved_child"].Get_if<NativeInstance>();
+  ASSERT_NE(retained, nullptr);
+  EXPECT_EQ(CallCallee(GetMember(retained, "get")), 55);
+}
 
-  auto* parent_inst = CallCallee((*vm.globals_)["SubParentRooted"], {Value(77)})
-                          .Get_if<NativeInstance>();
-  ASSERT_NE(parent_inst, nullptr);
-  auto* child_inst = GetMember(parent_inst, "inst").Get_if<NativeInstance>();
-  ASSERT_NE(child_inst, nullptr);
-  EXPECT_EQ(CallCallee(GetMember(child_inst, "get")), 77);
+TEST_F(SrbindTest, FactoryClassSurvivesCollectionBeforeFirstCall) {
+  module_ globals_mod(vm.gc_.get(), vm.globals_.get());
+  class_<FactoryChild> child(globals_mod, "FactoryRootedChild", false);
+  child.def("get", &FactoryChild::get);
+  class_<FactoryParent> parent(globals_mod, "FactoryRootedParent");
+  parent.add_gc_root(child);
+  parent.def("child", [child](FactoryParent* h) mutable {
+    return Value(child.make_inst(h->value));
+  });
+  (*vm.globals_)["factory_parent"] =
+      parent.make_inst(std::make_shared<int>(77));
+  vm.fibres_.push_back(f);
+  vm.CollectGarbage();
+  auto* inst = (*vm.globals_)["factory_parent"].Get_if<NativeInstance>();
+  auto* result = CallCallee(GetMember(inst, "child")).Get_if<NativeInstance>();
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(CallCallee(GetMember(result, "get")), 77);
+}
+
+TEST_F(SrbindTest, NativeInstanceRejectsMemberAssignment) {
+  class_<SubParent> parent(mod, "NativeWithoutFields");
+  parent.def("get", [](SubParent* h) { return h->value; });
+  auto* inst = parent.make_inst(41);
+  EXPECT_THROW(inst->SetMember("value", Value(9)), error_type);
+  EXPECT_THROW(inst->SetMember("get", Value(9)), error_type);
+  EXPECT_THROW(std::ignore = GetMember(inst, "value"), error_type);
+  EXPECT_EQ(CallCallee(GetMember(inst, "get")), 41);
 }
 
 TEST_F(SrbindTest, AddGcRootKeepsHiddenFactoryClassAlive) {
@@ -706,70 +667,6 @@ TEST_F(SrbindTest, AddGcRootKeepsHiddenFactoryClassAlive) {
   vm.last_ = Value();
   f->op_stack.clear();
   vm.CollectGarbage();
-  EXPECT_EQ(LifetimeTracked::aliveCount(), 0);
-}
-
-TEST_F(SrbindTest, Subcls_UniquePtrTransfersOwnership) {
-  LifetimeTracked::aliveCount() = 0;
-  vm.fibres_.push_back(f);
-
-  {
-    class_<LifetimeTracked> child(mod, "__OwnedChild");
-    child.def("get", &LifetimeTracked::get);
-
-    class_<SubParent> cp(mod, "SubParentOwnedChild");
-    cp.subcls("owned", child, [](SubParent* self) {
-        return std::make_unique<LifetimeTracked>(self->value);
-      }).def(init<int>(), arg("value"));
-
-    auto* parent_inst = CallCallee(dict["SubParentOwnedChild"], {Value(33)})
-                            .Get_if<NativeInstance>();
-    ASSERT_NE(parent_inst, nullptr);
-    auto* child_inst = GetMember(parent_inst, "owned").Get_if<NativeInstance>();
-    ASSERT_NE(child_inst, nullptr);
-    EXPECT_EQ(CallCallee(GetMember(child_inst, "get")), 33);
-    EXPECT_EQ(LifetimeTracked::aliveCount(), 1);
-  }
-
-  dict.clear();
-  vm.last_ = Value();
-  f->op_stack.clear();
-  vm.CollectGarbage();
-  EXPECT_EQ(LifetimeTracked::aliveCount(), 0);
-}
-
-TEST_F(SrbindTest, Subcls_NoDeleteBorrowsRawPointer) {
-  LifetimeTracked::aliveCount() = 0;
-  auto* tracked = new LifetimeTracked(44);
-  vm.fibres_.push_back(f);
-
-  {
-    class_<LifetimeTracked> child(mod, "__BorrowedChild");
-    child.no_delete().def("get", &LifetimeTracked::get);
-
-    class_<SubParent> cp(mod, "SubParentBorrowedChild");
-    cp.subcls("borrowed", child, [tracked](SubParent*) {
-        return tracked;
-      }).def(init<int>(), arg("value"));
-
-    auto* parent_inst = CallCallee(dict["SubParentBorrowedChild"], {Value(1)})
-                            .Get_if<NativeInstance>();
-    ASSERT_NE(parent_inst, nullptr);
-    auto* child_inst =
-        GetMember(parent_inst, "borrowed").Get_if<NativeInstance>();
-    ASSERT_NE(child_inst, nullptr);
-    EXPECT_EQ(CallCallee(GetMember(child_inst, "get")), 44);
-    EXPECT_EQ(LifetimeTracked::aliveCount(), 1);
-  }
-
-  dict.clear();
-  vm.last_ = Value();
-  f->op_stack.clear();
-  vm.CollectGarbage();
-  EXPECT_EQ(LifetimeTracked::aliveCount(), 1);
-
-  if (LifetimeTracked::aliveCount() == 1)
-    delete tracked;
   EXPECT_EQ(LifetimeTracked::aliveCount(), 0);
 }
 

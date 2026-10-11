@@ -124,7 +124,7 @@ void BindTextout(SiglusMachine& runtime) {
       return;
 
     TextSystem& text = sys->text();
-    std::shared_ptr<TextWindow> window = text.GetCurrentWindow();
+    std::shared_ptr<TextWindow> window = text.GetCurrentMwnd();
     if (window->HasName())
       return;
 

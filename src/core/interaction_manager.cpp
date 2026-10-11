@@ -26,9 +26,13 @@
 #include "core/button_action_table.hpp"
 #include "core/group.hpp"
 #include "core/input.hpp"
+#include "core/object.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/stage.hpp"
+#include "systems/text_waku.hpp"
+#include "systems/text_window.hpp"
 
+#include <compare>
 #include <cstddef>
 #include <optional>
 #include <tuple>
@@ -41,65 +45,86 @@ constexpr int kButtonSelect = 3;
 constexpr int kButtonDisable = 4;
 
 struct HitCandidate {
+  int display_order;
   int z_order;
   int z_layer;
   int z_depth;
   int object_id;
   std::size_t traversal_order;
   int button_no;
+
+  std::strong_ordering operator<=>(const HitCandidate& o) const {
+    // greater means better candidate
+    return std::tie(display_order, z_order, z_layer, z_depth, object_id,
+                    traversal_order) <=>
+           std::tie(o.display_order, o.z_order, o.z_layer, o.z_depth,
+                    o.object_id, o.traversal_order);
+  }
 };
 
-auto CandidateOrder(const HitCandidate& candidate) {
-  return std::tie(candidate.z_order, candidate.z_layer, candidate.z_depth,
-                  candidate.object_id, candidate.traversal_order);
-}
+// Visitor to dfs traverse object tree, selecting best candidate to handle mouse
+// state for each group
+struct CandidateVisitor {
+  const Point mouse_pos;
+  const std::vector<std::shared_ptr<Group>>& groups;  // group data
+  std::size_t traversal_order = 0;
 
-void VisitButtonCandidates(
-    GraphicsObject& object,
-    std::optional<ParentObjState> parent,
-    int object_id,
-    const Point& mouse_pos,
-    const StageElement<Group>::layer_type& groups,
-    std::size_t& traversal_order,
-    std::vector<std::optional<HitCandidate>>& candidates) {
-  const std::size_t current_traversal_order = traversal_order++;
-  const ObjectParameter& param = object.Param();
-  if (!param.visible())
-    return;
+  // output, best candidates for each group
+  std::vector<std::optional<HitCandidate>> candidates;
 
-  const int group_no = param.GetButtonGroup();
-  const bool has_active_group =
-      group_no >= 0 && static_cast<std::size_t>(group_no) < groups.size() &&
-      groups[static_cast<std::size_t>(group_no)] &&
-      groups[static_cast<std::size_t>(group_no)]->status !=
-          Group::Status::Disabled;
-  if (has_active_group && object.HasDrawer() && param.IsButton() &&
-      param.GetButtonAction() >= 0 && param.GetButtonState() != kButtonSelect &&
-      param.GetButtonState() != kButtonDisable && !param.click_disable &&
-      object.GetDrawer().HitTest(object, mouse_pos, parent)) {
-    HitCandidate candidate{.z_order = param.z_order,
-                           .z_layer = param.z_layer,
-                           .z_depth = param.z_depth,
-                           .object_id = object_id,
-                           .traversal_order = current_traversal_order,
-                           .button_no = param.GetButtonNumber()};
-    std::optional<HitCandidate>& best =
-        candidates[static_cast<std::size_t>(group_no)];
-    if (!best || CandidateOrder(*best) < CandidateOrder(candidate))
-      best = candidate;
-  }
+  CandidateVisitor(Point pos, const std::vector<std::shared_ptr<Group>>& grp)
+      : mouse_pos(pos),
+        groups(grp),
+        traversal_order(0),
+        candidates(grp.size()) {}
 
-  if (!object.HasChildren())
-    return;
+  void Visit(GraphicsObject& object,
+             std::optional<ParentObjState> parent,
+             int object_id,
+             int display_order) {
+    const std::size_t current_traversal_order = traversal_order++;
+    const ObjectParameter& param = object.Param();
+    if (!param.visible())
+      return;
 
-  const ParentObjState child_parent = ParentObjState::BuildFrom(object);
-  for (auto& child : object.GetChildren()) {
-    if (child) {
-      VisitButtonCandidates(*child, child_parent, object_id, mouse_pos, groups,
-                            traversal_order, candidates);
+    const int group_no = param.GetButtonGroup();
+    const bool has_active_group =
+        group_no >= 0 && static_cast<std::size_t>(group_no) < groups.size() &&
+        groups[static_cast<std::size_t>(group_no)] &&
+        groups[static_cast<std::size_t>(group_no)]->status !=
+            Group::Status::Disabled;
+    if (has_active_group && object.HasDrawer() && param.IsButton() &&
+        param.GetButtonAction() >= 0 &&
+        param.GetButtonState() != kButtonSelect &&
+        param.GetButtonState() != kButtonDisable && !param.click_disable &&
+        object.GetDrawer().HitTest(object, mouse_pos, parent)) {
+      HitCandidate candidate{.display_order = display_order,
+                             .z_order = param.z_order,
+                             .z_layer = param.z_layer,
+                             .z_depth = param.z_depth,
+                             .object_id = object_id,
+                             .traversal_order = current_traversal_order,
+                             .button_no = param.GetButtonNumber()};
+      std::optional<HitCandidate>& best =
+          candidates[static_cast<std::size_t>(group_no)];
+      if (!best || *best < candidate)
+        best = candidate;
+    }
+
+    if (!object.HasChildren())
+      return;
+
+    ParentObjState child_parent = ParentObjState::BuildFrom(object);
+    if (parent)
+      child_parent.render_state =
+          RenderState::Fold(child_parent.render_state, parent->render_state);
+    for (auto& child : object.GetChildren()) {
+      if (!child)
+        continue;
+      Visit(*child, child_parent, object_id, display_order);
     }
   }
-}
+};
 
 ButtonState ResolveButtonState(const ObjectParameter& param,
                                const StageElement<Group>::layer_type& groups,
@@ -153,8 +178,9 @@ void ApplyButtonOverrides(
   if (state == ButtonState::Select || state == ButtonState::Disable)
     child_parent_state = state;
   for (auto& child : object.GetChildren()) {
-    if (child)
-      ApplyButtonOverrides(*child, groups, button_actions, child_parent_state);
+    if (!child)
+      continue;
+    ApplyButtonOverrides(*child, groups, button_actions, child_parent_state);
   }
 }
 
@@ -222,15 +248,39 @@ void InteractionManager::UpdateGroup(Group& group,
 
 void InteractionManager::UpdateLayer(int layer) {
   auto& groups = stage_.groups[layer];
-  std::vector<std::optional<HitCandidate>> candidates(groups.size());
+  CandidateVisitor visitor(input_.mouse_pos, groups);
 
   auto& objects = stage_.ObjectsForLayer(layer);
-  std::size_t traversal_order = 0;
-  for (std::size_t i = 0; i < objects.size(); ++i)
-    if (objects[i])
-      VisitButtonCandidates(*objects[i], std::nullopt, static_cast<int>(i),
-                            input_.mouse_pos, groups, traversal_order,
-                            candidates);
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    if (!objects[i])
+      continue;
+    visitor.Visit(*objects[i], std::nullopt, static_cast<int>(i), 0);
+  }
+
+  if (layer == kLayerFg) {
+    int display_order = 1;
+    for (const auto& [id, window] : stage_.mwnd) {
+      if (window) {
+        const auto visit_waku = [&](TextWaku* waku, const Point& origin,
+                                    int order) {
+          const auto parent = TextWaku::ObjectParent(origin);
+          for (std::size_t i = 0; i < waku->objects_.size(); ++i)
+            if (waku->objects_[i])
+              visitor.Visit(*waku->objects_[i], parent, static_cast<int>(i),
+                            order);
+        };
+        if (window->IsTextboxWakuVisible())
+          visit_waku(window->GetTextboxWaku(), window->GetWindowRect().origin(),
+                     display_order);
+        if (window->IsNameboxWakuVisible())
+          visit_waku(window->GetNameboxWaku(),
+                     window->GetNameboxWakuRect().origin(), display_order + 1);
+      }
+      display_order += 2;
+    }
+  }
+
+  auto candidates = std::move(visitor.candidates);
 
   for (std::size_t i = 0; i < groups.size(); ++i) {
     if (!groups[i])
@@ -244,4 +294,17 @@ void InteractionManager::UpdateLayer(int layer) {
   for (auto& object : objects)
     if (object)
       ApplyButtonOverrides(*object, groups, button_actions_);
+  if (layer == kLayerFg) {
+    for (const auto& [id, window] : stage_.mwnd) {
+      if (!window)
+        continue;
+      for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
+        if (!waku)
+          continue;
+        for (const auto& object : waku->objects_)
+          if (object)
+            ApplyButtonOverrides(*object, groups, button_actions_);
+      }
+    }
+  }
 }

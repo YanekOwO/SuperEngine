@@ -45,7 +45,7 @@ class StageLayer {
 
     self.mwnd = nil;
     try {
-      self.mwnd = LazyArray(Mwnd);
+      self.mwnd = MwndArray();
     } catch (e) {
       print("Siglus stage.mwnd binding unavailable:", e);
     }
@@ -99,7 +99,7 @@ stage_next = stage.next;
 )";
 
   Execute(vm, std::move(src));
-  // TODO: Implement actual Mwnd, Group, Btnsel, and World classes
+  // TODO: Implement actual Btnsel and World classes
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "2_stage", BindStage)

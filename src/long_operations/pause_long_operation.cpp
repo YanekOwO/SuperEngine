@@ -237,7 +237,7 @@ NewPageAfterLongop::~NewPageAfterLongop() {}
 void NewPageAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
   TextSystem& text = machine.GetSystem().text();
   text.Snapshot();
-  text.GetCurrentWindow()->ClearWin();
+  text.GetCurrentMwnd()->ClearWin();
   text.NewPageOnWindow(text.active_window());
 }
 
@@ -253,7 +253,7 @@ void NewPageOnAllAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
   TextSystem& text = machine.GetSystem().text();
   text.Snapshot();
   for (int window : text.GetActiveWindows()) {
-    text.GetTextWindow(window)->ClearWin();
+    text.GetMwnd(window)->ClearWin();
     text.NewPageOnWindow(window);
   }
 }

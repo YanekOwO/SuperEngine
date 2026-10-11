@@ -27,10 +27,8 @@
 
 #include "utilities/transparent_hash.hpp"
 #include "vm/call_frame.hpp"
-#include "vm/dict.hpp"
 #include "vm/instruction.hpp"
 #include "vm/iobject.hpp"
-#include "vm/list.hpp"
 #include "vm/promise.hpp"
 #include "vm/value.hpp"
 
@@ -161,6 +159,7 @@ struct NativeClass : public IObject {
 
   std::string name;
   transparent_hashmap<Value> methods;
+
   std::vector<Value> gc_roots;
   finalize_fn finalize = nullptr;
   trace_fn trace = nullptr;
@@ -182,7 +181,6 @@ struct NativeInstance : public IObject {
   static constexpr inline ObjType objtype = ObjType::NativeInstance;
 
   NativeClass* klass;
-  transparent_hashmap<Value> fields;
   void* foreign = nullptr;
 
   explicit NativeInstance(NativeClass* klass_);
@@ -206,7 +204,6 @@ struct NativeInstance : public IObject {
   std::string Desc() const override;
 
   TempValue Member(std::string_view mem) override;
-  void SetMember(std::string_view mem, Value val) override;
   void GetItem(VM& vm, Fiber& f) override;
   void SetItem(VM& vm, Fiber& f) override;
 };

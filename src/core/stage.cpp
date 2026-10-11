@@ -39,6 +39,7 @@ Stage::Stage(int object_size, int effect_size, int group_size, int quake_size)
       saved_background_objects(object_size) {}
 
 void Stage::Reset() {
+  mwnd.clear();
   objects.Clear();
   groups.Clear();
   effects.Clear();

@@ -133,16 +133,17 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   MwndConfig mwnd_config = MwndConfig::ParseSiglus(gexe);
   const int default_window = mwnd_config.default_window();
 
+  int quake_count = std::clamp(gexe("QUAKE.CNT").Int().value_or(16), 0, 256);
+  rt.stage = std::make_unique<Stage>(gexe("OBJECT_MAX").Int().value_or(256),
+                                     gexe("EFFECT.CNT").Int().value_or(0), 0,
+                                     quake_count);
+
   // Init sdl system
   SystemOptions system_options;
   system_options.fast_forward = fast_forward_;
-  rt.system = std::make_unique<System>(gexe, rt.asset_scanner,
+  rt.system = std::make_unique<System>(gexe, *rt.stage, rt.asset_scanner,
                                        std::move(mwnd_config), system_options);
   rt.system->text().set_active_window(default_window);
-  int quake_count = std::clamp(gexe("QUAKE.CNT").Int().value_or(16), 0, 256);
-  rt.stage = std::make_unique<Stage>(rt.system->graphics().GetObjectLayerSize(),
-                                     gexe("EFFECT.CNT").Int().value_or(0), 0,
-                                     quake_count);
   rt.screen_quakes =
       std::make_shared<QuakeList>(static_cast<std::size_t>(quake_count));
 

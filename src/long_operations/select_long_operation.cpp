@@ -171,7 +171,7 @@ NormalSelectLongOperation::NormalSelectLongOperation(
     RLMachine& machine,
     const libreallive::SelectElement& commandElement)
     : SelectLongOperation(machine, commandElement),
-      text_window_(machine.GetSystem().text().GetCurrentWindow()) {
+      text_window_(machine.GetSystem().text().GetCurrentMwnd()) {
   static DomainLogger logger("NormalSelectLongOperation");
 
   TextSystem& ts = machine.GetSystem().text();
@@ -289,7 +289,7 @@ ButtonSelectLongOperation::ButtonSelectLongOperation(
 
   // Retrieve the parameters needed to render as a color mask.
   std::shared_ptr<TextWindow> window =
-      machine.GetSystem().text().GetCurrentWindow();
+      machine.GetSystem().text().GetCurrentMwnd();
   window_bg_colour_ = window->GetColour();
   window_filter_ = window->GetIsFilter();
 

@@ -28,7 +28,9 @@
 
 #include "core/colour.hpp"
 
+#include <cstddef>
 #include <memory>
+#include <vector>
 
 class Point;
 class Rect;
@@ -36,17 +38,20 @@ class RLMachine;
 class Size;
 class System;
 class SDLSurface;
+class GraphicsObject;
+class ISceneRenderer;
+struct ParentObjState;
 
 class TextWaku {
  public:
   TextWaku(bool should_center_w, bool should_center_h);
   virtual ~TextWaku() = default;
 
-  virtual void Execute() = 0;
+  virtual void Execute();
   virtual void Render(Point box_location,
                       Size namebox_size,
                       RGBAColour colour,
-                      bool is_filter) = 0;
+                      bool is_filter);
 
   // Possibly returns the size if this TextWaku object has a known size on
   // screen.
@@ -63,8 +68,15 @@ class TextWaku {
   virtual void SetMainSurface(std::shared_ptr<const SDLSurface> surface) {}
   virtual void SetFilterSurface(std::shared_ptr<const SDLSurface> surface) {}
 
-  std::pair<bool, bool> ShouldCenter() const;
+  // Fixed-size legacy object_list; touching a slot allocates it lazily.
+  std::shared_ptr<GraphicsObject> TouchObject(std::size_t index);
+  // Template changes reinitialize contents while preserving slot handles.
+  void ResetObjectsFrom(TextWaku& previous);
+  static ParentObjState ObjectParent(const Point& window_origin);
 
- private:
   bool center_w_, center_h_;
+
+  std::vector<std::shared_ptr<GraphicsObject>> objects_;
+
+  std::shared_ptr<ISceneRenderer> renderer_;
 };

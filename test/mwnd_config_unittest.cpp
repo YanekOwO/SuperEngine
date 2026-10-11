@@ -28,6 +28,18 @@
 
 #include <gtest/gtest.h>
 
+TEST(MwndConfigTest, SiglusWakuObjectsUseLegacyDefaultAndExplicitCounts) {
+  Gameexe gameexe;
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(0).object_count, 1);
+  gameexe.parseLine("WAKU.CNT = 2");
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(1).object_count, 1);
+  gameexe.parseLine("WAKU.OBJECT.CNT = 3");
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(1).object_count, 3);
+  gameexe.SetAt("WAKU.OBJECT.CNT", {0});
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(0).object_count, 0);
+  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWaku(0).object_count, 0);
+}
+
 TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   Gameexe gameexe;
   gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");

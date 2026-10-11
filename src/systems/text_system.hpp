@@ -49,23 +49,12 @@ class RLMachine;
 class Size;
 class SDLSurface;
 class System;
+class Stage;
 class TextKeyCursor;
 class TextPage;
 class TextWindow;
 class ITextSystem;
 class IFont;
-
-namespace text_system_detail {
-
-struct KoeReplayConfig {
-  std::string icon_name;
-  int x_offset = 0;
-  int y_offset = 0;
-};
-
-std::optional<KoeReplayConfig> ReadKoeReplayConfig(Gameexe& gexe);
-
-}  // namespace text_system_detail
 
 // Global variables written to disk.
 struct TextSystemGlobals {
@@ -125,6 +114,7 @@ class TextSystem final : public EventListener {
 
  public:
   TextSystem(System& system,
+             Stage& stage,
              Gameexe& gexe,
              std::unique_ptr<ITextSystem> impl,
              MwndConfig mwnd_config);
@@ -146,15 +136,17 @@ class TextSystem final : public EventListener {
   void SetVisualOverride(int win_number, bool show_window);
   void SetVisualOverrideAll(bool show_window);
   void ClearVisualOverrides();
+  bool ShowWindow(int win_num) const;
 
   // Text window, aka mwnd. Consists of waku decoration and TextPage layout
   // management
-  std::shared_ptr<TextWindow> GetTextWindow(int text_window_number);
-  std::shared_ptr<TextWindow> GetTextWindow(
+  std::shared_ptr<TextWindow> GetMwnd(int text_window_number);
+  std::shared_ptr<TextWindow> GetMwnd(
       int num,
       std::function<std::shared_ptr<TextWindow>()> orelse);
   bool HasCurrentWindow() const;
-  std::shared_ptr<TextWindow> GetCurrentWindow();
+  std::shared_ptr<TextWindow> GetCurrentMwnd();
+
   const MwndConfig& mwnd_config() const { return mwnd_config_; }
   using MwndCallHandler =
       std::function<void(const MwndConfig::CallTarget& target)>;
@@ -213,6 +205,9 @@ class TextSystem final : public EventListener {
 
   // Resets the text page in the current_set
   void NewPageOnWindow(int window);
+  void NewPageOnWindow(std::shared_ptr<TextWindow> window);
+
+  TextPage& GetPageOnWindow(std::shared_ptr<TextWindow> window);
 
   // Get the active page. This function will return
   // windows_[active_window_].page().
@@ -342,8 +337,6 @@ class TextSystem final : public EventListener {
  private:
   void UpdateWindowsForChangeToWindowAttr();
 
-  bool ShowWindow(int win_num) const;
-
   void CheckAndSetBool(Gameexe& gexe, const std::string& key, bool& out);
 
   // Reduces the number of page snapshots in previous_page_sets_ down to a
@@ -380,11 +373,8 @@ class TextSystem final : public EventListener {
   // Sets which window is the current active window.
   int active_window_;
 
-  // Type of the Window storage
-  typedef std::map<int, std::shared_ptr<TextWindow>> WindowMap;
-
-  // Storage of active windows
-  WindowMap text_window_;
+  // The stage owns the active text windows.
+  Stage& stage_;
   MwndConfig mwnd_config_;
   MwndCallHandler mwnd_call_handler_;
   MwndActionHandler mwnd_action_handler_;

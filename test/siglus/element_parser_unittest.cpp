@@ -279,7 +279,7 @@ TEST_F(ElementParserTest,
        FrameActionCounterGetterContinuesIntoCounterCommands) {
   EXPECT_EQ(chain(79, 0, 1), "frame_action.counter().get()");
   EXPECT_EQ(chain(38, 2, -1, 0, 52, 0, 1),
-            "stage.front.object[int:0].frame_action.counter().get()");
+            "stage.front.object[int:0].frame_action().counter().get()");
 
   ElementCode elm{53, -1, 8, 0, 0};
   elm.ForceBind({0, {v(17)}});
@@ -437,7 +437,8 @@ TEST_F(ElementParserTest, MaskOperationsUseNativeCalls) {
   {
     ElementCode elm{135, -1, 1, 2, 0};
     elm.ForceBind({0, {v(640), v(350), v(0), v(2)}});
-    EXPECT_EQ(chain(elm), "mask[int:1].x_eve.set(int:640,int:350,int:0,int:2)");
+    EXPECT_EQ(chain(elm),
+              "mask[int:1].x_eve().set(int:640,int:350,int:0,int:2)");
   }
 }
 
@@ -513,37 +514,37 @@ TEST_F(ElementParserTest, ObjectGetSetUsesSimpleGetterAndSetterCalls) {
 
 TEST_F(ElementParserTest, ObjectChildList) {
   EXPECT_EQ(chain(37, 2, -1, 0, 93, -1, 1, 35),
-            "stage.back.object[int:0].child[int:1].init()");
+            "stage.back.object[int:0].child()[int:1].init()");
 
   {
     ElementCode elm{37, 2, -1, 0, 93, 4};
     elm.ForceBind({0, {v(2)}});
-    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child.resize(int:2)");
+    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child().resize(int:2)");
   }
   {
     ElementCode elm{37, 2, -1, 0, 93, 3};
     elm.ForceBind({0, {}});
-    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child.size()");
+    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child().size()");
   }
 }
 
 TEST_F(ElementParserTest, ObjectFList) {
   ElementCode elm{37, 2, -1, 40, 111, 2};
   elm.ForceBind({0, {v(1)}});
-  EXPECT_EQ(chain(elm), "stage.back.object[int:40].F.resize(int:1)");
+  EXPECT_EQ(chain(elm), "stage.back.object[int:40].F().resize(int:1)");
 }
 
 TEST_F(ElementParserTest, ObjectRepnoAlphaLists) {
   {
     ElementCode elm{38, 2, -1, 0, 141, 2};
     elm.ForceBind({0, {v(1)}});
-    EXPECT_EQ(chain(elm), "stage.front.object[int:0].tr_rep.resize(int:1)");
+    EXPECT_EQ(chain(elm), "stage.front.object[int:0].tr_rep().resize(int:1)");
   }
   {
     ElementCode elm{38, 2, -1, 0, 140, -1, 0, 0};
     elm.ForceBind({0, {v(128), v(1000), v(0), v(0)}});
     EXPECT_EQ(chain(elm),
-              "stage.front.object[int:0].tr_rep_eve[int:0].set(int:128,int:"
+              "stage.front.object[int:0].tr_rep_eve()[int:0].set(int:128,int:"
               "1000,int:0,int:0)");
   }
 }
@@ -551,9 +552,10 @@ TEST_F(ElementParserTest, ObjectRepnoAlphaLists) {
 TEST_F(ElementParserTest, ObjectRepnoEventTurn) {
   ElementCode elm{37, 2, -1, 109, 112, -1, 0, 2};
   elm.ForceBind({0, {v(0), v(20), v(1000), v(0), v(2)}});
-  EXPECT_EQ(chain(elm),
-            "stage.back.object[int:109].x_rep_eve[int:0].turn(int:0,int:20,int:"
-            "1000,int:0,int:2)");
+  EXPECT_EQ(
+      chain(elm),
+      "stage.back.object[int:109].x_rep_eve()[int:0].turn(int:0,int:20,int:"
+      "1000,int:0,int:2)");
 }
 
 TEST_F(ElementParserTest, BgmTable) {
@@ -713,6 +715,21 @@ TEST_F(ElementParserTest, WipeCommandMappings) {
   const auto* check_call = std::get_if<Call>(&check.chain.nodes.back().var);
   ASSERT_NE(check_call, nullptr);
   EXPECT_FALSE(check_call->await_result);
+}
+
+TEST_F(ElementParserTest, MwndObjectUsesGetterBeforeIndexing) {
+  EXPECT_EQ(chain(38, 3, -1, 1, 30, -1, 2, 35),
+            "stage.front.mwnd[int:1].object()[int:2].init()");
+  ElementCode setter{38, 3, -1, 1, 30, -1, 2, 93, -1, 0, 3};
+  setter.ForceBind({1, {v(42)}});
+  EXPECT_EQ(
+      chain(setter),
+      "stage.front.mwnd[int:1].object()[int:2].child()[int:0].set_x(int:42)");
+  ElementCode wait{38, 3, -1, 1, 54};
+  auto parsed = chain(wait);
+  EXPECT_EQ(parsed, "stage.front.mwnd[int:1].page()");
+  ASSERT_NE(last_call(parsed), nullptr);
+  EXPECT_TRUE(last_call(parsed)->await_result);
 }
 
 TEST_F(ElementParserTest, Mwnd) {

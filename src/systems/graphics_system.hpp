@@ -176,8 +176,12 @@ class GraphicsSystem : public EventListener {
 
   inline System& system() { return system_; }
 
-  inline void BindSceneRenderer(std::weak_ptr<ISceneRenderer> scene_renderer) {
+  inline void BindSceneRenderer(
+      std::shared_ptr<ISceneRenderer> scene_renderer) {
     scene_renderer_ = std::move(scene_renderer);
+  }
+  inline std::shared_ptr<ISceneRenderer> GetSceneRenderer() const {
+    return scene_renderer_;
   }
 
   // Screen Shaking
@@ -448,7 +452,7 @@ class GraphicsSystem : public EventListener {
 
   // Runtime-specific scene renderer. GraphicsSystem owns frame presentation,
   // while this object owns scene traversal and draw order.
-  std::weak_ptr<ISceneRenderer> scene_renderer_;
+  std::shared_ptr<ISceneRenderer> scene_renderer_;
 
   // Our parent system object.
   System& system_;

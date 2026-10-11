@@ -95,7 +95,9 @@ void rlSceneRenderer::RenderScene() {
     system.text().Render();
 }
 
-void rlSceneRenderer::RenderObject(GraphicsObject& root) {
+void rlSceneRenderer::RenderObject(GraphicsObject& root,
+                                   const MaskList* mask_list,
+                                   std::optional<ParentObjState> parent) {
   const auto render_object = [&](const auto& self, GraphicsObject& object,
                                  std::optional<ParentObjState> parent) -> void {
     if (!object.Param().visible())
@@ -117,7 +119,7 @@ void rlSceneRenderer::RenderObject(GraphicsObject& root) {
     }
   };
 
-  render_object(render_object, root, std::nullopt);
+  render_object(render_object, root, std::move(parent));
 }
 
 bool rlSceneRenderer::ShouldRenderObject(size_t obj_number,

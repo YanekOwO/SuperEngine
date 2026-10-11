@@ -27,14 +27,12 @@
 #include "systems/scene_renderer.hpp"
 
 #include <cstddef>
-#include <functional>
 #include <tuple>
 #include <vector>
 
 class RLMachine;
 class GraphicsObject;
 class Stage;
-class rlSceneRendererTest;
 
 class rlSceneRenderer final : public ISceneRenderer {
  public:
@@ -43,10 +41,12 @@ class rlSceneRenderer final : public ISceneRenderer {
   void ExecuteFrame() override;
   void RenderScene() override;
 
- private:
-  friend class rlSceneRendererTest;
+	void RenderObject(
+      GraphicsObject& object,
+      const MaskList* mask_list = nullptr,
+      std::optional<ParentObjState> parent = std::nullopt) override;
 
-  static void RenderObject(GraphicsObject& object);
+ private:
   bool ShouldRenderObject(size_t obj_number, const GraphicsObject& object);
 
   RLMachine& machine_;

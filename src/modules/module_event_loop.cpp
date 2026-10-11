@@ -56,7 +56,7 @@ struct rlm_pause : public RLOpcode<> {
   void operator()(RLMachine& machine) {
     TextSystem& text = machine.GetSystem().text();
     int windowNum = text.active_window();
-    std::shared_ptr<TextWindow> textWindow = text.GetTextWindow(windowNum);
+    std::shared_ptr<TextWindow> textWindow = text.GetMwnd(windowNum);
 
     if (textWindow->action_on_pause()) {
       machine.PushLongOperation(std::make_shared<NewParagraphAfterLongop>(

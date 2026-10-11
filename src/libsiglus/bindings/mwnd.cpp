@@ -37,6 +37,7 @@
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
 #include "vm/future.hpp"
+#include "vm/object.hpp"
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
@@ -44,10 +45,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -56,6 +59,27 @@ namespace sb = srbind;
 namespace sr = serilang;
 
 namespace {
+
+struct MwndObjectList {
+  std::shared_ptr<TextWindow> window;
+  std::function<sr::Value(std::shared_ptr<GraphicsObject>)> make_object;
+
+  TextWaku& Resolve() const {
+    if (!window || !window->GetTextboxWaku())
+      throw sr::RuntimeError("mwnd.object requires a message-window waku");
+    return *window->GetTextboxWaku();
+  }
+
+  sr::Value Get(int index) const {
+    auto& waku = Resolve();
+    if (index < 0 || static_cast<std::size_t>(index) >= waku.objects_.size())
+      throw sr::RuntimeError("mwnd.object index out of range: " +
+                             std::to_string(index));
+    if (!make_object)
+      throw sr::RuntimeError("mwnd.object requires the Object binding");
+    return make_object(waku.TouchObject(static_cast<std::size_t>(index)));
+  }
+};
 
 bool ConfigFlag(const std::shared_ptr<Gameexe>& cfg, std::string const& key) {
   if (!cfg)
@@ -84,12 +108,6 @@ bool AutoModeEnabled(System* system, const std::shared_ptr<Gameexe>& cfg) {
          (system->text().auto_mode() != 0 || ConfigFlag(cfg, "auto_mode"));
 }
 
-int CurrentPageCharCount(System* system) {
-  if (!system)
-    return 0;
-  return system->text().GetCurrentPage().number_of_chars_on_page();
-}
-
 struct MwndMessageState {
   bool block_started = false;
   bool clear_ready = false;
@@ -106,21 +124,19 @@ struct MwndMessageState {
     current_koe_no_auto_mode = false;
   }
 
-  void MarkNovelClear(System& system) {
+  std::string waku_file;
+  std::string filter_file;
+  std::optional<std::string> pending_ruby;
+
+  void MarkNovelClear(TextPage& page) {
     block_started = false;
-    auto_mode_base_chars =
-        system.text().GetCurrentPage().number_of_chars_on_page();
+    auto_mode_base_chars = page.number_of_chars_on_page();
     ClearKoe();
   }
-  void MarkMessageClearReady(System& system) {
+  void MarkMessageClearReady(TextPage& page) {
     clear_ready = true;
-    MarkNovelClear(system);
+    MarkNovelClear(page);
   }
-};
-
-struct WakuSelection {
-  int msg_waku_no = 0;
-  int name_waku_no = -1;
 };
 
 struct KoeCallParams {
@@ -156,11 +172,13 @@ class MwndWaitTask : public CoroutineTask {
 
   MwndWaitTask(sr::VM& vm,
                System* system,
+               std::shared_ptr<TextWindow> window,
                std::shared_ptr<Gameexe> local_config,
                std::shared_ptr<MwndMessageState> message_state,
                AfterWait after_wait)
       : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
         system_(system),
+        window_(std::move(window)),
         local_config_(std::move(local_config)),
         message_state_(std::move(message_state)),
         after_wait_(after_wait) {}
@@ -171,7 +189,7 @@ class MwndWaitTask : public CoroutineTask {
       co_return 0;
     }
 
-    PauseGuard pause(system_, after_wait_ == AfterWait::Clear);
+    PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
 
     try {
       TextSystem& text = system_->text();
@@ -211,12 +229,12 @@ class MwndWaitTask : public CoroutineTask {
  private:
   class PauseGuard {
    public:
-    PauseGuard(System* system, bool page_icon)
-        : text_(system ? &system->text() : nullptr) {
-      if (text_) {
-        text_->set_in_pause_state(true);
-        text_->GetCurrentWindow()->ShowWaitIcon(page_icon);
-      }
+    PauseGuard(TextSystem& text,
+               std::shared_ptr<TextWindow> window,
+               bool page_icon)
+        : text_(&text), window_(std::move(window)) {
+      text_->set_in_pause_state(true);
+      window_->ShowWaitIcon(page_icon);
     }
 
     ~PauseGuard() { Reset(); }
@@ -225,14 +243,14 @@ class MwndWaitTask : public CoroutineTask {
       if (!text_)
         return;
 
-      if (text_->HasCurrentWindow())
-        text_->GetCurrentWindow()->HideWaitIcon();
+      window_->HideWaitIcon();
       text_->set_in_pause_state(false);
       text_ = nullptr;
     }
 
    private:
     TextSystem* text_;
+    std::shared_ptr<TextWindow> window_;
   };
 
   void FinishWait() {
@@ -242,14 +260,14 @@ class MwndWaitTask : public CoroutineTask {
       case AfterWait::None:
         return;
       case AfterWait::Paragraph: {
-        message_state_->MarkNovelClear(*system_);
-        TextPage& page = system_->text().GetCurrentPage();
+        message_state_->MarkNovelClear(Page());
+        TextPage& page = Page();
         page.ResetIndentation();
         page.HardBrake();
         return;
       }
       case AfterWait::Clear:
-        message_state_->MarkMessageClearReady(*system_);
+        message_state_->MarkMessageClearReady(Page());
         return;
     }
   }
@@ -260,443 +278,358 @@ class MwndWaitTask : public CoroutineTask {
     if (configured_count > 0)
       return configured_count;
 
-    const int current_count =
-        system_->text().GetCurrentPage().number_of_chars_on_page();
+    const int current_count = Page().number_of_chars_on_page();
     if (!message_state_)
       return current_count;
     return std::max(current_count - message_state_->auto_mode_base_chars, 0);
   }
 
+  TextPage& Page() { return system_->text().GetPageOnWindow(window_); }
+
   System* system_;
+  std::shared_ptr<TextWindow> window_;
   std::shared_ptr<Gameexe> local_config_;
   std::shared_ptr<MwndMessageState> message_state_;
   AfterWait after_wait_;
 };
 
-struct MwndBindingState {
-  MwndBindingState(sr::VM& vm,
-                   System* system,
-                   std::shared_ptr<Gameexe> local_config)
-      : vm(vm),
-        system(system),
-        local_config(std::move(local_config)),
-        message_state(std::make_shared<MwndMessageState>()) {
-    if (system) {
-      const auto& config = system->text().mwnd_config();
-      const auto& window = config.GetWindow(config.default_window());
-      current_waku_set = window.waku_set;
-      current_name_waku_set =
-          window.namebox.has_waku ? window.namebox.waku_set : -1;
-      InitWakuFiles();
-    }
-  }
+struct MwndHandle {
+  std::shared_ptr<TextWindow> mwnd;
+};
 
-  sr::Value Wait(MwndWaitTask::AfterWait after_wait) {
-    auto wait_task = std::make_unique<MwndWaitTask>(vm, system, local_config,
-                                                    message_state, after_wait);
-    return sr::Value(pending_waits.MakeFuture(*vm.gc_, std::move(wait_task)));
-  }
+struct MwndArrayHandle {};
 
-  sr::Value WaitForR() {
-    if (!system)
-      return Wait(MwndWaitTask::AfterWait::None);
-    const bool novel_mode =
-        system->text().GetCurrentWindow()->action_on_pause();
-    return Wait(novel_mode ? MwndWaitTask::AfterWait::Paragraph
-                           : MwndWaitTask::AfterWait::Clear);
-  }
+// Weak keys keep bookkeeping from retaining discarded windows. Handles and
+// pending waits retain their selected window independently.
+struct MwndContext {
+  std::map<std::weak_ptr<TextWindow>,
+           std::shared_ptr<MwndMessageState>,
+           std::owner_less<std::weak_ptr<TextWindow>>>
+      messages;
+  PendingCoroutineTasks pending_waits;
 
-  void Open() {
-    window_open = true;
-    if (!system)
-      return;
-
-    TextSystem& text = system->text();
-    text.GetCurrentWindow()->SetVisible(true);
-  }
-
-  void Close() {
-    window_open = false;
-    if (!system)
-      return;
-
-    TextSystem& text = system->text();
-    text.set_in_pause_state(false);
-    text.HideTextWindow(text.active_window());
-  }
-
-  int CheckOpen() {
-    if (!system)
-      return window_open ? 1 : 0;
-    return system->text().GetCurrentWindow()->IsVisible() ? 1 : 0;
-  }
-
-  void SetWaku(std::optional<int> msg_waku_no,
-               std::optional<int> name_waku_no) {
-    if (!system) {
-      if (msg_waku_no)
-        current_waku_set = *msg_waku_no;
-      if (name_waku_no)
-        current_name_waku_set = *name_waku_no;
-      return;
-    }
-
-    TextSystem& text = system->text();
-    const int window_number = text.active_window();
-    const WakuSelection defaults = GetDefaultWakuSelection(window_number);
-    const int resolved_msg_waku = msg_waku_no.value_or(defaults.msg_waku_no);
-    const int resolved_name_waku = name_waku_no.value_or(defaults.name_waku_no);
-
-    current_waku_set = resolved_msg_waku;
-    current_name_waku_set = resolved_name_waku;
-    std::shared_ptr<TextWindow> window = text.GetCurrentWindow();
-    TextFactory waku_factory(text.mwnd_config());
-    window->SetTextboxWaku(
-        resolved_msg_waku,
-        waku_factory.CreateWaku(*system, *window, resolved_msg_waku, 0));
-    const auto& waku_config = text.mwnd_config().GetWaku(resolved_msg_waku);
-    current_waku_file = waku_config.main_file;
-    current_filter_file = waku_config.filter_file;
-    for (std::size_t i = 0;
-         i < waku_config.face_positions.size() && i < MwndConfig::kNumFaceSlots;
-         ++i) {
-      window->SetFaceSlotPosition(static_cast<int>(i),
-                                  waku_config.face_positions[i]);
-    }
-
-    if (resolved_name_waku >= 0 && window->GetNameMod() == 1) {
-      window->SetNameboxWaku(
-          resolved_name_waku,
-          waku_factory.CreateWaku(*system, *window, resolved_name_waku, 0));
-    }
-  }
-
-  void InitWakuFiles() {
-    if (!system)
-      return;
-    const auto& config = system->text().mwnd_config();
-    if (!config.HasWaku(current_waku_set))
-      return;
-    const auto& waku = config.GetWaku(current_waku_set);
-    SetWakuFile(waku.main_file);
-    SetFilterFile(waku.filter_file);
-  }
-
-  void SetWakuFile(std::string file) {
-    current_waku_file = std::move(file);
-    if (system)
-      system->text().GetCurrentWindow()->SetWakuMainFile(current_waku_file);
-  }
-
-  void SetFilterFile(std::string file) {
-    current_filter_file = std::move(file);
-    if (system)
-      system->text().GetCurrentWindow()->SetWakuFilterFile(current_filter_file);
-  }
-
-  WakuSelection GetDefaultWakuSelection(int window_number) {
-    auto [it, inserted] = default_waku_selections.try_emplace(window_number);
+  std::shared_ptr<MwndMessageState> GetState(
+      const std::shared_ptr<TextWindow>& window,
+      const MwndConfig& config) {
+    std::erase_if(messages,
+                  [](const auto& entry) { return entry.first.expired(); });
+    auto [it, inserted] = messages.try_emplace(window);
     if (inserted) {
-      const MwndConfig::Window& config =
-          system->text().mwnd_config().GetWindow(window_number);
-      it->second.msg_waku_no = config.waku_set;
-      it->second.name_waku_no =
-          config.namebox.has_waku ? config.namebox.waku_set : -1;
+      it->second = std::make_shared<MwndMessageState>();
+      if (config.HasWaku(window->waku_set())) {
+        const auto& waku = config.GetWaku(window->waku_set());
+        it->second->waku_file = waku.main_file;
+        it->second->filter_file = waku.filter_file;
+      }
     }
     return it->second;
   }
-
-  void Print(std::string text) {
-    if (!system || text.empty())
-      return;
-
-    TextPage& page = system->text().GetCurrentPage();
-    for (auto cur = text.cbegin(), next = cur; cur != text.cend(); cur = next) {
-      next = cur;
-      utf8::next(next, text.cend());
-      const std::string current(cur, next);
-      const std::string rest(next, text.cend());
-      page.Character(current, rest);
-    }
-  }
-
-  void RubyStart(std::string ruby) {
-    pending_ruby = std::move(ruby);
-    if (system)
-      system->text().GetCurrentPage().MarkRubyBegin();
-  }
-
-  void RubyEnd() {
-    auto ruby = std::exchange(pending_ruby, std::nullopt);
-    if (system && ruby)
-      system->text().GetCurrentPage().DisplayRubyText(*ruby);
-  }
-
-  void RepPos(int x, int y) {
-    glyph_render_offset = Point(x, y);
-    if (!system)
-      return;
-
-    system->text().GetCurrentPage().SetGlyphRenderOffset(glyph_render_offset);
-  }
-
-  void RepPosDefault() {
-    glyph_render_offset = Point(0, 0);
-    if (!system)
-      return;
-
-    system->text().GetCurrentPage().ResetGlyphRenderOffset();
-  }
-
-  void PlayKoe(KoeCallParams params) {
-    const bool character_enabled =
-        !system || params.character < 0 ||
-        system->sound().ShouldUseKoeForCharacter(params.character) != 0;
-
-    if (message_state) {
-      message_state->current_koe = params.koe;
-      message_state->current_character = params.character;
-      message_state->current_koe_played = character_enabled;
-      message_state->current_koe_no_auto_mode = params.no_auto_mode;
-    }
-
-    if (!system)
-      return;
-
-    if (params.character >= 0)
-      system->sound().KoePlay(params.koe, params.character);
-    else
-      system->sound().KoePlay(params.koe);
-    system->text().GetCurrentPage().KoeMarker(params.koe);
-  }
-
-  sr::Value WaitKoe(sr::VM& vm, bool key_skip) {
-    auto done = [system = system] {
-      return !system || !system->sound().KoePlaying();
-    };
-    return MakePollingWaitFuture(vm, std::move(done), key_skip,
-                                 system ? system->event_ptr().get() : nullptr);
-  }
-
-  sr::VM& vm;
-  System* system;
-  std::shared_ptr<Gameexe> local_config;
-  std::shared_ptr<MwndMessageState> message_state;
-  bool window_open = false;
-  int current_waku_set = 0;
-  int current_name_waku_set = -1;
-  Point glyph_render_offset = Point(0, 0);
-  std::string current_waku_file;
-  std::string current_filter_file;
-  std::optional<std::string> pending_ruby;
-  std::unordered_map<int, WakuSelection> default_waku_selections;
-  PendingCoroutineTasks pending_waits;
 };
 
 }  // namespace
 
 void BindMwnd(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
+  System* sys = runtime.system.get();
+  if (!sys || !runtime.stage)
+    throw std::runtime_error("Mwnd bindings require a system and stage");
+
+  auto get = [sys](const MwndHandle* h) {
+    return h->mwnd ? h->mwnd : sys->text().GetCurrentMwnd();
+  };
+  auto page = [sys, get](const MwndHandle* h) -> TextPage& {
+    return sys->text().GetPageOnWindow(get(h));
+  };
+  auto context = std::make_shared<MwndContext>();
+  auto state = [sys, get, context](const MwndHandle* h) {
+    return context->GetState(get(h), sys->text().mwnd_config());
+  };
+  auto wait = [sys, get, context, cfg = runtime.local_config](
+                  MwndHandle* h, sr::VM& vm,
+                  MwndWaitTask::AfterWait after_wait) {
+    auto window = get(h);
+    auto message_state = context->GetState(window, sys->text().mwnd_config());
+    auto task = std::make_unique<MwndWaitTask>(
+        vm, sys, std::move(window), cfg, std::move(message_state), after_wait);
+    return sr::Value(
+        context->pending_waits.MakeFuture(*vm.gc_, std::move(task)));
+  };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  sb::class_<MwndBindingState> mwnd_cls(m, "Mwnd", false);
-  auto mwnd =
-      mwnd_cls.inst("mwnd", vm, runtime.system.get(), runtime.local_config);
-  auto close = [](MwndBindingState* state) { state->Close(); };
-  auto open = [](MwndBindingState* state) { state->Open(); };
+  sb::class_<MwndHandle> mwnd(m, "Mwnd");
+  mwnd.def(sb::init([sys](int index) {
+             if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
+               throw sr::RuntimeError("Invalid message-window number: " +
+                                      std::to_string(index));
+             return std::make_unique<MwndHandle>(sys->text().GetMwnd(index));
+           }),
+           sb::arg("index"));
+  mwnd.inst("mwnd", nullptr);  // Top-level mwnd resolves the active window.
+
+  sb::class_<MwndArrayHandle> array(m, "MwndArray");
+  array.def(sb::init<>());
+  array.add_gc_root(mwnd);
+  array.def(
+      "__getitem__",
+      [sys, mwnd](MwndArrayHandle*, int index) mutable {
+        if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
+          throw sr::RuntimeError("Invalid message-window number: " +
+                                 std::to_string(index));
+        return sr::Value(mwnd.make_inst(sys->text().GetMwnd(index)));
+      },
+      sb::arg("index"));
+  auto close_all = [sys, stage = runtime.stage.get()](MwndArrayHandle*) {
+    sys->text().set_in_pause_state(false);
+    for (const auto& [id, window] : stage->mwnd)
+      if (window)
+        window->SetVisible(false);
+  };
+  array.def("close", close_all);
+  array.def("close_nowait", close_all);
+  array.def("close_wait", close_all);
+
+  auto open = [get](MwndHandle* h) { get(h)->SetVisible(true); };
+  auto close = [get, sys](MwndHandle* h) {
+    sys->text().set_in_pause_state(false);
+    get(h)->SetVisible(false);
+  };
   mwnd.def("open", open);
   mwnd.def("open_nowait", open);
   mwnd.def("open_wait", open);
-  mwnd.def("check_open", &MwndBindingState::CheckOpen);
-  mwnd.def(
-      "set_waku",
-      [](MwndBindingState* state, std::vector<sr::Value> args) {
-        CallPacket packet = CallPacket::DecodeFrom(std::move(args));
-        std::optional<int> msg_waku_no;
-        std::optional<int> name_waku_no;
-
-        if (packet.args.size() >= 1)
-          msg_waku_no = AsInt(packet.args[0]).value_or(0);
-        if (packet.args.size() >= 2)
-          name_waku_no = AsInt(packet.args[1]).value_or(-1);
-
-        state->SetWaku(msg_waku_no, name_waku_no);
-      },
-      sb::vararg);
-  mwnd.def("init_waku_file", &MwndBindingState::InitWakuFiles);
-  mwnd.def("set_waku_file", &MwndBindingState::SetWakuFile);
-  mwnd.def("get_waku_file",
-           [](MwndBindingState* state) { return state->current_waku_file; });
-  mwnd.def("init_filter_file", [](MwndBindingState* state) {
-    if (!state || !state->system)
-      return;
-    const auto& config = state->system->text().mwnd_config();
-    if (config.HasWaku(state->current_waku_set))
-      state->SetFilterFile(config.GetWaku(state->current_waku_set).filter_file);
-  });
-  mwnd.def("set_filter_file", &MwndBindingState::SetFilterFile);
-  mwnd.def("get_filter_file",
-           [](MwndBindingState* state) { return state->current_filter_file; });
+  mwnd.def("check_open",
+           [get](MwndHandle* h) { return get(h)->IsVisible() ? 1 : 0; });
   mwnd.def("close", close);
   mwnd.def("close_nowait", close);
   mwnd.def("close_wait", close);
-  mwnd.def("end_close", [](MwndBindingState*) {});
-  mwnd.def("msg_block", [](MwndBindingState* state) {
-    auto msgstate = state->message_state;
-    if (!msgstate)
-      return;
+  mwnd.def("end_close", [](MwndHandle*) {});
 
-    if (msgstate->block_started)
-      return;
+  sb::class_<MwndObjectList> object_list(m, "MwndObjectList", false);
+  object_list.def("__getitem__", &MwndObjectList::Get, sb::arg("index"));
+  object_list.def("size", [](const MwndObjectList* list) {
+    return static_cast<int>(list->Resolve().objects_.size());
+  });
+  object_list.def(
+      "resize",
+      [](MwndObjectList*, int) {
+        throw sr::RuntimeError("mwnd.object has a fixed size");
+      },
+      sb::arg("size"));
+  mwnd.add_gc_root(object_list);
+  // The Object binding is installed after Mwnd. Resolve its factory on access.
+  mwnd.def("object", [get, object_list, &runtime](MwndHandle* h) mutable {
+    return sr::Value(object_list.make_inst(get(h), runtime.make_object));
+  });
 
-    if (msgstate->clear_ready) {
-      auto* system = state->system;
-      if (!system)
-        return;
-
-      TextSystem& text = system->text();
-      const int active_window = text.active_window();
-      text.Snapshot();
-      text.GetTextWindow(active_window)->ClearWin();
-      text.NewPageOnWindow(active_window);
-
-      msgstate->clear_ready = false;
+  mwnd.def(
+      "set_waku",
+      [get, sys, state](MwndHandle* h, std::vector<sr::Value> args) {
+        CallPacket packet = CallPacket::DecodeFrom(std::move(args));
+        auto window = get(h);
+        const auto& config = sys->text().mwnd_config();
+        const auto& defaults = config.GetWindow(window->window_number());
+        const int msg_waku = packet.args.empty()
+                                 ? defaults.waku_set
+                                 : AsInt(packet.args[0]).value_or(0);
+        const int name_waku =
+            packet.args.size() < 2
+                ? (defaults.namebox.has_waku ? defaults.namebox.waku_set : -1)
+                : AsInt(packet.args[1]).value_or(-1);
+        TextFactory factory(config);
+        window->SetTextboxWaku(msg_waku,
+                               factory.CreateWaku(*sys, *window, msg_waku, 0));
+        const auto& waku = config.GetWaku(msg_waku);
+        auto message = state(h);
+        message->waku_file = waku.main_file;
+        message->filter_file = waku.filter_file;
+        for (std::size_t i = 0;
+             i < waku.face_positions.size() && i < MwndConfig::kNumFaceSlots;
+             ++i)
+          window->SetFaceSlotPosition(static_cast<int>(i),
+                                      waku.face_positions[i]);
+        if (name_waku >= 0 && window->GetNameMod() == 1)
+          window->SetNameboxWaku(
+              name_waku, factory.CreateWaku(*sys, *window, name_waku, 0));
+      },
+      sb::vararg);
+  mwnd.def("init_waku_file", [get, sys, state](MwndHandle* h) {
+    auto window = get(h);
+    const auto& config = sys->text().mwnd_config();
+    if (config.HasWaku(window->waku_set())) {
+      const auto& waku = config.GetWaku(window->waku_set());
+      window->SetWakuMainFile(waku.main_file);
+      window->SetWakuFilterFile(waku.filter_file);
+      state(h)->waku_file = waku.main_file;
+      state(h)->filter_file = waku.filter_file;
     }
+  });
+  mwnd.def("set_waku_file", [get, state](MwndHandle* h, std::string file) {
+    get(h)->SetWakuMainFile(file);
+    state(h)->waku_file = std::move(file);
+  });
+  mwnd.def("get_waku_file",
+           [state](MwndHandle* h) { return state(h)->waku_file; });
+  mwnd.def("init_filter_file", [get, sys, state](MwndHandle* h) {
+    auto window = get(h);
+    const auto& config = sys->text().mwnd_config();
+    if (config.HasWaku(window->waku_set())) {
+      const auto& file = config.GetWaku(window->waku_set()).filter_file;
+      window->SetWakuFilterFile(file);
+      state(h)->filter_file = file;
+    }
+  });
+  mwnd.def("set_filter_file", [get, state](MwndHandle* h, std::string file) {
+    get(h)->SetWakuFilterFile(file);
+    state(h)->filter_file = std::move(file);
+  });
+  mwnd.def("get_filter_file",
+           [state](MwndHandle* h) { return state(h)->filter_file; });
 
-    // Legacy Siglus also updates savepoints/backlog/read flags here. Those
-    // subsystems do not exist in the current Siglus runtime yet.
-    msgstate->block_started = true;
-    msgstate->auto_mode_base_chars = CurrentPageCharCount(state->system);
-  });
-  mwnd.def("msg_pp_block", [](MwndBindingState* state) {
-    auto msgstate = state->message_state;
-    if (!msgstate)
+  mwnd.def("msg_block", [get, sys, state, page](MwndHandle* h) {
+    auto message = state(h);
+    if (message->block_started)
       return;
-    msgstate->auto_mode_base_chars = CurrentPageCharCount(state->system);
+    if (message->clear_ready) {
+      auto window = get(h);
+      sys->text().Snapshot();
+      window->ClearWin();
+      sys->text().NewPageOnWindow(std::move(window));
+      message->clear_ready = false;
+    }
+    // Savepoints and read flags are not implemented in the Siglus runtime.
+    message->block_started = true;
+    message->auto_mode_base_chars = page(h).number_of_chars_on_page();
   });
-  mwnd.def("msg_wait", [](MwndBindingState*, sr::VM& vm) -> sr::Value {
-    return MakeResolvedFuture(*vm.gc_);
+  mwnd.def("msg_pp_block", [state, page](MwndHandle* h) {
+    state(h)->auto_mode_base_chars = page(h).number_of_chars_on_page();
   });
-  mwnd.def("pp", [](MwndBindingState* state, sr::VM&) -> sr::Value {
-    return state->Wait(MwndWaitTask::AfterWait::None);
+  mwnd.def("msg_wait",
+           [](MwndHandle*, sr::VM& vm) { return MakeResolvedFuture(*vm.gc_); });
+  mwnd.def("pp", [wait](MwndHandle* h, sr::VM& vm) {
+    return wait(h, vm, MwndWaitTask::AfterWait::None);
   });
-  mwnd.def("r", [](MwndBindingState* state, sr::VM& vm) -> sr::Value {
-    if (ConfigFlag(state->local_config, "ignore_r"))
+  mwnd.def("r", [get, wait, cfg = runtime.local_config](MwndHandle* h,
+                                                        sr::VM& vm) {
+    if (ConfigFlag(cfg, "ignore_r"))
       return MakeResolvedFuture(*vm.gc_);
-    return state->WaitForR();
+    return wait(h, vm,
+                get(h)->action_on_pause() ? MwndWaitTask::AfterWait::Paragraph
+                                          : MwndWaitTask::AfterWait::Clear);
   });
-  mwnd.def("page", [](MwndBindingState* state, sr::VM&) -> sr::Value {
-    return state->Wait(MwndWaitTask::AfterWait::Clear);
+  mwnd.def("page", [wait](MwndHandle* h, sr::VM& vm) {
+    return wait(h, vm, MwndWaitTask::AfterWait::Clear);
   });
-  mwnd.def("indent", [](MwndBindingState* state) {
-    if (state && state->system)
-      state->system->text().GetCurrentPage().SetIndentation();
+  mwnd.def("indent", [page](MwndHandle* h) { page(h).SetIndentation(); });
+  mwnd.def("clear_indent",
+           [page](MwndHandle* h) { page(h).ResetIndentation(); });
+  mwnd.def("nil", [page](MwndHandle* h) { page(h).HardBrake(); });
+  mwnd.def("nl", [page](MwndHandle* h) {
+    page(h).ResetIndentation();
+    page(h).HardBrake();
   });
-  mwnd.def("clear_indent", [](MwndBindingState* state) {
-    if (state && state->system)
-      state->system->text().GetCurrentPage().ResetIndentation();
-  });
-  mwnd.def("nil", [](MwndBindingState* state) {
-    if (state && state->system)
-      state->system->text().GetCurrentPage().HardBrake();
-  });
-  mwnd.def("nl", [](MwndBindingState* state) {
-    if (!state || !state->system)
-      return;
-    TextPage& page = state->system->text().GetCurrentPage();
-    page.ResetIndentation();
-    page.HardBrake();
-  });
-  mwnd.def("clear", [](MwndBindingState* state) {
-    if (!state || !state->system)
-      return;
-    state->message_state->MarkMessageClearReady(*state->system);
-  });
-  mwnd.def("novel_clear", [](MwndBindingState* state) {
-    if (!state || !state->system)
-      return;
-    state->message_state->MarkMessageClearReady(*state->system);
-  });
-  mwnd.def("clear_face", [](MwndBindingState* state) {
-    if (!state || !state->system)
-      return;
-    auto window = state->system->text().GetCurrentWindow();
+  auto clear = [state, page](MwndHandle* h) {
+    state(h)->MarkMessageClearReady(page(h));
+  };
+  mwnd.def("clear", clear);
+  mwnd.def("novel_clear", clear);
+  mwnd.def("clear_face", [get](MwndHandle* h) {
+    auto window = get(h);
     for (int i = 0; i < MwndConfig::kNumFaceSlots; ++i)
       window->FaceClose(i);
   });
   mwnd.def(
       "set_face",
-      [](MwndBindingState* state, std::vector<sr::Value> args) {
-        if (!state || !state->system || args.empty())
+      [get](MwndHandle* h, std::vector<sr::Value> args) {
+        if (args.empty())
           return;
-        int slot = 0;
-        std::string file;
-        if (args.size() == 1) {
-          file = AsString(args[0]);
-        } else {
-          slot = AsInt(args[0]).value_or(0);
-          file = AsString(args[1]);
-        }
+        const int slot = args.size() == 1 ? 0 : AsInt(args[0]).value_or(0);
+        const std::string file = AsString(args[args.size() == 1 ? 0 : 1]);
         if (slot >= 0 && slot < MwndConfig::kNumFaceSlots)
-          state->system->text().GetCurrentWindow()->FaceOpen(file, slot);
+          get(h)->FaceOpen(file, slot);
       },
       sb::vararg);
   mwnd.def(
       "print",
-      [](MwndBindingState* state, std::vector<sr::Value> args) {
+      [page](MwndHandle* h, std::vector<sr::Value> args) {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
-        std::string text =
-            packet.args.empty() ? std::string() : AsString(packet.args.front());
-        state->Print(std::move(text));
+        if (packet.args.empty())
+          return;
+        const std::string text = AsString(packet.args.front());
+        if (text.empty())
+          return;
+        TextPage& target = page(h);
+        for (auto cur = text.cbegin(), next = cur; cur != text.cend();
+             cur = next) {
+          next = cur;
+          utf8::next(next, text.cend());
+          target.Character(std::string(cur, next),
+                           std::string(next, text.cend()));
+        }
       },
       sb::vararg);
-  mwnd.def("ruby_start", &MwndBindingState::RubyStart);
-  mwnd.def("ruby_end", &MwndBindingState::RubyEnd);
+  mwnd.def("ruby_start", [page, state](MwndHandle* h, std::string ruby) {
+    state(h)->pending_ruby = std::move(ruby);
+    page(h).MarkRubyBegin();
+  });
+  mwnd.def("ruby_end", [page, state](MwndHandle* h) {
+    auto ruby = std::exchange(state(h)->pending_ruby, std::nullopt);
+    if (ruby)
+      page(h).DisplayRubyText(*ruby);
+  });
   mwnd.def(
       "rep_pos",
-      [](MwndBindingState* state, std::vector<sr::Value> args) {
+      [page](MwndHandle* h, std::vector<sr::Value> args) {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         const int x =
             packet.args.empty() ? 0 : AsInt(packet.args[0]).value_or(0);
         const int y =
             packet.args.size() < 2 ? 0 : AsInt(packet.args[1]).value_or(0);
-        state->RepPos(x, y);
+        page(h).SetGlyphRenderOffset(Point(x, y));
       },
       sb::vararg);
-  mwnd.def("rep_pos_default", &MwndBindingState::RepPosDefault);
+  mwnd.def("rep_pos_default",
+           [page](MwndHandle* h) { page(h).ResetGlyphRenderOffset(); });
   mwnd.def(
-      "size",
-      [](MwndBindingState* state, int size) {
-        if (!state->system)
-          return;
-        state->system->text().GetCurrentPage().FontSize(size);
-      },
+      "size", [page](MwndHandle* h, int size) { page(h).FontSize(size); },
       sb::arg("size"));
-  mwnd.def("size_default", [](MwndBindingState* state) {
-    if (!state->system)
-      return;
-    state->system->text().GetCurrentPage().DefaultFontSize();
-  });
-  mwnd.def(
-      "koe",
-      [](MwndBindingState* state, std::vector<sr::Value> args) {
-        state->PlayKoe(KoeCallParams::ParseFrom(std::move(args)));
-      },
-      sb::vararg);
+  mwnd.def("size_default",
+           [page](MwndHandle* h) { page(h).DefaultFontSize(); });
+
+  auto play_koe = [sys, state, page](MwndHandle* h,
+                                     std::vector<sr::Value> args) {
+    const auto params = KoeCallParams::ParseFrom(std::move(args));
+    auto message = state(h);
+    message->current_koe = params.koe;
+    message->current_character = params.character;
+    message->current_koe_played =
+        params.character < 0 ||
+        sys->sound().ShouldUseKoeForCharacter(params.character) != 0;
+    message->current_koe_no_auto_mode = params.no_auto_mode;
+    if (params.character >= 0)
+      sys->sound().KoePlay(params.koe, params.character);
+    else
+      sys->sound().KoePlay(params.koe);
+    page(h).KoeMarker(params.koe);
+  };
+  mwnd.def("koe", play_koe, sb::vararg);
+  auto wait_koe = [sys](sr::VM& vm, bool key_skip) {
+    return MakePollingWaitFuture(
+        vm, [sys] { return !sys->sound().KoePlaying(); }, key_skip,
+        sys->event_ptr().get());
+  };
   mwnd.def(
       "koe_play_wait",
-      [](MwndBindingState* state, sr::VM& vm,
-         std::vector<sr::Value> args) -> sr::Value {
-        state->PlayKoe(KoeCallParams::ParseFrom(std::move(args)));
-        return state->WaitKoe(vm, false);
+      [play_koe, wait_koe](MwndHandle* h, sr::VM& vm,
+                           std::vector<sr::Value> args) {
+        play_koe(h, std::move(args));
+        return wait_koe(vm, false);
       },
       sb::vararg);
   mwnd.def(
       "koe_play_wait_key",
-      [](MwndBindingState* state, sr::VM& vm,
-         std::vector<sr::Value> args) -> sr::Value {
-        state->PlayKoe(KoeCallParams::ParseFrom(std::move(args)));
-        return state->WaitKoe(vm, true);
+      [play_koe, wait_koe](MwndHandle* h, sr::VM& vm,
+                           std::vector<sr::Value> args) {
+        play_koe(h, std::move(args));
+        return wait_koe(vm, true);
       },
       sb::vararg);
 }

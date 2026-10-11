@@ -53,6 +53,8 @@ void TextWakuNormal::AddButton(std::string btn_name,
 void TextWakuNormal::Execute() {
   for (auto& btn : buttons_)
     btn.btn->Execute();
+
+  TextWaku::Execute();
 }
 
 void TextWakuNormal::Render(Point box_location,
@@ -155,6 +157,8 @@ void TextWakuNormal::Render(Point box_location,
       }
     }
   }
+
+  TextWaku::Render(box_location, namebox_size, colour, is_filter);
 }
 
 Size TextWakuNormal::GetSize(const Size& text_surface) const {

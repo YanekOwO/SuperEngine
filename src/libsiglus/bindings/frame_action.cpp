@@ -28,6 +28,8 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "srbind/srbind.hpp"
+#include "systems/text_waku.hpp"
+#include "systems/text_window.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
 #include "vm/object.hpp"
@@ -46,7 +48,7 @@ namespace sb = srbind;
 
 namespace {
 
-// Callbacks leave the object tree and channel lists intact during traversal.
+// Snapshot channels and children: a callback can reset its enclosing waku.
 template <typename Visitor>
 void VisitActions(const std::shared_ptr<FrameAction>& global_action,
                   FrameActionList& global_channels,
@@ -62,9 +64,11 @@ void VisitActions(const std::shared_ptr<FrameAction>& global_action,
     if (!object)
       return;
     visit_action(object->frame_action_, object, background);
-    for (const auto& action : object->frame_action_list_)
+    const auto channels = object->frame_action_list_;
+    for (const auto& action : channels)
       visit_action(action, object, background);
-    for (const auto& child : object->GetChildren())
+    const auto children = object->GetChildren();
+    for (const auto& child : children)
       self(self, child, background);
   };
 
@@ -75,6 +79,18 @@ void VisitActions(const std::shared_ptr<FrameAction>& global_action,
   for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
     for (const auto& object : stage.objects[layer])
       visit_object(visit_object, object, layer == kLayerBg);
+  }
+
+  for (const auto& [id, window] : stage.mwnd) {
+    if (!window)
+      continue;
+    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
+      if (!waku)
+        continue;
+
+      for (const auto& obj : waku->objects_)
+        visit_object(visit_object, obj, false);
+    }
   }
 }
 

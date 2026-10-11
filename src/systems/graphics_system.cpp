@@ -375,8 +375,8 @@ const ObjectSettings& GraphicsSystem::GetObjectSettings(const int obj_num) {
 // -----------------------------------------------------------------------
 
 void GraphicsSystem::DrawFrame() {
-  if (auto renderer = scene_renderer_.lock())
-    renderer->RenderScene();
+  if (scene_renderer_)
+    scene_renderer_->RenderScene();
 }
 
 // -----------------------------------------------------------------------
@@ -524,8 +524,8 @@ std::string GraphicsSystem::ComposeWindowTitle() const {
 // -----------------------------------------------------------------------
 
 void GraphicsSystem::ExecuteGraphicsSystem() {
-  if (auto renderer = scene_renderer_.lock())
-    renderer->ExecuteFrame();
+  if (scene_renderer_)
+    scene_renderer_->ExecuteFrame();
 
   if (mouse_cursor_)
     mouse_cursor_->Execute();

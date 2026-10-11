@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "core/gameexe.hpp"
+#include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
 #include "modules/jump.hpp"
@@ -62,21 +63,21 @@ const int FULLWIDTH_B = 0xFF22;
 const int FULLWIDTH_ZERO = 0xFF10;
 const int FULLWIDTH_NINE = 0xFF19;
 
-namespace {
-
 constexpr int kSeparateNameWindowMode = 1;
 
-std::pair<RGBAColour, bool> ParseRGBAF(const std::vector<int>& attr) {
+static std::pair<RGBAColour, bool> ParseRGBAF(const std::vector<int>& attr) {
   ASSERTX_GE(attr.size(), 5);
   return {RGBAColour(attr.at(0), attr.at(1), attr.at(2), attr.at(3)),
           static_cast<bool>(attr.at(4))};
 }
 
-}  // namespace
+struct KoeReplayConfig {
+  std::string icon_name;
+  int x_offset = 0;
+  int y_offset = 0;
+};
 
-namespace text_system_detail {
-
-std::optional<KoeReplayConfig> ReadKoeReplayConfig(Gameexe& gexe) {
+static std::optional<KoeReplayConfig> ReadKoeReplayConfig(Gameexe& gexe) {
   GameexeInterpretObject replay_icon(gexe("KOEREPLAYICON"));
   auto name = replay_icon("NAME").Str();
   if (!name || name->empty())
@@ -94,13 +95,10 @@ std::optional<KoeReplayConfig> ReadKoeReplayConfig(Gameexe& gexe) {
   return config;
 }
 
-}  // namespace text_system_detail
-
-namespace {
-
-std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(System& system,
-                                                              Gameexe& gexe) {
-  auto config = text_system_detail::ReadKoeReplayConfig(gexe);
+static std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(
+    System& system,
+    Gameexe& gexe) {
+  auto config = ReadKoeReplayConfig(gexe);
   if (!config)
     return nullptr;
 
@@ -109,8 +107,6 @@ std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(System& system,
   koe->repos = Size(config->x_offset, config->y_offset);
   return koe;
 }
-
-}  // namespace
 
 // -----------------------------------------------------------------------
 // TextSystemGlobals
@@ -138,6 +134,7 @@ TextSystemGlobals::TextSystemGlobals(Gameexe& gexe,
 // TextSystem
 // -----------------------------------------------------------------------
 TextSystem::TextSystem(System& system,
+                       Stage& stage,
                        Gameexe& gexe,
                        std::unique_ptr<ITextSystem> impl,
                        MwndConfig mwnd_config)
@@ -149,6 +146,7 @@ TextSystem::TextSystem(System& system,
       message_no_wait_(false),
       script_message_no_wait_(false),
       active_window_(0),
+      stage_(stage),
       mwnd_config_(std::move(mwnd_config)),
       is_reading_backlog_(false),
       current_pageset_(),
@@ -200,16 +198,15 @@ TextSystem::TextSystem(System& system,
 
 TextSystem::~TextSystem() {
   font_cache_.clear();
-  text_window_.clear();
   text_impl_->QuitSystem();
 }
 
 void TextSystem::ExecuteTextSystem() {
   // Check to see if the cursor is displayed
   if (ShowWindow(active_window_)) {
-    WindowMap::iterator it = text_window_.find(active_window_);
-    if (it != text_window_.end() && it->second->IsVisible() &&
-        in_pause_state_ && !IsReadingBacklog()) {
+    auto it = stage_.mwnd.find(active_window_);
+    if (it != stage_.mwnd.end() && it->second->IsVisible() && in_pause_state_ &&
+        !IsReadingBacklog()) {
       if (!text_key_cursor_)
         SetKeyCursor(0);
 
@@ -218,79 +215,66 @@ void TextSystem::ExecuteTextSystem() {
   }
 
   // Let each window update any TextWindowButton s.
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    if (ShowWindow(it->first)) {
-      it->second->Execute();
-    }
-  }
+  for (auto& [id, mwnd] : stage_.mwnd)
+    mwnd->Execute(ShowWindow(id));
 }
 
 void TextSystem::Render() {
-  if (system_visible()) {
-    for (WindowMap::iterator it = text_window_.begin();
-         it != text_window_.end(); ++it) {
-      if (ShowWindow(it->first)) {
-        it->second->Render();
-      }
-    }
+  if (!system_visible())
+    return;
+  for (auto& [id, mwnd] : stage_.mwnd) {
+    if (ShowWindow(id))
+      mwnd->Render();
+  }
 
-    if (ShowWindow(active_window_)) {
-      WindowMap::iterator it = text_window_.find(active_window_);
+  if (ShowWindow(active_window_)) {
+    auto it = stage_.mwnd.find(active_window_);
 
-      if (it != text_window_.end() && it->second->IsVisible() &&
-          in_pause_state_ && !IsReadingBacklog()) {
-        if (!text_key_cursor_)
-          SetKeyCursor(0);
+    if (it != stage_.mwnd.end() && it->second->IsVisible() && in_pause_state_ &&
+        !IsReadingBacklog()) {
+      if (!text_key_cursor_)
+        SetKeyCursor(0);
 
-        text_key_cursor_->Render(*it->second);
-      }
+      text_key_cursor_->Render(*it->second);
     }
   }
 }
 
 void TextSystem::HideTextWindow(int win_number) {
-  WindowMap::iterator it = text_window_.find(win_number);
-  if (it != text_window_.end()) {
+  auto it = stage_.mwnd.find(win_number);
+  if (it != stage_.mwnd.end()) {
     it->second->SetVisible(false);
   }
 }
 
 void TextSystem::HideAllTextWindows() {
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    it->second->SetVisible(false);
-  }
+  for (auto& [id, mwnd] : stage_.mwnd)
+    mwnd->SetVisible(false);
 }
 
 void TextSystem::HideAllTextWindowsExcept(int i) {
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    if (it->first != i) {
-      it->second->SetVisible(false);
-    }
+  for (auto& [id, mwnd] : stage_.mwnd) {
+    if (id == i)
+      continue;
+    mwnd->SetVisible(false);
   }
 }
 
 void TextSystem::ShowTextWindow(int win_number) {
-  WindowMap::iterator it = text_window_.find(win_number);
-  if (it != text_window_.end()) {
+  auto it = stage_.mwnd.find(win_number);
+  if (it != stage_.mwnd.end()) {
     it->second->SetVisible(true);
   }
 }
 
 void TextSystem::ShowAllTextWindows() {
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    it->second->SetVisible(true);
-  }
+  for (auto& [id, mwnd] : stage_.mwnd)
+    mwnd->SetVisible(true);
 }
 
 void TextSystem::ClearAllTextWindows() {
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    it->second->ClearWin();
-  }
+  for (auto& [id, mwnd] : stage_.mwnd)
+    mwnd->ClearWin();
 }
 
 void TextSystem::SetVisualOverride(int win_number, bool show_window) {
@@ -305,23 +289,23 @@ void TextSystem::SetVisualOverrideAll(bool show_window) {
 
 void TextSystem::ClearVisualOverrides() { window_visual_override_.clear(); }
 
-std::shared_ptr<TextWindow> TextSystem::GetTextWindow(
+std::shared_ptr<TextWindow> TextSystem::GetMwnd(
     int window_id,
     std::function<std::shared_ptr<TextWindow>()> orelse) {
-  auto [it, inserted] = text_window_.try_emplace(window_id, nullptr);
+  auto [it, inserted] = stage_.mwnd.try_emplace(window_id, nullptr);
   try {
     if (inserted) {
       it->second = orelse();
     }
   } catch (...) {
-    text_window_.erase(window_id);
+    stage_.mwnd.erase(window_id);
     throw;
   }
   return it->second;
 }
 
-std::shared_ptr<TextWindow> TextSystem::GetTextWindow(int window_id) {
-  return GetTextWindow(window_id, [this, window_id]() {
+std::shared_ptr<TextWindow> TextSystem::GetMwnd(int window_id) {
+  return GetMwnd(window_id, [this, window_id]() {
     Gameexe& gexe = system_.gameexe();
     TextWindow::InitParams params = mwnd_config_.GetWindow(window_id);
     if (params.window_attr_mod == 0) {
@@ -355,11 +339,11 @@ std::shared_ptr<TextWindow> TextSystem::GetTextWindow(int window_id) {
 }
 
 bool TextSystem::HasCurrentWindow() const {
-  return text_window_.contains(active_window_);
+  return stage_.mwnd.contains(active_window_);
 }
 
-std::shared_ptr<TextWindow> TextSystem::GetCurrentWindow() {
-  return GetTextWindow(active_window_);
+std::shared_ptr<TextWindow> TextSystem::GetCurrentMwnd() {
+  return GetMwnd(active_window_);
 }
 
 bool TextSystem::IsMwndButtonEnabled(const MwndConfig::Button& button) const {
@@ -558,9 +542,13 @@ void TextSystem::Snapshot() {
 }
 
 void TextSystem::NewPageOnWindow(int window_id) {
+  NewPageOnWindow(GetMwnd(window_id));
+}
+
+void TextSystem::NewPageOnWindow(std::shared_ptr<TextWindow> text_window) {
+  const int window_id = text_window->window_number();
   // Erase the current instance of this window if it exists
   PageSet::iterator it = current_pageset_.find(window_id);
-  std::shared_ptr<TextWindow> text_window = GetTextWindow(window_id);
   if (it != current_pageset_.end()) {
     current_pageset_.erase(it);
   }
@@ -572,12 +560,20 @@ void TextSystem::NewPageOnWindow(int window_id) {
 }
 
 TextPage& TextSystem::GetCurrentPage() {
-  // Check to see if the active window has a current page.
-  std::shared_ptr<TextWindow> text_window = GetTextWindow(active_window_);
-  PageSet::iterator it = current_pageset_.find(active_window_);
+  return GetPageOnWindow(GetCurrentMwnd());
+}
+
+TextPage& TextSystem::GetPageOnWindow(std::shared_ptr<TextWindow> text_window) {
+  const int window_id = text_window->window_number();
+  PageSet::iterator it = current_pageset_.find(window_id);
+  if (it != current_pageset_.end() && it->second.window() != text_window) {
+    current_pageset_.erase(it);
+    it = current_pageset_.end();
+  }
   if (it == current_pageset_.end())
     it = current_pageset_
-             .emplace(active_window_, TextPage(system().gameexe(), text_window))
+             .emplace(window_id,
+                      TextPage(system().gameexe(), std::move(text_window)))
              .first;
 
   return it->second;
@@ -671,10 +667,9 @@ int TextSystem::GetCursorNumber() const {
 
 void TextSystem::UpdateWindowsForChangeToWindowAttr() {
   // Check each text window to see if it needs updating
-  for (WindowMap::iterator it = text_window_.begin(); it != text_window_.end();
-       ++it) {
-    if (!it->second->GetAttrMod())
-      it->second->SetRGBAF(window_attr());
+  for (auto [id, mwnd] : stage_.mwnd) {
+    if (!mwnd->GetAttrMod())
+      mwnd->SetRGBAF(window_attr());
   }
 }
 
@@ -720,14 +715,14 @@ void TextSystem::SetWindowAttrF(int i) {
 void TextSystem::SetMousePosition(const Point& pos) {
   std::optional<int> target = mwnd_capture_window_;
   if (!target) {
-    for (auto it = text_window_.rbegin(); it != text_window_.rend(); ++it) {
+    for (auto it = stage_.mwnd.rbegin(); it != stage_.mwnd.rend(); ++it) {
       if (ShowWindow(it->first) && it->second->HasMwndButtonAt(pos)) {
         target = it->first;
         break;
       }
     }
   }
-  for (auto const& [id, window] : text_window_)
+  for (auto const& [id, window] : stage_.mwnd)
     if (ShowWindow(id))
       window->SetMousePosition(pos, target && *target == id);
 }
@@ -738,13 +733,13 @@ bool TextSystem::HandleMouseClick(const Point& pos, bool pressed) {
   if (!pressed && mwnd_capture_window_) {
     const int id = *mwnd_capture_window_;
     mwnd_capture_window_.reset();
-    const auto it = text_window_.find(id);
-    if (it != text_window_.end())
+    const auto it = stage_.mwnd.find(id);
+    if (it != stage_.mwnd.end())
       (void)it->second->HandleMouseClick(pos, false);
     SetMousePosition(pos);
     return true;
   }
-  for (auto it = text_window_.rbegin(); it != text_window_.rend(); ++it) {
+  for (auto it = stage_.mwnd.rbegin(); it != stage_.mwnd.rend(); ++it) {
     if (ShowWindow(it->first) && it->second->HandleMouseClick(pos, pressed)) {
       if (pressed)
         mwnd_capture_window_ = it->first;
@@ -1048,7 +1043,7 @@ void TextSystem::Reset() {
   previous_page_it_ = previous_page_sets_.end();
 
   window_visual_override_.clear();
-  text_window_.clear();
+  stage_.mwnd.clear();
 
   system_visible_ = true;
   in_pause_state_ = false;

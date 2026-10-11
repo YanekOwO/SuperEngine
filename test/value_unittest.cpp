@@ -27,7 +27,9 @@
 #include <set>
 #include <unordered_set>
 
+#include "vm/dict.hpp"
 #include "vm/gc.hpp"
+#include "vm/list.hpp"
 #include "vm/object.hpp"
 #include "vm/primops.hpp"
 #include "vm/string.hpp"
