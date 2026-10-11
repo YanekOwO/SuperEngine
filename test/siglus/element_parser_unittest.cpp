@@ -840,6 +840,15 @@ TEST_F(ElementParserTest, Mwnd) {
     EXPECT_EQ(chain(elm), "mwnd.rep_pos(int:320,int:240)");
   }
   {
+    ElementCode elm{16};
+    EXPECT_EQ(chain(elm), "mwnd.size_default()");
+  }
+  {
+    ElementCode elm{16};
+    elm.ForceBind({1, {v(15)}});
+    EXPECT_EQ(chain(elm), "mwnd.size(int:15)");
+  }
+  {
     ElementCode elm{61};
     elm.ForceBind({1, {v("ruby")}});
     EXPECT_EQ(chain(elm), "mwnd.ruby_start(str:ruby)");

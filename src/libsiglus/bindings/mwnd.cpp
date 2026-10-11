@@ -664,6 +664,19 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::vararg);
   mwnd.def("rep_pos_default", &MwndBindingState::RepPosDefault);
   mwnd.def(
+      "size",
+      [](MwndBindingState* state, int size) {
+        if (!state->system)
+          return;
+        state->system->text().GetCurrentPage().FontSize(size);
+      },
+      sb::arg("size"));
+  mwnd.def("size_default", [](MwndBindingState* state) {
+    if (!state->system)
+      return;
+    state->system->text().GetCurrentPage().DefaultFontSize();
+  });
+  mwnd.def(
       "koe",
       [](MwndBindingState* state, std::vector<sr::Value> args) {
         state->PlayKoe(KoeCallParams::ParseFrom(std::move(args)));
