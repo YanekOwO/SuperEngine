@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include "vm/value_fwd.hpp"
-
 #include <string>
 
 namespace serilang {
-class VM;
+struct Function;
 }
 
 namespace libsiglus::binding {
@@ -17,6 +15,10 @@ class Loader;
 
 serilang::Function* ResolveSceneEntry(Loader& loader,
                                       std::string scene_name,
-                                      const std::string& entry_name);
+                                      int zlabel);
+
+serilang::Function* ResolveSceneCommand(Loader& loader,
+                                        std::string scene_name,
+                                        const std::string& command_name);
 
 }  // namespace libsiglus::binding

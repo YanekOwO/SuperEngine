@@ -30,7 +30,6 @@
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/intern_name.hpp"
 #include "platforms/implementor.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/graphics_system.hpp"
@@ -351,8 +350,8 @@ void BindSyscom(SiglusMachine& runtime) {
         }
 
         auto [scene_name, zlabel] = ReadMenuScene(*gameexe);
-        serilang::Function* entry = ResolveSceneEntry(
-            *loader, std::move(scene_name), GetZlabelId(zlabel));
+        serilang::Function* entry =
+            ResolveSceneEntry(*loader, std::move(scene_name), zlabel);
 
         if (params.se_play && sys)
           sys->sound().PlaySe(6);

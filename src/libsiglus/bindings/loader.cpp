@@ -152,19 +152,36 @@ const UserCommand& Loader::ResolveUserCommand(
     if (scene_it == commands_by_globals_.end())
       continue;
 
-    const SceneCommandTable& scene = scene_it->second;
-    auto command_it = scene.commands.find(std::string(command_name));
-    if (command_it == scene.commands.end()) {
-      throw sr::RuntimeError(
-          std::format("user command '{}' not found in scene {} ({})",
-                      command_name, scene.scene_id, scene.scene_name));
-    }
-    return command_it->second;
+    return ResolveUserCommand(scene_it->second, command_name);
   }
 
   throw sr::RuntimeError(std::format(
       "cannot resolve user command '{}': caller is not in a loaded scene",
       command_name));
+}
+
+const UserCommand& Loader::ResolveUserCommand(
+    const sr::Module& module,
+    std::string_view command_name) const {
+  auto scene_it = commands_by_globals_.find(module.globals.get());
+  if (scene_it == commands_by_globals_.end()) {
+    throw sr::RuntimeError(std::format(
+        "cannot resolve user command '{}': scene '{}' is not loaded",
+        command_name, module.name));
+  }
+  return ResolveUserCommand(scene_it->second, command_name);
+}
+
+const UserCommand& Loader::ResolveUserCommand(
+    const SceneCommandTable& scene,
+    std::string_view command_name) const {
+  auto command_it = scene.commands.find(std::string(command_name));
+  if (command_it == scene.commands.end()) {
+    throw sr::RuntimeError(
+        std::format("user command '{}' not found in scene {} ({})",
+                    command_name, scene.scene_id, scene.scene_name));
+  }
+  return command_it->second;
 }
 
 }  // namespace libsiglus::binding

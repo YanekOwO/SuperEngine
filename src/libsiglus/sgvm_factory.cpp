@@ -39,7 +39,6 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
-#include "libsiglus/intern_name.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "log/domain_logger.hpp"
@@ -180,12 +179,11 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       [loader = rt.loader.get(), &vm](const MwndConfig::CallTarget& target) {
         sr::Function* entry;
         if (target.command) {
-          entry = binding::ResolveSceneEntry(*loader, target.scene,
-                                             *target.command);
+          entry = binding::ResolveSceneCommand(*loader, target.scene,
+                                               *target.command);
         } else {
-          entry = binding::ResolveSceneEntry(
-              *loader, target.scene,
-              GetZlabelId(target.entrypoint.value_or(0)));
+          entry = binding::ResolveSceneEntry(*loader, target.scene,
+                                             target.entrypoint.value_or(0));
         }
         vm.ScheduleExecute(entry);
       });

@@ -53,14 +53,14 @@ static std::string NormalizeSceneName(std::string name) {
   return name;
 }
 
-static sr::Function* ResolveEntry(sr::Module& mod, const std::string& entry) {
-  auto it = mod.globals->find(entry);
+static sr::Function* ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
+  auto it = mod.globals->find(GetZlabelId(zlabel));
   if (it == mod.globals->cend())
     it = mod.globals->find("%%script");
 
   if (it == mod.globals->cend()) {
     throw sr::RuntimeError(
-        std::format("scene {} has no entry for z-label {}", mod.name, entry));
+        std::format("scene {} has no entry for z-label {}", mod.name, zlabel));
   }
 
   sr::Function* fn = it->second.Get_if<sr::Function>();
@@ -71,9 +71,7 @@ static sr::Function* ResolveEntry(sr::Module& mod, const std::string& entry) {
   return fn;
 }
 
-sr::Function* ResolveSceneEntry(Loader& loader,
-                                std::string scene_name,
-                                const std::string& entry_name) {
+static sr::Module& LoadScene(Loader& loader, std::string scene_name) {
   if (scene_name.empty())
     throw sr::RuntimeError("scene name is empty");
 
@@ -81,7 +79,20 @@ sr::Function* ResolveSceneEntry(Loader& loader,
   if (!mod)
     throw sr::RuntimeError("could not load destination scene");
 
-  return ResolveEntry(*mod, entry_name);
+  return *mod;
+}
+
+sr::Function* ResolveSceneEntry(Loader& loader,
+                                std::string scene_name,
+                                int zlabel) {
+  return ResolveZlabelEntry(LoadScene(loader, std::move(scene_name)), zlabel);
+}
+
+sr::Function* ResolveSceneCommand(Loader& loader,
+                                  std::string scene_name,
+                                  const std::string& command_name) {
+  sr::Module& mod = LoadScene(loader, std::move(scene_name));
+  return loader.ResolveUserCommand(mod, command_name).function;
 }
 
 void BindFlow(SiglusMachine& rt) {
@@ -128,8 +139,8 @@ void BindFlow(SiglusMachine& rt) {
         if (!mod)
           throw sr::RuntimeError("jump could not load destination scene");
 
-        sr::Function* fn = ResolveEntry(*mod, GetZlabelId(zlabel));
-				vm.ScheduleExecute(fn);
+        sr::Function* fn = ResolveZlabelEntry(*mod, zlabel);
+        vm.ScheduleExecute(fn);
         fiber.frames.clear();
       },
       sb::vararg);
@@ -165,7 +176,7 @@ void BindFlow(SiglusMachine& rt) {
             throw sr::RuntimeError(
                 std::format("Farcall {} could not load scene", dbgname));
 
-          return ResolveEntry(*mod, GetZlabelId(zlabel));
+          return ResolveZlabelEntry(*mod, zlabel);
         });
 
   m.def("__builtin_load_scn",
