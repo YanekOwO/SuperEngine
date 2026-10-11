@@ -57,22 +57,22 @@ class CompilerTest : public ::testing::Test {
   // Holds everything we care about after one script run
   struct ExecutionResult {
     serilang::Value last;  ///< value left on the VM stack (result)
-    std::string stdout;    ///< text produced on std::cout
-    std::string stderr;    ///< text produced on std::cerr
+    std::string output;    ///< text produced on std::cout
+    std::string errors;    ///< text produced on std::cerr
     std::string disasm;    ///< human readable disassembly
 
     bool operator==(std::string_view rhs) const {
-      return stderr.empty() && trim_cp(stdout) == trim_sv(rhs);
+      return errors.empty() && trim_cp(output) == trim_sv(rhs);
     }
     bool operator==(error rhs) const {
-      return stdout.empty() && trim_cp(stderr) == trim_sv(rhs.diagnose);
+      return output.empty() && trim_cp(errors) == trim_sv(rhs.diagnose);
     }
 
     friend std::ostream& operator<<(std::ostream& os,
                                     const ExecutionResult& res) {
-      if (!res.stderr.empty())
-        os << "\nErrors:\n" << res.stderr;
-      os << "\nOutput:\n" << res.stdout;
+      if (!res.errors.empty())
+        os << "\nErrors:\n" << res.errors;
+      os << "\nOutput:\n" << res.output;
       os << "\nDisassembly:\n" << res.disasm;
       return os;
     }
@@ -102,13 +102,13 @@ class CompilerTest : public ::testing::Test {
 
     // any compile-time diagnostics?
     if (!pipe.Ok()) {
-      r.stderr += pipe.FormatErrors();
+      r.errors += pipe.FormatErrors();
       return r;
     }
 
     auto chunk = pipe.Get();
     if (!chunk) {
-      r.stderr += "internal: pipeline returned null chunk\n";
+      r.errors += "internal: pipeline returned null chunk\n";
       return r;
     }
     r.disasm = Disassembler().Dump(*chunk);
@@ -120,8 +120,8 @@ class CompilerTest : public ::testing::Test {
       errBuf << ex.what();
     }
 
-    r.stdout += outBuf.str();
-    r.stderr += errBuf.str();
+    r.output += outBuf.str();
+    r.errors += errBuf.str();
     return r;
   }
   [[nodiscard]] ExecutionResult Interpret(
@@ -136,13 +136,13 @@ class CompilerTest : public ::testing::Test {
       pipe.compile(sb);
 
       if (!pipe.Ok()) {
-        r.stderr += pipe.FormatErrors();
+        r.errors += pipe.FormatErrors();
         continue;
       }
 
       auto chunk = pipe.Get();
       if (!chunk) {
-        r.stderr +=
+        r.errors +=
             "internal: pipeline returned null chunk, when compiling " + line;
         continue;
       }
@@ -152,8 +152,8 @@ class CompilerTest : public ::testing::Test {
       EXPECT_NO_THROW(r.last = vm.Evaluate(chunk));
     }
 
-    r.stdout += outBuf.str();
-    r.stderr += errBuf.str();
+    r.output += outBuf.str();
+    r.errors += errBuf.str();
     return r;
   }
 };
@@ -378,7 +378,7 @@ print_time();
       static const std::regex re{R"(^[+-]?\d+(\.\d+)?$)"};
       return std::regex_match(s, re);
     };
-    EXPECT_TRUE(isNumber(res.stdout)) << res;
+    EXPECT_TRUE(isNumber(res.output)) << res;
   }
 
   {

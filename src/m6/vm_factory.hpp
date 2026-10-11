@@ -35,9 +35,9 @@ class VMFactory {
  public:
   static serilang::VM Create(
       std::shared_ptr<serilang::GarbageCollector> gc = nullptr,
-      std::ostream& stdout = std::cout,
-      std::istream& stdin = std::cin,
-      std::ostream& stderr = std::cerr);
+      std::ostream& out_stream = std::cout,
+      std::istream& in_stream = std::cin,
+      std::ostream& err_stream = std::cerr);
 };
 
 }  // namespace m6

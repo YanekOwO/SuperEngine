@@ -49,9 +49,9 @@ static double Time() {
 }
 
 sr::VM VMFactory::Create(std::shared_ptr<sr::GarbageCollector> gc,
-                         std::ostream& stdout,
-                         std::istream& stdin,
-                         std::ostream& stderr) {
+                         std::ostream& out_stream,
+                         std::istream& in_stream,
+                         std::ostream& err_stream) {
   if (!gc)
     gc = std::make_shared<sr::GarbageCollector>();
   sr::VM vm(gc);
@@ -59,27 +59,27 @@ sr::VM VMFactory::Create(std::shared_ptr<sr::GarbageCollector> gc,
   sb::module_ m(vm.gc_.get(), vm.builtins_.get());
   m.def("time", &Time);
 
-  m.def("__repl_print__", [&stdout](sr::Value result) {
+  m.def("__repl_print__", [&out_stream](sr::Value result) {
     if (result.Type() != sr::ObjType::Nil)
-      stdout << result.Str() << std::endl;
+      out_stream << result.Str() << std::endl;
   });
   m.def(
       "print",
-      [&stdout](std::string sep, std::string end, bool do_flush,
-                std::vector<sr::Value> args) {
+      [&out_stream](std::string sep, std::string end, bool do_flush,
+                    std::vector<sr::Value> args) {
         bool firstPrinted = false;
         for (auto const& v : args) {
           if (firstPrinted) {
-            stdout << sep;
+            out_stream << sep;
           }
-          stdout << v.Str();
+          out_stream << v.Str();
           firstPrinted = true;
         }
 
-        stdout << end;
+        out_stream << end;
 
         if (do_flush)
-          stdout.flush();
+          out_stream.flush();
       },
 
       sb::kw_arg("sep") = " ", sb::kw_arg("end") = "\n",
@@ -87,11 +87,11 @@ sr::VM VMFactory::Create(std::shared_ptr<sr::GarbageCollector> gc,
 
   m.def(
       "input",
-      [&stdin, &stdout](std::string prompt) {
+      [&in_stream, &out_stream](std::string prompt) {
         if (!prompt.empty())
-          stdout << std::move(prompt);
+          out_stream << std::move(prompt);
         std::string line;
-        std::getline(stdin, line);
+        std::getline(in_stream, line);
         return line;
       },
 
@@ -101,8 +101,9 @@ sr::VM VMFactory::Create(std::shared_ptr<sr::GarbageCollector> gc,
       "import",
       sr::Value(gc->Allocate<sr::NativeFunction>(
           "import",
-          [&stdin, &stdout, &stderr](sr::VM& vm2, sr::Fiber& f, uint8_t nargs,
-                                     uint8_t nkwargs) -> sr::TempValue {
+          [&in_stream, &out_stream, &err_stream](
+              sr::VM& vm2, sr::Fiber& f, uint8_t nargs,
+              uint8_t nkwargs) -> sr::TempValue {
             if (!(nargs == 1 && nkwargs == 0))
               throw std::runtime_error("import() expects module name");
             sr::Value argv = f.op_stack.back();
@@ -112,7 +113,7 @@ sr::VM VMFactory::Create(std::shared_ptr<sr::GarbageCollector> gc,
                 it != vm2.module_cache_.end())
               return sr::Value(it->second);
 
-            sr::VM mvm = Create(vm2.gc_, stdout, stdin, stderr);
+            sr::VM mvm = Create(vm2.gc_, out_stream, in_stream, err_stream);
             mvm.gc_threshold_ = 0;  // disable garbage collector
             auto import_builtins =
                 std::make_shared<std::unordered_map<std::string, sr::Value>>();
