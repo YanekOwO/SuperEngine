@@ -164,7 +164,7 @@ struct Sel_select_objbtn_cancel_2 : public RLOpcode<> {
     if (machine.GetScenarioConfig().enable_selcom_savepoint)
       MarkSavepoint(machine);
 
-    auto& fg_objs = machine.stage().foreground_objects;
+    auto& fg_objs = machine.stage().objects[kLayerFg];
     int group = 0;
     for (GraphicsObject& obj : fg_objs)
       if (obj.Param().IsButton()) {

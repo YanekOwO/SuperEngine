@@ -29,33 +29,56 @@
 #include "core/stage_effect.hpp"
 #include "utilities/lazy_array.hpp"
 
+#include <array>
 #include <cstddef>
 #include <deque>
+#include <stdexcept>
 #include <string>
-#include <vector>
 
 [[maybe_unused]] constexpr int kLayerFg = 0;
 [[maybe_unused]] constexpr int kLayerBg = 1;
 [[maybe_unused]] constexpr int kLayerNext = 2;
 
+template <class T>
+struct StageElement {
+  using array_type = LazyArray<T>;
+  using storage_type = std::array<array_type, 3>;
+
+  explicit StageElement(size_t size = 0)
+      : storage{array_type(size), array_type(size), array_type(size)} {}
+
+  array_type& operator[](int layer) {
+    if (layer < kLayerFg || layer > kLayerNext)
+      throw std::runtime_error("Invalid layer number");
+    return storage[static_cast<size_t>(layer)];
+  }
+
+  const array_type& operator[](int layer) const {
+    if (layer < kLayerFg || layer > kLayerNext)
+      throw std::runtime_error("Invalid layer number");
+    return storage[static_cast<size_t>(layer)];
+  }
+
+  void Clear() {
+    for (auto& layer : storage)
+      layer.Clear();
+  }
+
+  storage_type storage;
+};
+
 class Stage {
  public:
-  Stage(int size, int effect_size = 0);
+  Stage(int object_size = 0, int effect_size = 0, int group_size = 0);
 
-  // Foreground objects
-  LazyArray<GraphicsObject> foreground_objects;
-
-  // Background objects
-  LazyArray<GraphicsObject> background_objects;
-
-  // Next objects
-  LazyArray<GraphicsObject> next_objects;
+  // Foreground, background and next objects
+  StageElement<GraphicsObject> objects;
 
   // Foreground, background and next groups
-  std::vector<Group> groups[3];
+  StageElement<Group> groups;
 
   // Foreground, background and next stage effects.
-  std::vector<StageEffect> effects[3];
+  StageElement<StageEffect> effects;
 
   // Foreground objects (at the time of the last save)
   LazyArray<GraphicsObject> saved_foreground_objects;
@@ -117,11 +140,19 @@ class Stage {
   // relativly cheap operation.)
   void TakeSavepointSnapshot();
 
-  const LazyArray<GraphicsObject>& ObjectsForLayer(int layer) const;
-  LazyArray<GraphicsObject>& ObjectsForLayer(int layer);
+  inline const LazyArray<GraphicsObject>& ObjectsForLayer(int layer) const {
+    return objects[layer];
+  }
+  inline LazyArray<GraphicsObject>& ObjectsForLayer(int layer) {
+    return objects[layer];
+  }
 
-  const std::vector<StageEffect>& EffectsForLayer(int layer) const;
-  std::vector<StageEffect>& EffectsForLayer(int layer);
+  inline const LazyArray<StageEffect>& EffectsForLayer(int layer) const {
+    return effects[layer];
+  }
+  inline LazyArray<StageEffect>& EffectsForLayer(int layer) {
+    return effects[layer];
+  }
   StageEffect& GetEffect(int layer, int effect_number);
   void ResizeEffects(int layer, int size);
 

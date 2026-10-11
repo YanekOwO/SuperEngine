@@ -52,10 +52,10 @@ struct GroupRef {
                              std::to_string(group_no));
     }
 
-    std::vector<Group>& grp_arr = stage->groups[layer];
+    LazyArray<Group>& grp_arr = stage->groups[layer];
     const std::size_t index = static_cast<std::size_t>(group_no);
-    if (index >= grp_arr.size())
-      grp_arr.resize(index + 1);
+    if (index >= grp_arr.Size())
+      grp_arr.Resize(index + 1);
     return grp_arr[index];
   }
 };

@@ -51,7 +51,7 @@ void BindStage(SiglusRuntime& runtime) {
     stage_state->GetEffect(layer, index).Reset();
   });
   m.def("__stage_effect_size", [stage_state](int layer) {
-    return static_cast<int>(stage_state->EffectsForLayer(layer).size());
+    return static_cast<int>(stage_state->EffectsForLayer(layer).Size());
   });
   m.def("__stage_effect_resize", [stage_state](int layer, int size) {
     stage_state->ResizeEffects(layer, size);

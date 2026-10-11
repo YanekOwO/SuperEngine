@@ -24,34 +24,23 @@
 
 #include "core/stage.hpp"
 
-#include "core/object_internal/animator.hpp"
 #include "core/object_internal/objdrawer.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
-Stage::Stage(int size, int effect_size)
-    : foreground_objects(size),
-      background_objects(size),
-      next_objects(size),
-      saved_foreground_objects(size),
-      saved_background_objects(size) {
-  if (effect_size < 0)
-    throw std::runtime_error("Negative stage effect count");
-  for (auto& layer_effects : effects)
-    layer_effects.resize(effect_size);
-}
+Stage::Stage(int object_size, int effect_size, int group_size)
+    : objects(object_size),
+      groups(group_size),
+      effects(effect_size),
+      saved_foreground_objects(object_size),
+      saved_background_objects(object_size) {}
 
 void Stage::Reset() {
-  foreground_objects.Clear();
-  background_objects.Clear();
-  next_objects.Clear();
-  for (auto& layer_groups : groups)
-    layer_groups.clear();
-  for (auto& layer_effects : effects)
-    for (StageEffect& effect : layer_effects)
-      effect.Reset();
+  objects.Clear();
+  groups.Clear();
+  effects.Clear();
   ClearTransitionRenderState();
 }
 
@@ -66,8 +55,10 @@ void Stage::Wipe(int begin_order,
                  int end_layer) {
   // TODO(siglus): Promote mwnd, btnsel, world, and quake stage state
   // when those core Siglus element implementations exist.
+  LazyArray<GraphicsObject>& foreground_objects = objects[kLayerFg];
+  LazyArray<GraphicsObject>& background_objects = objects[kLayerBg];
+  LazyArray<GraphicsObject>& next_objects = objects[kLayerNext];
   next_objects.Clear();
-  groups[kLayerNext].clear();
 
   auto InWipeRange = [begin = std::make_pair(begin_order, begin_layer),
                       end = std::make_pair(end_order, end_layer)](
@@ -112,40 +103,65 @@ void Stage::Wipe(int begin_order,
     }
   }
 
-  std::vector<Group>& foreground_groups = groups[kLayerFg];
-  std::vector<Group>& background_groups = groups[kLayerBg];
-  std::vector<Group>& next_groups = groups[kLayerNext];
+  LazyArray<Group>& foreground_groups = groups[kLayerFg];
+  LazyArray<Group>& background_groups = groups[kLayerBg];
+  LazyArray<Group>& next_groups = groups[kLayerNext];
+  next_groups.Clear();
   const size_t group_count =
-      std::max(foreground_groups.size(), background_groups.size());
-  foreground_groups.resize(group_count);
-  background_groups.resize(group_count);
-  next_groups.resize(group_count);
+      std::max(foreground_groups.Size(), background_groups.Size());
+  foreground_groups.Resize(group_count);
+  background_groups.Resize(group_count);
+  next_groups.Resize(group_count);
 
   for (size_t i = 0; i < group_count; ++i) {
-    Group& foreground = foreground_groups[i];
+    const Group default_group;
+    const Group& foreground = foreground_groups.Exists(i)
+                                  ? foreground_groups.At(i).value()
+                                  : default_group;
     if (!InWipeRange(std::make_pair(foreground.order, foreground.layer)))
       continue;
 
-    next_groups[i] = foreground;
-    next_groups[i].ClearTransientInteraction();
-    foreground = background_groups[i];
-    foreground.ClearTransientInteraction();
-    background_groups[i].Reset();
+    if (foreground_groups.Exists(i)) {
+      next_groups[i] = foreground;
+      next_groups[i].ClearTransientInteraction();
+    }
+
+    if (background_groups.Exists(i)) {
+      foreground_groups[i] = std::move(background_groups[i]);
+      foreground_groups[i].ClearTransientInteraction();
+      background_groups.DeleteAt(i);
+    } else {
+      foreground_groups.DeleteAt(i);
+    }
   }
 
-  std::vector<StageEffect>& foreground_effects = effects[kLayerFg];
-  std::vector<StageEffect>& background_effects = effects[kLayerBg];
-  std::vector<StageEffect>& next_effects = effects[kLayerNext];
-  const size_t effect_count = std::min(
-      {foreground_effects.size(), background_effects.size(),
-       next_effects.size()});
+  LazyArray<StageEffect>& foreground_effects = effects[kLayerFg];
+  LazyArray<StageEffect>& background_effects = effects[kLayerBg];
+  LazyArray<StageEffect>& next_effects = effects[kLayerNext];
+  next_effects.Clear();
+  const size_t effect_count =
+      std::min({foreground_effects.Size(), background_effects.Size(),
+                next_effects.Size()});
   for (size_t i = 0; i < effect_count; ++i) {
-    StageEffect& foreground = foreground_effects[i];
-    StageEffect& background = background_effects[i];
-    next_effects[i] = foreground;
-    if (foreground.wipe_copy == 0 || background.wipe_erase != 0) {
-      foreground = background;
-      background.Reset();
+    const bool foreground_exists = foreground_effects.Exists(i);
+    const bool background_exists = background_effects.Exists(i);
+
+    if (foreground_exists)
+      next_effects[i] = foreground_effects[i];
+
+    bool replace_foreground =
+        !foreground_exists || foreground_effects.At(i).value().wipe_copy == 0;
+    if (background_exists && background_effects.At(i).value().wipe_erase != 0) {
+      replace_foreground = true;
+    }
+    if (!replace_foreground)
+      continue;
+
+    if (background_exists) {
+      foreground_effects[i] = std::move(background_effects[i]);
+      background_effects.DeleteAt(i);
+    } else {
+      foreground_effects.DeleteAt(i);
     }
   }
 }
@@ -161,54 +177,16 @@ void Stage::ClearTransitionRenderState() {
   next_render_alpha_ = 0.0;
 }
 
-LazyArray<GraphicsObject>& Stage::ObjectsForLayer(int layer) {
-  switch (layer) {
-    case kLayerFg:
-      return foreground_objects;
-    case kLayerBg:
-      return background_objects;
-    case kLayerNext:
-      return next_objects;
-    default:
-      throw std::runtime_error("Invalid layer number");
-  }
-}
-
-const LazyArray<GraphicsObject>& Stage::ObjectsForLayer(int layer) const {
-  switch (layer) {
-    case kLayerFg:
-      return foreground_objects;
-    case kLayerBg:
-      return background_objects;
-    case kLayerNext:
-      return next_objects;
-    default:
-      throw std::runtime_error("Invalid layer number");
-  }
-}
-
-std::vector<StageEffect>& Stage::EffectsForLayer(int layer) {
-  if (layer < kLayerFg || layer > kLayerNext)
-    throw std::runtime_error("Invalid layer number");
-  return effects[layer];
-}
-
-const std::vector<StageEffect>& Stage::EffectsForLayer(int layer) const {
-  if (layer < kLayerFg || layer > kLayerNext)
-    throw std::runtime_error("Invalid layer number");
-  return effects[layer];
-}
-
 StageEffect& Stage::GetEffect(int layer, int effect_number) {
   if (effect_number < 0)
     throw std::out_of_range("Negative stage effect index");
-  return EffectsForLayer(layer).at(static_cast<size_t>(effect_number));
+  return EffectsForLayer(layer)[static_cast<size_t>(effect_number)];
 }
 
 void Stage::ResizeEffects(int layer, int size) {
   if (size < 0)
     throw std::runtime_error("Negative stage effect count");
-  EffectsForLayer(layer).resize(static_cast<size_t>(size));
+  EffectsForLayer(layer).Resize(static_cast<size_t>(size));
 }
 
 GraphicsObject& Stage::GetObject(int layer, int obj_number) {
@@ -235,8 +213,8 @@ void Stage::RemoveObject(int layer, size_t obj_number) {
 }
 
 void Stage::FreeObjectData(int obj_number) {
-  foreground_objects[obj_number].FreeObjectData();
-  background_objects[obj_number].FreeObjectData();
+  objects[kLayerFg][obj_number].FreeObjectData();
+  objects[kLayerBg][obj_number].FreeObjectData();
 }
 
 void Stage::FreeAllObjectData() {
@@ -252,30 +230,24 @@ void Stage::FreeLayerObjectData(int layer) {
 }
 
 void Stage::InitializeObjectParams(int obj_number) {
-  foreground_objects[obj_number].InitializeParams();
-  background_objects[obj_number].InitializeParams();
+  objects[kLayerFg][obj_number].InitializeParams();
+  objects[kLayerBg][obj_number].InitializeParams();
 }
 
 void Stage::InitializeAllObjectParams() {
-  for (GraphicsObject& object : foreground_objects)
+  for (GraphicsObject& object : objects[kLayerFg])
     object.InitializeParams();
 
-  for (GraphicsObject& object : background_objects)
+  for (GraphicsObject& object : objects[kLayerBg])
     object.InitializeParams();
 }
 
 void Stage::Execute() {
-  for (auto& obj : foreground_objects) {
-    obj.Execute();
-    obj.ExecuteMutators();
-  }
-  for (auto& obj : background_objects) {
-    obj.Execute();
-    obj.ExecuteMutators();
-  }
-  for (auto& obj : next_objects) {
-    obj.Execute();
-    obj.ExecuteMutators();
+  for (auto& layer_objects : objects.storage) {
+    for (auto& obj : layer_objects) {
+      obj.Execute();
+      obj.ExecuteMutators();
+    }
   }
 }
 
@@ -289,8 +261,8 @@ void Stage::AddGraphicsStackCommand(std::string command) {
 }
 
 void Stage::TakeSavepointSnapshot() {
-  auto& foreground = foreground_objects;
-  auto& background = background_objects;
+  auto& foreground = objects[kLayerFg];
+  auto& background = objects[kLayerBg];
 
   saved_foreground_objects.Clear();
   for (auto it = foreground.begin(), end = foreground.end(); it != end; ++it) {

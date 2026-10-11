@@ -46,13 +46,17 @@ class ScopedRenderParameters {
  public:
   ScopedRenderParameters(GraphicsObject& object,
                          double multiplier,
-                         const std::vector<StageEffect>& effects)
+                         const LazyArray<StageEffect>& effects)
       : object_(object), original_(object.Param()) {
     const int order = original_.z_order;
     const int layer = original_.z_layer;
-    for (const StageEffect& effect : effects)
+    for (size_t i = 0; i < effects.Size(); ++i) {
+      if (!effects.Exists(i))
+        continue;
+      const StageEffect& effect = effects.At(i).value();
       if (effect.Contains(order, layer))
         effect.ApplyTo(object_.Param());
+    }
 
     const int alpha = std::clamp(
         static_cast<int>(std::lround(object_.Param().raw_alpha() * multiplier)),
@@ -88,8 +92,9 @@ void SiglusSceneRenderer::RenderScene() {
 void SiglusSceneRenderer::RenderStageObjects(Stage& stage,
                                              ToRenderVec& to_render) {
   to_render.clear();
-  QueueObjects(stage.next_objects, 0, stage.next_render_alpha(), kLayerNext);
-  QueueObjects(stage.foreground_objects, 1, stage.foreground_render_alpha(),
+  QueueObjects(stage.objects[kLayerNext], 0, stage.next_render_alpha(),
+               kLayerNext);
+  QueueObjects(stage.objects[kLayerFg], 1, stage.foreground_render_alpha(),
                kLayerFg);
   RenderQueuedObjects();
 }

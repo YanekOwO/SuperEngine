@@ -50,7 +50,7 @@ struct objWaitAll : public RLOpcode<> {
     // Clannad puts us in DrawManual() right before calling us so we force
     // refreshes.
     machine.GetSystem().graphics().ForceRefresh();
-    auto& fgobj = machine.stage().foreground_objects;
+    auto& fgobj = machine.stage().objects[kLayerFg];
     bool animations_playing = false;
     for (size_t i = 0, end = fgobj.Size(); i < end; ++i) {
       const auto& object = fgobj.At(i);

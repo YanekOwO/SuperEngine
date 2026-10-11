@@ -44,7 +44,7 @@ ButtonObjectSelectLongOperation::ButtonObjectSelectLongOperation(
           ButtonActionTable::ParseReallive(machine.GetSystem().gameexe())),
       currently_hovering_button_(NULL),
       currently_pressed_button_(NULL) {
-  for (GraphicsObject& obj : machine.stage().foreground_objects) {
+  for (GraphicsObject& obj : machine.stage().objects[kLayerFg]) {
     if (obj.Param().IsButton() && obj.Param().GetButtonGroup() == group_) {
       buttons_.emplace_back(&obj, static_cast<GraphicsObject*>(NULL));
     } else if (obj.HasChildren()) {

@@ -204,6 +204,16 @@ class LazyArray {
   size_t Size() const { return arr_.size(); }
 
   /**
+   * @brief Changes the number of available slots in the array.
+   *
+   * Existing values are preserved when possible. Newly added slots remain
+   * unallocated.
+   *
+   * @param size New number of available slots.
+   */
+  void Resize(size_t size) { arr_.resize(size); }
+
+  /**
    * @brief Checks if an element at the specified index exists.
    *
    * @param index Position of the element to check.

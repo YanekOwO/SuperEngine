@@ -54,8 +54,10 @@ class InteractionManagerTest : public ::testing::Test {
 
   Group& AddGroup(int layer = kLayerFg,
                   Group::Status status = Group::Status::Active) {
-    stage_.groups[layer].emplace_back();
-    Group& group = stage_.groups[layer].back();
+    LazyArray<Group>& groups = stage_.groups[layer];
+    const size_t index = groups.Size();
+    groups.Resize(index + 1);
+    Group& group = groups[index];
     group.status = status;
     return group;
   }

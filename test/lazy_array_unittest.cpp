@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2007 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,11 +28,7 @@
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 
-#include "test_utils.hpp"
 #include "utilities/lazy_array.hpp"
-
-#include <algorithm>
-#include <iostream>
 
 const int SIZE = 10;
 
@@ -168,6 +162,28 @@ TEST_F(LazyArrayTest, CopyAssign) {
   EXPECT_EQ(newarray[2], 24);
   EXPECT_EQ(newarray[4], 48);
   EXPECT_EQ(array[0], 123);
+}
+
+TEST_F(LazyArrayTest, ResizePreservesSparseEntries) {
+  LazyArray<int> array(3);
+  array[1] = 12;
+
+  array.Resize(5);
+
+  ASSERT_EQ(array.Size(), 5);
+  EXPECT_FALSE(array.Exists(0));
+  EXPECT_TRUE(array.Exists(1));
+  EXPECT_EQ(array[1], 12);
+  EXPECT_FALSE(array.Exists(3));
+  EXPECT_FALSE(array.Exists(4));
+
+  array[4] = 48;
+  array.Resize(2);
+
+  ASSERT_EQ(array.Size(), 2);
+  EXPECT_TRUE(array.Exists(1));
+  EXPECT_EQ(array[1], 12);
+  EXPECT_THROW(array[4], std::out_of_range);
 }
 
 TEST_F(LazyArrayTest, Serialization) {

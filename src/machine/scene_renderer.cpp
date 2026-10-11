@@ -75,8 +75,8 @@ void rlSceneRenderer::RenderScene() {
 
   // Render objects
   to_render_.clear();
-  for (auto it = stage.foreground_objects.begin(),
-            end = stage.foreground_objects.end();
+  auto& foreground_objects = stage.objects[kLayerFg];
+  for (auto it = foreground_objects.begin(), end = foreground_objects.end();
        it != end; ++it) {
     if (!ShouldRenderObject(it.pos(), *it))
       continue;

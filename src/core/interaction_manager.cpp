@@ -59,7 +59,7 @@ void VisitButtonCandidates(
     std::optional<ParentObjState> parent,
     int object_id,
     const Point& mouse_pos,
-    const std::vector<Group>& groups,
+    const LazyArray<Group>& groups,
     std::size_t& traversal_order,
     std::vector<std::optional<HitCandidate>>& candidates) {
   const std::size_t current_traversal_order = traversal_order++;
@@ -69,8 +69,9 @@ void VisitButtonCandidates(
 
   const int group_no = param.GetButtonGroup();
   const bool has_active_group =
-      group_no >= 0 && static_cast<std::size_t>(group_no) < groups.size() &&
-      groups[static_cast<std::size_t>(group_no)].status !=
+      group_no >= 0 && static_cast<std::size_t>(group_no) < groups.Size() &&
+      groups.Exists(static_cast<std::size_t>(group_no)) &&
+      groups.At(static_cast<std::size_t>(group_no)).value().status !=
           Group::Status::Disabled;
   if (has_active_group && object.HasDrawer() && param.IsButton() &&
       param.GetButtonAction() >= 0 && param.GetButtonState() != kButtonSelect &&
@@ -101,7 +102,7 @@ void VisitButtonCandidates(
 }
 
 ButtonState ResolveButtonState(const ObjectParameter& param,
-                               const std::vector<Group>& groups,
+                               const LazyArray<Group>& groups,
                                std::optional<ButtonState> parent) {
   if (parent)
     return *parent;
@@ -111,10 +112,11 @@ ButtonState ResolveButtonState(const ObjectParameter& param,
     return ButtonState::Disable;
 
   const int group_no = param.GetButtonGroup();
-  if (group_no < 0 || static_cast<std::size_t>(group_no) >= groups.size())
+  if (group_no < 0 || static_cast<std::size_t>(group_no) >= groups.Size() ||
+      !groups.Exists(static_cast<std::size_t>(group_no)))
     return ButtonState::Normal;
 
-  const Group& group = groups[static_cast<std::size_t>(group_no)];
+  const Group& group = groups.At(static_cast<std::size_t>(group_no)).value();
   const int button_no = param.GetButtonNumber();
   if ((group.result == Group::Result::Decided &&
        group.decided_button_no == button_no) ||
@@ -127,7 +129,7 @@ ButtonState ResolveButtonState(const ObjectParameter& param,
 
 void ApplyButtonOverrides(
     GraphicsObject& object,
-    const std::vector<Group>& groups,
+    const LazyArray<Group>& groups,
     const ButtonActionTable& button_actions,
     std::optional<ButtonState> parent_state = std::nullopt) {
   ObjectParameter& param = object.Param();
@@ -219,8 +221,8 @@ void InteractionManager::UpdateGroup(Group& group,
 }
 
 void InteractionManager::UpdateLayer(int layer) {
-  std::vector<Group>& groups = stage_.groups[layer];
-  std::vector<std::optional<HitCandidate>> candidates(groups.size());
+  LazyArray<Group>& groups = stage_.groups[layer];
+  std::vector<std::optional<HitCandidate>> candidates(groups.Size());
 
   LazyArray<GraphicsObject>& objects = stage_.ObjectsForLayer(layer);
   std::size_t traversal_order = 0;
@@ -230,11 +232,12 @@ void InteractionManager::UpdateLayer(int layer) {
                           candidates);
   }
 
-  for (std::size_t i = 0; i < groups.size(); ++i) {
+  for (auto it = groups.begin(), end = groups.end(); it != end; ++it) {
+    const std::size_t i = it.pos();
     std::optional<int> hit_button_no;
     if (candidates[i])
       hit_button_no = candidates[i]->button_no;
-    UpdateGroup(groups[i], hit_button_no);
+    UpdateGroup(*it, hit_button_no);
   }
 
   for (auto it = objects.begin(), end = objects.end(); it != end; ++it)
