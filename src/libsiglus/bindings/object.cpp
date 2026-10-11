@@ -37,6 +37,7 @@
 #include "core/object_internal/object_parameter.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/bindings/wait_helpers.hpp"
 #include "libsiglus/siglus_machine.hpp"
@@ -102,9 +103,9 @@ struct ObjectRepnoEventListHandle {
   ObjectRepnoEventHandle::Setter setter;
 };
 
-constexpr int kBtnNormal = 0;
-constexpr int kBtnSelect = 3;
-constexpr int kBtnDisable = 4;
+constexpr int kBtnNormal = static_cast<int>(ButtonState::Normal);
+constexpr int kBtnSelect = static_cast<int>(ButtonState::Select);
+constexpr int kBtnDisable = static_cast<int>(ButtonState::Disable);
 
 struct MovieCreateParams {
   std::string file_name;
@@ -1135,18 +1136,31 @@ void BindObject(SiglusMachine& runtime) {
     return h->object->Param().GetButtonState();
   });
   object.def("get_button_hit_state", [](ObjectHandle* h) {
-    const int state = h->object->Param().GetButtonState();
-    if (state == kBtnSelect || state == kBtnDisable)
-      return state;
-    return kBtnNormal;
+    return static_cast<int>(h->object->Param().button.hit_state);
   });
   object.def("get_button_real_state", [](ObjectHandle* h) {
     const int state = h->object->Param().GetButtonState();
     if (state == kBtnSelect || state == kBtnDisable)
       return state;
-    return kBtnNormal;
+    return static_cast<int>(h->object->Param().button.real_state);
   });
-  object.def("clear_button_call", [](ObjectHandle*) {});
+  object.def("set_button_call", [loader = runtime.loader.get()](
+                                    ObjectHandle* h, sr::Fiber& fiber,
+                                    std::string command) {
+    if (!loader)
+      throw sr::RuntimeError("set_button_call requires a scene loader");
+    const auto& resolved = loader->ResolveUserCommand(fiber, command);
+    if (!resolved.args.empty())
+      throw sr::RuntimeError(
+          "button CALL requires a command with no arguments");
+    // Resolve the current scene now; the function remains owned by its module.
+    h->object->Param().button.call = resolved.function;
+  });
+  object.def("clear_button_call", [](ObjectHandle* h) {
+    h->object->Param().button.call = nullptr;
+    if (h->object->Param().button.config)
+      h->object->Param().button.config->call.reset();
+  });
   object.def("pause_movie", [](ObjectHandle* h) {
     if (auto* data = h->object->GetDrawer<ObjectMovieData>())
       data->Pause();

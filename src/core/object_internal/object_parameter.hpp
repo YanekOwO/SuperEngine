@@ -24,12 +24,15 @@
 
 #pragma once
 
+#include "core/button_action_table.hpp"
 #include "core/colour.hpp"
+#include "core/mwnd_config.hpp"
 #include "core/rect.hpp"
 
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -38,6 +41,10 @@
 #include <boost/serialization/serialization.hpp>
 
 extern const Rect EMPTY_RECT;
+
+namespace serilang {
+struct Function;
+}
 
 struct TextProperties {
   std::string value = "";
@@ -119,6 +126,9 @@ struct DigitProperties {
 struct ButtonProperties {
   int is_button = 0;
 
+  // Siglus base cut; separate from pat_no and outside RealLive save archives.
+  int cut_no = 0;
+
   int action = 0;
   int se = -1;
   int group = 0;
@@ -133,6 +143,17 @@ struct ButtonProperties {
   int rep_tr_override = 255;
   int rep_bright_override = 0;
   int rep_dark_override = 0;
+
+  // WAKU.BTN settings for a configured message-window button.
+  std::optional<MwndConfig::Button> config;
+  // Script CALL override, owned by the resolved scene module.
+  serilang::Function* call = nullptr;
+  // Cursor/group hit state: NORMAL, HIT or PUSH.
+  ButtonState hit_state = ButtonState::Normal;
+  // Drawing state after applying SELECT, DISABLE and window policy.
+  ButtonState real_state = ButtonState::Normal;
+  // Visibility supplied by the window button's system-command policy.
+  bool visible = true;
 
   bool operator==(const ButtonProperties& rhs) const = default;
 
@@ -265,7 +286,7 @@ struct ObjectParameter {
     if (button.using_overides)
       return button.pattern_override;
 
-    return pattern_number;
+    return pattern_number + button.cut_no;
   }
   void SetPattNo(const int in) { pattern_number = in; }
 

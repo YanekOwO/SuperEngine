@@ -732,6 +732,16 @@ TEST_F(ElementParserTest, MwndObjectUsesGetterBeforeIndexing) {
   EXPECT_TRUE(last_call(parsed)->await_result);
 }
 
+TEST_F(ElementParserTest, MwndButtonUsesObjectBindingAndGetterBeforeIndexing) {
+  EXPECT_EQ(chain(38, 3, -1, 1, 32, -1, 2, 35),
+            "stage.front.mwnd[int:1].button()[int:2].init()");
+  ElementCode setter{38, 3, -1, 1, 32, -1, 2, 93, -1, 0, 3};
+  setter.ForceBind({1, {v(42)}});
+  EXPECT_EQ(
+      chain(setter),
+      "stage.front.mwnd[int:1].button()[int:2].child()[int:0].set_x(int:42)");
+}
+
 TEST_F(ElementParserTest, Mwnd) {
   {
     ElementCode elm{22};

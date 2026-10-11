@@ -24,6 +24,7 @@
 #include "libsiglus/bindings/frame_action.hpp"
 
 #include "core/gameexe.hpp"
+#include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/siglus_machine.hpp"
@@ -72,29 +73,31 @@ void VisitActions(const std::shared_ptr<FrameAction>& global_action,
       self(self, child, background);
   };
 
-  visit_action(global_action, {}, false);
-  for (const auto& action : global_channels)
-    visit_action(action, {}, false);
-
-  for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
+  // Callbacks may replace a waku or promote stage lists. Retain every root
+  // before invoking the first callback, and never iterate a destroyed waku.
+  std::vector<std::pair<ActionOwner, bool>> roots;
+  for (int layer : {kLayerBg, kLayerFg, kLayerNext})
     for (const auto& object : stage.objects[layer])
-      visit_object(visit_object, object, layer == kLayerBg);
-  }
-
+      roots.emplace_back(object, layer == kLayerBg);
   for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
-    const auto windows = stage.mwnd[layer];
-    for (const auto& window : windows) {
+    for (const auto& window : stage.mwnd[layer]) {
       if (!window)
         continue;
-
       for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
         if (!waku)
           continue;
-        for (auto& obj : waku->objects_)
-          visit_object(visit_object, obj, layer == kLayerBg);
+        for (const auto* list : {&waku->button_objects_, &waku->objects_})
+          for (const auto& object : *list)
+            roots.emplace_back(object, layer == kLayerBg);
       }
     }
   }
+  const auto channels = global_channels;
+  visit_action(global_action, {}, false);
+  for (const auto& action : channels)
+    visit_action(action, {}, false);
+  for (const auto& [object, background] : roots)
+    visit_object(visit_object, object, background);
 }
 
 FrameAction& ResolveAction(const ActionReference& reference) {
@@ -290,6 +293,21 @@ void FrameActionManager::End(ActionReference reference) {
     RunFinal(reference);
   else
     action.Reset();
+}
+
+void FrameActionManager::StartConfiguredButton(
+    Loader& loader,
+    ActionOwner owner,
+    const MwndConfig::CallTarget& target) {
+  if (!target.command || target.command->empty())
+    throw sr::RuntimeError(
+        "WAKU.BTN.FRAME_ACTION requires a scene and command");
+  const auto& command =
+      ResolveSceneUserCommand(loader, target.scene, *target.command);
+  if (command.args != std::vector<Type>{Type::FrameAction, Type::Object})
+    throw sr::RuntimeError(
+        "WAKU.BTN.FRAME_ACTION requires a command taking FrameAction, Object");
+  Start({owner->GetFrameAction(), owner}, -1, false, *command.function, {});
 }
 
 bool FrameActionManager::ConfigFlag(std::string_view name) const {

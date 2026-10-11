@@ -53,6 +53,8 @@ class Stage;
 class TextKeyCursor;
 class TextPage;
 class TextWindow;
+class TextWaku;
+class GraphicsObject;
 class ITextSystem;
 class IFont;
 
@@ -158,6 +160,13 @@ class TextSystem final : public EventListener {
       std::function<bool(const MwndConfig::Button& button, bool execute)>;
   using MwndActionStatusHandler =
       std::function<MwndActionStatus(const MwndConfig::Button& button)>;
+  using MwndFrameActionHandler =
+      std::function<void(std::shared_ptr<GraphicsObject>,
+                         const MwndConfig::CallTarget&)>;
+  void SetMwndFrameActionHandler(MwndFrameActionHandler handler) {
+    mwnd_frame_action_handler_ = std::move(handler);
+  }
+  void InitializeMwndButtonFrameActions(TextWaku& waku);
   void SetMwndCallHandler(MwndCallHandler handler) {
     mwnd_call_handler_ = std::move(handler);
   }
@@ -169,7 +178,8 @@ class TextSystem final : public EventListener {
   }
   bool IsMwndButtonEnabled(const MwndConfig::Button& button) const;
   MwndButtonPresentation GetMwndButtonPresentation(
-      const MwndConfig::Button& button) const;
+      const MwndConfig::Button& button,
+      bool has_script_call = false) const;
   void ExecuteMwndButton(const MwndConfig::Button& button);
   void PlayMwndButtonSound(const MwndConfig::Button& button,
                            MwndButtonSound event);
@@ -382,6 +392,7 @@ class TextSystem final : public EventListener {
   MwndCallHandler mwnd_call_handler_;
   MwndActionHandler mwnd_action_handler_;
   MwndActionStatusHandler mwnd_action_status_handler_;
+  MwndFrameActionHandler mwnd_frame_action_handler_;
   bool mwnd_buttons_enabled_ = true;
   bool mwnd_button_touch_enabled_ = true;
   std::map<int, bool> mwnd_button_slot_enabled_;

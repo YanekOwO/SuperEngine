@@ -13,3 +13,11 @@ fn Textout(text, pause_ms = 140){
   }
 }
 
+// WAKU.BTN.CNT reserves the slots; empty FILE slots can be populated by scripts.
+// button() returns the selected window's fixed list of ordinary Object handles.
+buttons = mw.button();
+if (buttons.size() > 0) {
+  button = buttons[0];
+  button.set_x(4); // Additional offset from the template's WAKU.BTN.POS anchor.
+  button.set_button_state_normal();
+}

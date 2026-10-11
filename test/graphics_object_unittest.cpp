@@ -113,6 +113,95 @@ TEST_F(GraphicsObjectTest, MoveTransfersFilePath) {
   EXPECT_TRUE(other.FilePath().empty());
 }
 
+TEST_F(GraphicsObjectTest, ButtonCloneCopiesParameters) {
+  serilang::Function callback(nullptr);
+  obj.Param().button.config = MwndConfig::Button{};
+  obj.Param().button.config->slot_id = 2;
+  obj.Param().button.call = &callback;
+  obj.Param().button.hit_state = ButtonState::Push;
+  obj.Param().button.real_state = ButtonState::Disable;
+  obj.Param().button.visible = false;
+
+  GraphicsObject clone = obj.Clone();
+
+  ASSERT_TRUE(clone.Param().button.config);
+  EXPECT_EQ(clone.Param().button.config->slot_id, 2);
+  EXPECT_EQ(clone.Param().button.call, &callback);
+  EXPECT_EQ(clone.Param().button, obj.Param().button);
+  EXPECT_EQ(clone.Param().button.hit_state, ButtonState::Push);
+  EXPECT_EQ(clone.Param().button.real_state, ButtonState::Disable);
+  EXPECT_FALSE(clone.Param().button.visible);
+  clone.Param().button.config->slot_id = 3;
+  EXPECT_EQ(obj.Param().button.config->slot_id, 2);
+  EXPECT_EQ(obj.Param().button.hit_state, ButtonState::Push);
+}
+
+TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
+  serilang::Function callback(nullptr);
+  obj.Param().button.config = MwndConfig::Button{};
+  obj.Param().button.config->slot_id = 2;
+  obj.Param().button.call = &callback;
+  obj.Param().button.hit_state = ButtonState::Push;
+  obj.Param().button.real_state = ButtonState::Disable;
+  obj.Param().button.visible = false;
+
+  GraphicsObject moved = std::move(obj);
+
+  ASSERT_TRUE(moved.Param().button.config);
+  EXPECT_EQ(moved.Param().button.config->slot_id, 2);
+  EXPECT_EQ(moved.Param().button.call, &callback);
+  EXPECT_EQ(moved.Param().button.hit_state, ButtonState::Push);
+  EXPECT_EQ(moved.Param().button.real_state, ButtonState::Disable);
+  EXPECT_FALSE(moved.Param().button.visible);
+  EXPECT_FALSE(obj.Param().button.config);
+  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button.hit_state, ButtonState::Normal);
+  EXPECT_EQ(obj.Param().button.real_state, ButtonState::Normal);
+  EXPECT_TRUE(obj.Param().button.visible);
+  EXPECT_EQ(obj.Param().button, ButtonProperties{});
+
+  GraphicsObject assigned;
+  assigned = std::move(moved);
+
+  ASSERT_TRUE(assigned.Param().button.config);
+  EXPECT_EQ(assigned.Param().button.config->slot_id, 2);
+  EXPECT_EQ(assigned.Param().button.call, &callback);
+  EXPECT_EQ(assigned.Param().button.hit_state, ButtonState::Push);
+  EXPECT_EQ(assigned.Param().button.real_state, ButtonState::Disable);
+  EXPECT_FALSE(assigned.Param().button.visible);
+  EXPECT_FALSE(moved.Param().button.config);
+  EXPECT_EQ(moved.Param().button.call, nullptr);
+  EXPECT_EQ(moved.Param().button, ButtonProperties{});
+
+  assigned = GraphicsObject();
+  EXPECT_EQ(assigned.Param().button, ButtonProperties{});
+}
+
+TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
+  serilang::Function callback(nullptr);
+  obj.Param().button.config = MwndConfig::Button{};
+  obj.Param().button.call = &callback;
+  obj.Param().button.hit_state = ButtonState::Push;
+  obj.Param().button.real_state = ButtonState::Disable;
+  obj.Param().button.visible = false;
+
+  obj.InitializeParams();
+
+  EXPECT_FALSE(obj.Param().button.config);
+  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button.hit_state, ButtonState::Normal);
+  EXPECT_EQ(obj.Param().button.real_state, ButtonState::Normal);
+  EXPECT_TRUE(obj.Param().button.visible);
+  EXPECT_EQ(obj.Param().button, ButtonProperties{});
+
+  obj.Param().button.config = MwndConfig::Button{};
+  obj.Param().button.call = &callback;
+  obj.Reset();
+  EXPECT_FALSE(obj.Param().button.config);
+  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button, ButtonProperties{});
+}
+
 TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   EXPECT_EQ(obj.frame_action_, nullptr);
   EXPECT_EQ(obj.frame_action_list_.size(), 0u);

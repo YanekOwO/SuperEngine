@@ -61,21 +61,30 @@ namespace sr = serilang;
 struct MwndObjectList {
   std::shared_ptr<TextWindow> window;
   std::function<sr::Value(std::shared_ptr<GraphicsObject>)> make_object;
+  bool buttons = false;
+
+  std::string Name() const { return buttons ? "mwnd.button" : "mwnd.object"; }
 
   TextWaku& Resolve() const {
     if (!window || !window->GetTextboxWaku())
-      throw sr::RuntimeError("mwnd.object requires a message-window waku");
+      throw sr::RuntimeError(Name() + " requires a message-window waku");
     return *window->GetTextboxWaku();
   }
 
   sr::Value Get(int index) const {
     auto& waku = Resolve();
-    if (index < 0 || static_cast<std::size_t>(index) >= waku.objects_.size())
-      throw sr::RuntimeError("mwnd.object index out of range: " +
-                             std::to_string(index));
+    if (index < 0 || static_cast<std::size_t>(index) >= Size())
+      throw sr::RuntimeError(Name() +
+                             " index out of range: " + std::to_string(index));
     if (!make_object)
-      throw sr::RuntimeError("mwnd.object requires the Object binding");
-    return make_object(waku.TouchObject(static_cast<std::size_t>(index)));
+      throw sr::RuntimeError(Name() + " requires the Object binding");
+    return make_object(buttons ? waku.TouchButton(index)
+                               : waku.TouchObject(index));
+  }
+
+  std::size_t Size() const {
+    auto& waku = Resolve();
+    return buttons ? waku.button_objects_.size() : waku.objects_.size();
   }
 };
 
@@ -365,18 +374,21 @@ void BindMwnd(SiglusMachine& runtime) {
   sb::class_<MwndObjectList> object_list(m, "MwndObjectList", false);
   object_list.def("__getitem__", &MwndObjectList::Get, sb::arg("index"));
   object_list.def("size", [](const MwndObjectList* list) {
-    return static_cast<int>(list->Resolve().objects_.size());
+    return static_cast<int>(list->Size());
   });
   object_list.def(
       "resize",
-      [](MwndObjectList*, int) {
-        throw sr::RuntimeError("mwnd.object has a fixed size");
+      [](MwndObjectList* list, int) {
+        throw sr::RuntimeError(list->Name() + " has a fixed size");
       },
       sb::arg("size"));
   mwnd.add_gc_root(object_list);
   // The Object binding is installed after Mwnd. Resolve its factory on access.
   mwnd.def("object", [get, object_list, &runtime](MwndHandle* h) mutable {
     return sr::Value(object_list.make_inst(get(h), runtime.make_object));
+  });
+  mwnd.def("button", [get, object_list, &runtime](MwndHandle* h) mutable {
+    return sr::Value(object_list.make_inst(get(h), runtime.make_object, true));
   });
 
   mwnd.def(

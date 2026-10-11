@@ -98,12 +98,11 @@ GraphicsObject::GraphicsObject(GraphicsObject&& rhs)
       file_path_(std::move(rhs.file_path_)),
       object_mutators_(),
       child_(std::move(rhs.child_)) {
-  if (rhs.object_data_) {
+  if (rhs.object_data_)
     object_data_ = std::move(rhs.object_data_);
-  }
   object_mutators_ = std::move(rhs.object_mutators_);
 
-  rhs.param_ = ObjectParameter();
+  rhs.InitializeParams();
   rhs.file_path_.clear();
   rhs.frame_action_list_.clear();
 }
@@ -112,6 +111,7 @@ GraphicsObject& GraphicsObject::operator=(GraphicsObject&& rhs) {
   if (this == &rhs)
     return *this;
   param_ = rhs.param_;
+
   file_path_ = std::move(rhs.file_path_);
   if (rhs.object_data_) {
     object_data_ = std::move(rhs.object_data_);
@@ -124,7 +124,7 @@ GraphicsObject& GraphicsObject::operator=(GraphicsObject&& rhs) {
   frame_action_list_ = std::move(rhs.frame_action_list_);
   child_ = std::move(rhs.child_);
 
-  rhs.param_ = ObjectParameter();
+  rhs.InitializeParams();
   rhs.file_path_.clear();
   rhs.frame_action_list_.clear();
 
@@ -254,8 +254,7 @@ void GraphicsObject::Reset() {
   ResetFrameActions();
   object_data_.reset();
   file_path_.clear();
-  param_ = ObjectParameter();
-  object_mutators_.clear();
+  InitializeParams();
   child_.clear();
 }
 

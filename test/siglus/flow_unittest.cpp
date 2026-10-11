@@ -25,6 +25,7 @@
 
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/intern_name.hpp"
 #include "libsiglus/lexeme.hpp"
@@ -48,6 +49,33 @@ class SiglusSceneEntryTest : public ::testing::Test {
   sr::VM vm{std::make_shared<sr::GarbageCollector>()};
   Loader loader{archive, vm, false};
   sr::Module* module = nullptr;
+
+  void AddCallbackScene(std::vector<Type> args) {
+    std::string code(5, '\0');
+    code[0] = static_cast<char>(ByteCode::Return);
+    const int32_t offset = code.size();
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      code += static_cast<char>(ByteCode::Declare);
+      const auto type = static_cast<int32_t>(args[i]);
+      const auto index = static_cast<int32_t>(i);
+      code.append(reinterpret_cast<const char*>(&type), sizeof(type));
+      code.append(reinterpret_cast<const char*>(&index), sizeof(index));
+    }
+    code += static_cast<char>(ByteCode::Arg);
+    code += static_cast<char>(ByteCode::Return);
+    code.append(4, '\0');
+    code += static_cast<char>(ByteCode::End);
+    const Scene_hdr header{.header_size = sizeof(Scene_hdr),
+                           .scene_offset = sizeof(Scene_hdr),
+                           .scene_size = static_cast<int32_t>(code.size())};
+    std::string scene(reinterpret_cast<const char*>(&header), sizeof(header));
+    scene += code;
+    archive.raw_scene_data_.push_back(std::move(scene));
+    archive.scene_names_.push_back("ui");
+    archive.scn_map_["ui"] = 1;
+    archive.cmd_.push_back(
+        Command{.scene_id = 1, .offset = offset, .name = "animate"});
+  }
 
   void SetUp() override {
     // A top-level return followed by a zero-argument named command.
@@ -84,6 +112,34 @@ TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
   auto* expected = module->globals->at(GetUsercmdId(5)).Get_if<sr::Function>();
   ASSERT_NE(expected, nullptr);
   EXPECT_EQ(ResolveSceneCommand(loader, "MENU", "open"), expected);
+}
+
+TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionUsesTypedSceneCommand) {
+  AddCallbackScene({Type::FrameAction, Type::Object});
+  Stage stage;
+  FrameActionManager manager(vm, stage, {}, 0);
+  auto object = std::make_shared<GraphicsObject>();
+  manager.StartConfiguredButton(
+      loader, object,
+      MwndConfig::CallTarget{.scene = "UI", .command = "animate"});
+  const auto action = object->GetFrameAction();
+  EXPECT_TRUE(action->IsActive());
+  EXPECT_EQ(action->end_time, -1);
+  action->GetCounter()->Advance(32, 1);
+  EXPECT_EQ(action->GetCounter()->Get(), 32);
+  EXPECT_TRUE(action->arguments.empty());
+}
+
+TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionRejectsWrongSignature) {
+  AddCallbackScene({Type::Int, Type::Object});
+  Stage stage;
+  FrameActionManager manager(vm, stage, {}, 0);
+  auto object = std::make_shared<GraphicsObject>();
+  EXPECT_THROW(manager.StartConfiguredButton(
+                   loader, object,
+                   MwndConfig::CallTarget{.scene = "ui", .command = "animate"}),
+               sr::RuntimeError);
+  EXPECT_FALSE(object->GetFrameAction()->IsActive());
 }
 
 TEST_F(SiglusSceneEntryTest, MissingNamedCommandDoesNotFallBackToScript) {

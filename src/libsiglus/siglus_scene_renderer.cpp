@@ -255,7 +255,7 @@ void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
       [&](const auto& self, GraphicsObject& object,
           std::optional<ParentObjState> parent,
           std::optional<ObjectMask> inherited_mask) -> void {
-    if (!object.Param().visible())
+    if (!object.Param().visible() || !object.Param().button.visible)
       return;
 
     std::optional<ObjectMask> mask = std::move(inherited_mask);

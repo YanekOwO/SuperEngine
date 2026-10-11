@@ -367,8 +367,20 @@ bool TextSystem::IsMwndButtonEnabled(const MwndConfig::Button& button) const {
   return GetMwndButtonPresentation(button).enabled;
 }
 
+void TextSystem::InitializeMwndButtonFrameActions(TextWaku& waku) {
+  if (!mwnd_frame_action_handler_)
+    return;
+  const auto buttons = waku.button_objects_;
+  for (const auto& object : buttons)
+    if (object && object->Param().button.config &&
+        object->Param().button.config->frame_action)
+      mwnd_frame_action_handler_(object,
+                                 *object->Param().button.config->frame_action);
+}
+
 TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
-    const MwndConfig::Button& button) const {
+    const MwndConfig::Button& button,
+    bool has_script_call) const {
   MwndActionStatus status;
   if (mwnd_action_status_handler_)
     status = mwnd_action_status_handler_(button);
@@ -405,9 +417,10 @@ TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
   }
 
   const bool has_call =
-      button.call &&
-      (static_cast<bool>(mwnd_call_handler_) ||
-       (button.action == Action::RealliveFarcall && system_.machine_));
+      has_script_call ||
+      (button.call &&
+       (static_cast<bool>(mwnd_call_handler_) ||
+        (button.action == Action::RealliveFarcall && system_.machine_)));
   const bool mode_matches =
       !button.required_mode || *button.required_mode == status.mode;
   const bool slot_enabled = IsMwndButtonSlotEnabled(button.slot_id);

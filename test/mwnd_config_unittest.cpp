@@ -40,6 +40,28 @@ TEST(MwndConfigTest, SiglusWakuObjectsUseLegacyDefaultAndExplicitCounts) {
   EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWaku(0).object_count, 0);
 }
 
+TEST(MwndConfigTest, SiglusButtonListPreservesEmptySlotsAndLegacyLimits) {
+  Gameexe gameexe;
+  auto config = MwndConfig::ParseSiglus(gameexe);
+  EXPECT_EQ(config.GetWaku(0).button_count, 8);
+  ASSERT_EQ(config.GetWaku(0).buttons.size(), 8);
+  EXPECT_EQ(config.GetWaku(0).buttons[7].slot_id, 7);
+  gameexe.parseLine("WAKU.CNT = 1");
+  gameexe.parseLine("WAKU.BTN.CNT = 3");
+  gameexe.parseLine("WAKU.000.BTN.002.FILE = button");
+  gameexe.parseLine("WAKU.000.BTN.001.POS = 3,4,5");
+  config = MwndConfig::ParseSiglus(gameexe);
+  ASSERT_EQ(config.GetWaku(0).buttons.size(), 3);
+  EXPECT_TRUE(config.GetWaku(0).buttons[0].file.empty());
+  EXPECT_EQ(config.GetWaku(0).buttons[1].position, Point(4, 5));
+  EXPECT_EQ(config.GetWaku(0).buttons[2].slot_id, 2);
+  gameexe.SetAt("WAKU.BTN.CNT", {-1});
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(0).button_count, 0);
+  gameexe.SetAt("WAKU.BTN.CNT", {999});
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(0).button_count, 256);
+  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWaku(0).button_count, 0);
+}
+
 TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   Gameexe gameexe;
   gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");

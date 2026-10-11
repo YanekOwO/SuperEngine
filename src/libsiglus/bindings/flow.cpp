@@ -91,8 +91,15 @@ sr::Function* ResolveSceneEntry(Loader& loader,
 sr::Function* ResolveSceneCommand(Loader& loader,
                                   std::string scene_name,
                                   const std::string& command_name) {
-  sr::Module& mod = LoadScene(loader, std::move(scene_name));
-  return loader.ResolveUserCommand(mod, command_name).function;
+  return ResolveSceneUserCommand(loader, std::move(scene_name), command_name)
+      .function;
+}
+
+const UserCommand& ResolveSceneUserCommand(Loader& loader,
+                                           std::string scene_name,
+                                           const std::string& command_name) {
+  return loader.ResolveUserCommand(LoadScene(loader, std::move(scene_name)),
+                                   command_name);
 }
 
 void BindFlow(SiglusMachine& rt) {

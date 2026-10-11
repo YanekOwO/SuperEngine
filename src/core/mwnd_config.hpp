@@ -310,6 +310,8 @@ class MwndConfig {
     Point icon_position;
     // Configured frame buttons; Siglus buttons retain their source slot_id.
     std::vector<Button> buttons;
+    // Reserved Siglus button_list slots (WAKU.BTN.CNT), including empty FILEs.
+    int button_count = 0;
     // Face graphic positions in pixels relative to the waku (face_pos).
     std::vector<Point> face_positions;
     // Number of reserved Siglus waku object slots (WAKU.OBJECT.CNT).

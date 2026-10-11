@@ -12,6 +12,10 @@ struct Function;
 
 namespace libsiglus::binding {
 class Loader;
+struct UserCommand;
+const UserCommand& ResolveSceneUserCommand(Loader& loader,
+                                           std::string scene_name,
+                                           const std::string& command_name);
 
 serilang::Function* ResolveSceneEntry(Loader& loader,
                                       std::string scene_name,

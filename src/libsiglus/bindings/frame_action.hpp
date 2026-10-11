@@ -42,6 +42,7 @@ struct NativeClass;
 }  // namespace serilang
 
 namespace libsiglus::binding {
+class Loader;
 
 using ActionOwner = std::shared_ptr<GraphicsObject>;
 
@@ -79,6 +80,9 @@ class FrameActionManager {
              serilang::Function& callback,
              std::vector<FrameActionArgument> arguments);
   void End(ActionReference reference);
+  void StartConfiguredButton(Loader& loader,
+                             ActionOwner owner,
+                             const MwndConfig::CallTarget& target);
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
                           bool fast_forward);
   void CancelGlobals();

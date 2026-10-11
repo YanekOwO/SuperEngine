@@ -172,6 +172,13 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       vm, *rt.stage, rt.local_config,
       static_cast<std::size_t>(frame_action_count));
 
+  rt.system->text().SetMwndFrameActionHandler(
+      [loader = rt.loader.get(), manager = rt.frame_action_manager](
+          std::shared_ptr<GraphicsObject> object,
+          const MwndConfig::CallTarget& target) {
+        manager->StartConfiguredButton(*loader, std::move(object), target);
+      });
+
   rt.system->text().SetMwndCallHandler(
       [loader = rt.loader.get(), &vm](const MwndConfig::CallTarget& target) {
         sr::Function* entry;
@@ -335,49 +342,62 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   }
   std::shared_ptr<InputListener> input = rt.input_event_listener;
 
+  rt.interaction_manager = std::make_unique<InteractionManager>(
+      *rt.stage, *input, ButtonActionTable::ParseSiglus(gexe));
+  const auto button_config = [](const GraphicsObject& object, int slot) {
+    auto config = object.Param().button.config.value_or(MwndConfig::Button{});
+    config.slot_id = slot;
+    config.action_no = object.Param().GetButtonAction();
+    config.se_no = object.Param().GetButtonSe();
+    return config;
+  };
+  rt.interaction_manager->SetMwndButtonHandlers(
+      [text = &rt.system->text(), button_config](const GraphicsObject& object,
+                                                 int slot) {
+        const auto state = text->GetMwndButtonPresentation(
+            button_config(object, slot), object.Param().button.call != nullptr);
+        return InteractionManager::ButtonPresentation{
+            state.visible, state.enabled, state.touch_enabled, state.activated};
+      },
+      [text = &rt.system->text(), &vm, button_config](
+          std::shared_ptr<GraphicsObject> object, int slot,
+          InteractionManager::MwndButtonEvent event) {
+        using Event = InteractionManager::MwndButtonEvent;
+        const auto config = button_config(*object, slot);
+        switch (event) {
+          case Event::Hit:
+            text->PlayMwndButtonSound(config, TextSystem::MwndButtonSound::Hit);
+            break;
+          case Event::Push:
+            text->PlayMwndButtonSound(config,
+                                      TextSystem::MwndButtonSound::Push);
+            break;
+          case Event::Decide:
+            text->PlayMwndButtonSound(config,
+                                      TextSystem::MwndButtonSound::Decide);
+            [[fallthrough]];
+          case Event::Repeat:
+            if (object->Param().button.call)
+              vm.ScheduleExecute(object->Param().button.call);
+            else
+              text->ExecuteMwndButton(config);
+            break;
+        }
+      },
+      rt.system->event().GetClock());
+
   struct MwndButtonEventListener final : EventListener {
-    TextSystem& text;
-    std::shared_ptr<InputListener> input;
-
-    MwndButtonEventListener(TextSystem& text_system,
-                            std::shared_ptr<InputListener> input_listener)
-        : text(text_system), input(std::move(input_listener)) {}
-
+    InteractionManager& interaction;
+    explicit MwndButtonEventListener(InteractionManager& manager)
+        : interaction(manager) {}
     void OnEvent(std::shared_ptr<Event> event) override {
-      if (!event || !input)
-        return;
-      const bool handled = std::visit(
-          [&](const auto& item) -> bool {
-            using T = std::decay_t<decltype(item)>;
-            if constexpr (std::same_as<T, MouseMotion>) {
-              text.SetMousePosition(item.pos);
-              return false;
-            } else if constexpr (std::same_as<T, MouseDown>) {
-              return item.button == MouseButton::LEFT &&
-                     text.HandleMouseClick(input->mouse_pos, true);
-            } else if constexpr (std::same_as<T, MouseUp>) {
-              return item.button == MouseButton::LEFT &&
-                     text.HandleMouseClick(input->mouse_pos, false);
-            } else if constexpr (std::same_as<T, KeyDown>) {
-              return IsDecideKey(item.code) &&
-                     text.HandleMouseClick(input->mouse_pos, true);
-            } else if constexpr (std::same_as<T, KeyUp>) {
-              return IsDecideKey(item.code) &&
-                     text.HandleMouseClick(input->mouse_pos, false);
-            }
-            return false;
-          },
-          *event);
-      if (handled)
+      if (event && interaction.HandleMwndButtonEvent(*event))
         *event = std::monostate();
     }
   };
   rt.mwnd_button_event_listener =
-      std::make_shared<MwndButtonEventListener>(rt.system->text(), input);
+      std::make_shared<MwndButtonEventListener>(*rt.interaction_manager);
   rt.system->event().AddListener(18, rt.mwnd_button_event_listener);
-
-  rt.interaction_manager = std::make_unique<InteractionManager>(
-      *rt.stage, *input, ButtonActionTable::ParseSiglus(gexe));
   sb::module_ m(gc.get(), vm.globals_.get());
 
   m.def("__builtin_streq", [](sr::Value lhs, sr::Value rhs) -> sr::Value {
@@ -412,6 +432,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   m.def("capture", [] {
     // TODO: create capture thumb image
   });
+  m.def("capture_for_tweet", [] {});
 
   return ret;
 }

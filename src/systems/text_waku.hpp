@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2009 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,6 +25,7 @@
 #pragma once
 
 #include "core/colour.hpp"
+#include "core/mwnd_config.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -74,11 +73,21 @@ class TextWaku {
   std::shared_ptr<GraphicsObject> TouchObject(std::size_t index);
   // Template changes reinitialize contents while preserving slot handles.
   void ResetObjectsFrom(TextWaku& previous);
+  std::shared_ptr<GraphicsObject> TouchButton(std::size_t index);
+  void ResetButtonsFrom(TextWaku& previous);
+  ParentObjState ButtonParent(std::size_t index, const Rect& window) const;
+  bool ButtonVisible(std::size_t index) const;
   static ParentObjState ObjectParent(const Point& window_origin);
 
   bool center_w_, center_h_;
 
+  // mwnd.object
   std::vector<std::shared_ptr<GraphicsObject>> objects_;
+
+  // mwnd.button and its template anchors. Script positions are offsets.
+  std::vector<std::shared_ptr<GraphicsObject>> button_objects_;
+  std::vector<MwndConfig::Button> button_config_;
+  std::vector<bool> button_visible_;
 
   std::shared_ptr<ISceneRenderer> renderer_;
 

@@ -1413,7 +1413,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[21] | b(Type::Callable, Member("set_face")),
            id[10] | b_callable({{0, "get_layer"}, {1, "set_layer"}}),
            id[11] | b_callable({{0, "get_world"}, {1, "set_world"}}),
-           id[32] | b(Type::ObjList, Member("button")),
+           id[32] | b_value_getter("button", Type::ObjList),
            id[53] | b(Type::ObjList, Member("face")),
            id[30] | b_value_getter("object", Type::ObjList),
 

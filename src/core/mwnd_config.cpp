@@ -524,8 +524,8 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
 
   const int waku_count =
       std::clamp(gexe("WAKU.CNT").Int().value_or(0), 0, kMaximumConfigEntries);
-  const int button_count = std::clamp(gexe("WAKU.BTN.CNT").Int().value_or(0), 0,
-                                      kMaximumConfigEntries);
+  const int button_count =
+      std::clamp(gexe("WAKU.BTN.CNT").Int().value_or(8), 0, 256);
   const int face_count = std::clamp(gexe("WAKU.FACE.CNT").Int().value_or(0), 0,
                                     kMaximumConfigEntries);
   const int object_count = std::clamp(gexe("WAKU.OBJECT.CNT").Int().value_or(1),
@@ -558,12 +558,11 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     waku.icon_position_base = icon_pos[0];
     waku.icon_position = Point(icon_pos[1], icon_pos[2]);
     waku.object_count = object_count;
+    waku.button_count = button_count;
 
     for (int button_id = 0; button_id < button_count; ++button_id) {
       auto button_source = source("BTN", button_id);
       const std::string file = button_source("FILE").Str().value_or("");
-      if (file.empty())
-        continue;
       Button button;
       button.name = std::format("BTN.{:03}", button_id);
       button.file = file;
@@ -610,6 +609,12 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   if (result.wakus_.empty()) {
     Waku waku;
     waku.object_count = object_count;
+    waku.button_count = button_count;
+    for (int slot = 0; slot < button_count; ++slot) {
+      Button button;
+      button.slot_id = slot;
+      waku.buttons.push_back(std::move(button));
+    }
     waku.filter_rendering = FilterRendering::AlphaBlend;
     waku.filter_colour = RGBAColour(0, 0, 255, 128);
     result.wakus_[{0, 0}] = std::move(waku);

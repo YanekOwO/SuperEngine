@@ -95,6 +95,7 @@ class TextWindow {
   std::pair<int, int> sorter() const { return sorter_; }
   void set_layer(int layer) { sorter_.second = layer; }
   void ClearMouseCapture();
+  std::size_t capture_generation() const { return capture_generation_; }
 
   inline TextLayout& Layout() { return layout_; }
   inline TextLayout const& Layout() const { return layout_; }
@@ -197,7 +198,11 @@ class TextWindow {
   [[nodiscard]] bool GetIsFilter() const { return is_filter_; }
   void SetFilter(bool f) { is_filter_ = f; }
 
-  void SetVisible(bool in) { is_visible_ = in; }
+  void SetVisible(bool in) {
+    if (!in)
+      ClearMouseCapture();
+    is_visible_ = in;
+  }
   bool IsVisible() const { return is_visible_; }
 
   void set_action_on_pause(const int i) { action_on_pause_ = i; }
@@ -337,6 +342,7 @@ class TextWindow {
   bool is_filter_;
 
   bool is_visible_;
+  std::size_t capture_generation_ = 0;
 
   // Determines the position of the keycursor (the animated cursor
   // that appears when the game is waiting for a click to move to the

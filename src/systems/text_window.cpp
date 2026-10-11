@@ -160,6 +160,7 @@ void TextWindow::NewPage() {
 }
 
 void TextWindow::ClearMouseCapture() {
+  ++capture_generation_;
   for (auto* waku : {textbox_waku_.get(), namebox_waku_.get()})
     if (waku)
       waku->ClearMouseCapture();
@@ -241,16 +242,22 @@ void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
   ASSERTX_NE(waku.get(), nullptr);
   if (textbox_waku_)
     waku->ResetObjectsFrom(*textbox_waku_);
+  if (textbox_waku_)
+    waku->ResetButtonsFrom(*textbox_waku_);
   waku_set_ = waku_set;
   textbox_waku_ = std::move(waku);
+  system_.text().InitializeMwndButtonFrameActions(*textbox_waku_);
 }
 
 void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
   ASSERTX_NE(waku.get(), nullptr);
   if (namebox_waku_)
     waku->ResetObjectsFrom(*namebox_waku_);
+  if (namebox_waku_)
+    waku->ResetButtonsFrom(*namebox_waku_);
   name_waku_set_ = waku_set;
   namebox_waku_ = std::move(waku);
+  system_.text().InitializeMwndButtonFrameActions(*namebox_waku_);
 }
 
 void TextWindow::Execute(bool update_controls) {

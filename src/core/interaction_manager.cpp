@@ -32,6 +32,7 @@
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
 
+#include <algorithm>
 #include <compare>
 #include <cstddef>
 #include <optional>
@@ -41,8 +42,8 @@
 
 namespace {
 
-constexpr int kButtonSelect = 3;
-constexpr int kButtonDisable = 4;
+constexpr int kButtonSelect = static_cast<int>(ButtonState::Select);
+constexpr int kButtonDisable = static_cast<int>(ButtonState::Disable);
 
 struct HitCandidate {
   int owner_order;
@@ -166,16 +167,31 @@ void ApplyButtonOverrides(
     std::optional<ButtonState> parent_state = std::nullopt) {
   ObjectParameter& param = object.Param();
   const ButtonState state = ResolveButtonState(param, groups, parent_state);
+  object.Param().button.real_state = state;
+  object.Param().button.hit_state = ButtonState::Normal;
+  const int group_no = param.GetButtonGroup();
+  if (group_no >= 0 && static_cast<std::size_t>(group_no) < groups.size() &&
+      groups[group_no]) {
+    const auto& group = *groups[group_no];
+    if (group.hit_button_no == param.GetButtonNumber())
+      object.Param().button.hit_state = ButtonState::Hit;
+    if (group.pushed_button_no == param.GetButtonNumber())
+      object.Param().button.hit_state = ButtonState::Push;
+  }
   const int action = param.GetButtonAction();
   if (!param.IsButton() || action < 0 ||
       static_cast<std::size_t>(action) >= button_actions.GetCount()) {
     param.ClearButtonOverrides();
+    object.Param().button.hit_state = object.Param().button.real_state =
+        ButtonState::Normal;
   } else {
     const ButtonActionTable::Entry entry = button_actions.GetEntry(action);
     const ButtonActionTable::State& action_state = entry.GetState(state);
-    param.SetButtonOverrides(action_state.pattern, action_state.rep_pos.x(),
-                             action_state.rep_pos.y(), action_state.rep_tr,
-                             action_state.rep_bright, action_state.rep_dark);
+    // Siglus action templates add to pat_no; RealLive uses absolute overrides.
+    param.SetButtonOverrides(
+        param.pattern_number + param.button.cut_no + action_state.pattern,
+        action_state.rep_pos.x(), action_state.rep_pos.y(), action_state.rep_tr,
+        action_state.rep_bright, action_state.rep_dark);
   }
 
   if (!object.HasChildren())
@@ -201,8 +217,22 @@ InteractionManager::InteractionManager(Stage& stage,
       button_actions_(std::move(button_actions)) {}
 
 void InteractionManager::Update() {
+  RefreshMwndButtons();
+  if (captured_ && captured_enabled_ && clock_ && last_repeat_) {
+    const auto object = captured_->object.lock();
+    if (object && hovered_.lock() == object && object->Param().button.config &&
+        (object->Param().button.config->action ==
+             MwndConfig::ButtonAction::BackPage ||
+         object->Param().button.config->action ==
+             MwndConfig::ButtonAction::ForwardPage) &&
+        clock_->GetTime() - *last_repeat_ >= std::chrono::milliseconds(250)) {
+      last_repeat_ = clock_->GetTime();
+      EmitMwndButton(*captured_, MwndButtonEvent::Repeat);
+    }
+  }
   for (int layer = kLayerFg; layer <= kLayerNext; ++layer)
     UpdateLayer(layer);
+  consumed_decide_ = false;
 }
 
 void InteractionManager::UpdateGroup(Group& group,
@@ -212,7 +242,11 @@ void InteractionManager::UpdateGroup(Group& group,
 
   group.hit_button_no = hit_button_no;
 
-  const InputListener::State& decide = input_.decide;
+  InputListener::State decide = input_.decide;
+  if (consumed_decide_ || swallow_decide_) {
+    decide = {};
+    group.pressed_button_no.reset();
+  }
   if (decide.on_down)
     group.pressed_button_no = group.hit_button_no;
 
@@ -311,4 +345,247 @@ void InteractionManager::UpdateLayer(int layer) {
           ApplyButtonOverrides(*object, groups, button_actions_);
     }
   }
+  for (const auto& button : CollectMwndButtons(layer))
+    ApplyMwndButton(button, layer == kLayerFg);
+}
+
+void InteractionManager::SetMwndButtonHandlers(PresentationHandler presentation,
+                                               ButtonEventHandler event,
+                                               std::shared_ptr<Clock> clock) {
+  mwnd_presentation_ = std::move(presentation);
+  mwnd_event_ = std::move(event);
+  clock_ = std::move(clock);
+}
+
+std::vector<InteractionManager::MwndButton>
+InteractionManager::CollectMwndButtons(int layer) {
+  std::vector<MwndButton> result;
+  std::size_t traversal = 0;
+  const auto windows = stage_.mwnd[layer];
+  for (std::size_t window_id = 0; window_id < windows.size(); ++window_id) {
+    const auto& window = windows[window_id];
+    if (!window)
+      continue;
+    const auto collect = [&](TextWaku* waku, const Rect& rect, bool visible,
+                             int kind) {
+      if (!waku)
+        return;
+      waku->button_visible_.resize(waku->button_objects_.size(), true);
+      for (std::size_t slot = 0; slot < waku->button_objects_.size(); ++slot) {
+        const auto& root = waku->button_objects_[slot];
+        if (!root)
+          continue;
+        auto presentation = mwnd_presentation_ ? mwnd_presentation_(*root, slot)
+                                               : ButtonPresentation{};
+        waku->button_visible_[slot] = presentation.visible;
+        const auto visit =
+            [&](auto&& self, const std::shared_ptr<GraphicsObject>& object,
+                ParentObjState parent, ButtonPresentation policy, bool drawn,
+                ButtonState inherited_state) -> void {
+          if (!object)
+            return;
+          const auto& param = object->Param();
+          drawn = drawn && policy.visible && param.visible();
+          if (object != root && mwnd_presentation_) {
+            const auto child = mwnd_presentation_(*object, slot);
+            policy.visible = policy.visible && child.visible;
+            policy.enabled = policy.enabled && child.enabled;
+            policy.touch_enabled = policy.touch_enabled && child.touch_enabled;
+            policy.activated = child.activated;
+            drawn = drawn && child.visible;
+          }
+          result.push_back(MwndButton{
+              .window = window,
+              .object = object,
+              .waku = waku,
+              .slot = static_cast<int>(slot),
+              .window_generation = window->capture_generation(),
+              .parent = parent,
+              .presentation = policy,
+              .visible = drawn,
+              .inherited_state = inherited_state,
+              .sorter = {window->sorter().first, window->sorter().second,
+                         static_cast<int>(window_id) * 2 + kind,
+                         root->Param().z_order, root->Param().z_layer,
+                         root->Param().z_depth, static_cast<int>(slot),
+                         traversal++}});
+          ApplyMwndButton(result.back(), layer == kLayerFg);
+          if (!policy.enabled || param.GetButtonState() == kButtonDisable)
+            inherited_state = ButtonState::Disable;
+          else if (param.GetButtonState() == kButtonSelect)
+            inherited_state = ButtonState::Select;
+          ParentObjState child_parent = ParentObjState::BuildFrom(*object);
+          child_parent.render_state =
+              RenderState::Fold(child_parent.render_state, parent.render_state);
+          const auto children = object->GetChildren();
+          for (const auto& child : children)
+            self(self, child, child_parent, policy, drawn, inherited_state);
+        };
+        visit(visit, root, waku->ButtonParent(slot, rect), presentation,
+              visible, ButtonState::Normal);
+      }
+    };
+    collect(window->GetTextboxWaku(), window->GetWindowRect(),
+            window->IsTextboxWakuVisible(), 0);
+    if (window->GetNameboxWaku())
+      collect(window->GetNameboxWaku(), window->GetNameboxWakuRect(),
+              window->IsNameboxWakuVisible(), 1);
+  }
+  return result;
+}
+
+void InteractionManager::ApplyMwndButton(const MwndButton& button,
+                                         bool foreground) {
+  const auto object = button.object.lock();
+  if (!object)
+    return;
+  auto& param = object->Param();
+  object->Param().button.visible = button.presentation.visible;
+  const int action = param.GetButtonAction();
+  if (!param.IsButton() || action < 0 ||
+      static_cast<std::size_t>(action) >= button_actions_.GetCount()) {
+    object->Param().button.hit_state = object->Param().button.real_state =
+        ButtonState::Normal;
+    param.ClearButtonOverrides();
+    return;
+  }
+  ButtonState hit = ButtonState::Normal;
+  if (foreground && button.visible && hovered_.lock() == object)
+    hit = captured_ && captured_->object.lock() == object ? ButtonState::Push
+                                                          : ButtonState::Hit;
+  object->Param().button.hit_state = hit;
+  ButtonState state = ButtonState::Normal;
+  if (!button.presentation.enabled || param.GetButtonState() == kButtonDisable)
+    state = ButtonState::Disable;
+  else if (param.GetButtonState() == kButtonSelect)
+    state = ButtonState::Select;
+  else if (button.inherited_state != ButtonState::Normal)
+    state = button.inherited_state;
+  else if (button.presentation.touch_enabled)
+    state = hit != ButtonState::Normal
+                ? hit
+                : (button.presentation.activated ? ButtonState::Select
+                                                 : ButtonState::Normal);
+  object->Param().button.real_state = state;
+  const auto drawing = button_actions_.GetEntry(action).GetState(state);
+  param.SetButtonOverrides(
+      param.pattern_number + param.button.cut_no + drawing.pattern,
+      drawing.rep_pos.x(), drawing.rep_pos.y(), drawing.rep_tr,
+      drawing.rep_bright, drawing.rep_dark);
+}
+
+void InteractionManager::EmitMwndButton(const MwndButton& button,
+                                        MwndButtonEvent event) {
+  if (auto object = button.object.lock(); object && mwnd_event_)
+    mwnd_event_(std::move(object), button.slot, event);
+}
+
+std::optional<InteractionManager::MwndButton>
+InteractionManager::RefreshMwndButtons() {
+  auto buttons = CollectMwndButtons(kLayerFg);
+  if (captured_) {
+    const auto object = captured_->object.lock();
+    const auto window = captured_->window.lock();
+    auto found =
+        std::find_if(buttons.begin(), buttons.end(), [&](const auto& b) {
+          return b.object.lock() == object && b.window.lock() == window &&
+                 b.waku == captured_->waku &&
+                 b.window_generation == captured_->window_generation &&
+                 b.visible && object && object->HasDrawer() &&
+                 object->Param().IsButton();
+        });
+    if (found == buttons.end()) {
+      captured_.reset();
+      last_repeat_.reset();
+    } else {
+      captured_ = *found;
+      const auto& p = object->Param();
+      captured_enabled_ = captured_enabled_ && found->presentation.enabled &&
+                          found->presentation.touch_enabled &&
+                          !p.click_disable &&
+                          found->inherited_state == ButtonState::Normal &&
+                          p.GetButtonState() != kButtonSelect &&
+                          p.GetButtonState() != kButtonDisable;
+    }
+  }
+  // Resolve drawing before hit testing, so script changes to pat_no, action,
+  // scale and clipping affect both the displayed image and the hit geometry.
+  for (const auto& button : buttons)
+    ApplyMwndButton(button, true);
+  std::optional<MwndButton> hit;
+  for (const auto& button : buttons) {
+    const auto object = button.object.lock();
+    if (!object || !button.visible)
+      continue;
+    const auto& param = object->Param();
+    const int action = param.GetButtonAction();
+    if (param.IsButton() && action >= 0 &&
+        static_cast<std::size_t>(action) < button_actions_.GetCount() &&
+        !param.click_disable && object->HasDrawer() &&
+        object->GetDrawer().HitTest(*object, input_.mouse_pos, button.parent) &&
+        (!hit || hit->sorter < button.sorter))
+      hit = button;
+  }
+  const auto old_hover = hovered_.lock();
+  const auto object = hit ? hit->object.lock() : nullptr;
+  hovered_ = object;
+  for (const auto& button : buttons)
+    ApplyMwndButton(button, true);
+  if (object != old_hover && hit && hit->presentation.enabled &&
+      hit->presentation.touch_enabled &&
+      hit->inherited_state == ButtonState::Normal &&
+      object->Param().GetButtonState() == 0)
+    EmitMwndButton(*hit, MwndButtonEvent::Hit);
+  return hit;
+}
+
+bool InteractionManager::HandleMwndButtonEvent(const Event& event) {
+  if (std::holds_alternative<MouseMotion>(event)) {
+    RefreshMwndButtons();
+    return false;
+  }
+  const bool decide_event = std::visit(
+      [](const auto& item) {
+        using T = std::decay_t<decltype(item)>;
+        if constexpr (std::same_as<T, MouseDown> || std::same_as<T, MouseUp>)
+          return item.button == MouseButton::LEFT;
+        else if constexpr (std::same_as<T, KeyDown> || std::same_as<T, KeyUp>)
+          return IsDecideKey(item.code);
+        else
+          return false;
+      },
+      event);
+  if (!decide_event)
+    return false;
+  auto hit = RefreshMwndButtons();
+  const bool down = input_.decide.down;
+  const bool edge = down != last_decide_down_;
+  last_decide_down_ = down;
+  bool handled = swallow_decide_ || hit.has_value();
+  if (edge && down && hit) {
+    captured_ = hit;
+    const auto object = hit->object.lock();
+    captured_enabled_ = hit->presentation.enabled &&
+                        hit->presentation.touch_enabled &&
+                        hit->inherited_state == ButtonState::Normal &&
+                        object->Param().GetButtonState() == 0;
+    swallow_decide_ = true;
+    if (captured_enabled_) {
+      if (clock_)
+        last_repeat_ = clock_->GetTime();
+      EmitMwndButton(*hit, MwndButtonEvent::Push);
+    }
+  } else if (edge && !down) {
+    const auto captured = captured_;
+    captured_.reset();
+    swallow_decide_ = false;
+    last_repeat_.reset();
+    if (captured && captured_enabled_ && hit &&
+        captured->object.lock() == hit->object.lock())
+      EmitMwndButton(*captured, MwndButtonEvent::Decide);
+    captured_enabled_ = false;
+  }
+  consumed_decide_ = consumed_decide_ || handled;
+  RefreshMwndButtons();
+  return handled;
 }

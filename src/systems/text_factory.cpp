@@ -23,6 +23,8 @@
 
 #include "systems/text_factory.hpp"
 
+#include "core/object.hpp"
+#include "core/object_internal/drawer/file.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
@@ -86,6 +88,23 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
     waku = CreateWakuNormal(system, window, config);
 
   waku->objects_.resize(config.object_count);
+  waku->button_objects_.resize(config.button_count);
+  waku->button_config_ = config.buttons;
+  waku->button_visible_.resize(config.button_count, true);
+  if (config_.layered_windows()) {
+    for (const auto& button : config.buttons) {
+      if (button.file.empty())
+        continue;
+      auto object = waku->TouchButton(button.slot_id);
+      object->SetDrawer(std::make_unique<GraphicsObjectOfFile>(
+          system.graphics().GetSurfaceNamed(button.file)));
+      object->SetFilePath(button.file);
+      object->Param().SetVisible(true);
+      object->Param().SetButtonOpts(button.action_no, button.se_no, 0, 0);
+      object->Param().button.cut_no = button.cut_no;
+      object->Param().button.config = button;
+    }
+  }
   waku->renderer_ = system.graphics().GetSceneRenderer();
 
   return waku;
@@ -124,6 +143,8 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
   const Size text_size = window.GetTextSurfaceSize();
   const Rect window_rect = window.GetWindowRect(result->GetSize(text_size));
   for (const auto& button_config : config.buttons) {
+    if (config_.layered_windows())
+      continue;  // Siglus controls are GraphicsObjects on the outer waku.
     std::shared_ptr<SDLSurface> surface;
     Size surface_size = button_config.explicit_size.value_or(Size());
     if (!button_config.file.empty()) {
