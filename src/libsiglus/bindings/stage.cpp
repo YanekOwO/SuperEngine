@@ -54,11 +54,6 @@ class GroupArray {
 )";
 
   src += R"(
-class QuakeArray {
-  fn __init__(self, layer) { self.layer = layer; }
-  fn __getitem__(self, idx) { return Quake(self.layer, idx); }
-}
-
 class StageLayer {
   fn __init__(self, layer = 0) {
     self.object = nil;

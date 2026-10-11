@@ -26,7 +26,7 @@
 #include "core/stage.hpp"
 #include "core/stage_effect.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "srbind/srbind.hpp"
 
 #include <stdexcept>
@@ -39,7 +39,7 @@ static StageEffect& ResolveEffect(const EffectHandle& handle) {
   return StageElement<StageEffect>::Resolve(handle);
 }
 
-void BindEffect(SiglusRuntime& runtime) {
+void BindEffect(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage_state = runtime.stage.get();
 
