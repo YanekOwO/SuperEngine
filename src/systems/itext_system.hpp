@@ -47,6 +47,9 @@ struct FontFace {
   bool is_italic = false;
   bool is_shadow = true;
   bool is_futidoru = false;
+  // RenderGlyphOnto baseline in pixels below the insertion point. When absent,
+  // the rendered surface keeps the font's natural line-top origin.
+  std::optional<int> baseline_from_top = std::nullopt;
 };
 
 class ITextSystem {

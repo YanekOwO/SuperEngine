@@ -125,6 +125,12 @@ Size SDLTextImpl::RenderGlyphOnto(const std::string& text,
   if (font.is_italic)
     TTF_SetFontStyle(f, style | TTF_STYLE_ITALIC);
 
+  // SDL_ttf puts the baseline at the font ascent within its line-height
+  // surface. Translate that surface to the caller's character-cell baseline;
+  // foreground, shadow and outline must all share the same origin.
+  if (font.baseline_from_top)
+    insertion += Point(0, *font.baseline_from_top - TTF_GetFontAscent(f));
+
   std::shared_ptr<SDL_Surface> character(
       TTF_RenderText_Blended(f, text.c_str(), 0, ToSDLColor(font_color)),
       SDL_DestroySurface);

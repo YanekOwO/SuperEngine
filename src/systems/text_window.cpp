@@ -38,6 +38,7 @@
 #include "utilities/string_utilities.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -693,6 +694,13 @@ bool TextWindow::DisplayCharacter(const std::string& current,
                        .is_italic = std::exchange(next_char_italic_, false),
                        .is_shadow = system_.text().globals().font_shadow,
                        .is_futidoru = system_.text().globals().font_futidoru};
+    if (system_.text().mwnd_config().layered_windows()) {
+      // Siglus fixes the baseline at 86% of the character cell height,
+      // independently of font line metrics.
+      font_face.baseline_from_top =
+          static_cast<int>(std::round(font_size_in_pixels() * 0.86));
+    }
+
     const bool has_shadow = font_face.is_shadow || font_face.is_futidoru;
 
     // If our font is not monospaced ASCII, we aren't using
