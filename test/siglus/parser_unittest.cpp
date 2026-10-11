@@ -231,6 +231,110 @@ null_t t0 = stage.back.object[int:0].create(str:bg47,int:1) ;cmd<int:37,int:2,in
 )");
 }
 
+TEST_F(SiglusParserTest, ExpressionListPreservesMixedTypeSourceOrder) {
+  strs = {"middle", "tail"};
+  g_cmd = {libsiglus::Command{.name = "$$list_test"}};
+  ResetParser();
+
+  Parse(Marker{}, Push{Type::Int, 0x7e000000}, Push{Type::Int, 10},
+        Push{Type::Int, 11}, Push{Type::String, 0}, Push{Type::Int, 22},
+        Push{Type::String, 1},
+        lex::Command(elm::Signature{
+            .overload_id = 0,
+            .arglist = elm::ArgumentList(
+                {Type::Int,
+                 elm::ArgumentList({Type::Int, Type::String, Type::Int}),
+                 Type::String}),
+            .argtags = {},
+            .rettype = Type::None}));
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto& command = std::get<token::Command>(tokens[0].token);
+  const auto& args =
+      std::get<elm::Usrcmd>(command.chain.root.var).arguments.arg;
+  const std::vector<Value> expected = {
+      Integer{10}, List{{Integer{11}, String{"middle"}, Integer{22}}},
+      String{"tail"}};
+  EXPECT_EQ(args, expected);
+}
+
+TEST_F(SiglusParserTest, NestedExpressionListsPreserveSourceOrder) {
+  strs = {"nested"};
+  g_cmd = {libsiglus::Command{.name = "$$list_test"}};
+  ResetParser();
+
+  Parse(Marker{}, Push{Type::Int, 0x7e000000}, Push{Type::Int, 1},
+        Push{Type::Int, 2}, Push{Type::String, 0}, Push{Type::Int, 3},
+        Push{Type::Int, 4}, Push{Type::Int, 5}, Push{Type::Int, 6},
+        lex::Command(elm::Signature{
+            .overload_id = 0,
+            .arglist = {.args = {elm::ArgumentList(
+                            {Type::Int,
+                             elm::ArgumentList(
+                                 {Type::Int, Type::String,
+                                  elm::ArgumentList({Type::Int, Type::Int}),
+                                  Type::Int}),
+                             Type::Int})}},
+            .argtags = {},
+            .rettype = Type::None}));
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto& command = std::get<token::Command>(tokens[0].token);
+  const auto& args =
+      std::get<elm::Usrcmd>(command.chain.root.var).arguments.arg;
+  const std::vector<Value> expected = {
+      List{{Integer{1},
+            List{{Integer{2}, String{"nested"}, List{{Integer{3}, Integer{4}}},
+                  Integer{5}}},
+            Integer{6}}}};
+  EXPECT_EQ(args, expected);
+}
+
+TEST_F(SiglusParserTest, EmptyExpressionListDoesNotConsumeAdjacentArguments) {
+  g_cmd = {libsiglus::Command{.name = "$$list_test"}};
+  ResetParser();
+
+  Parse(Marker{}, Push{Type::Int, 0x7e000000}, Push{Type::Int, 10},
+        Push{Type::Int, 20},
+        lex::Command(elm::Signature{
+            .overload_id = 0,
+            .arglist =
+                elm::ArgumentList({Type::Int, elm::ArgumentList{}, Type::Int}),
+            .argtags = {},
+            .rettype = Type::None}));
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto& command = std::get<token::Command>(tokens[0].token);
+  const auto& args =
+      std::get<elm::Usrcmd>(command.chain.root.var).arguments.arg;
+  const std::vector<Value> expected = {Integer{10}, List{}, Integer{20}};
+  EXPECT_EQ(args, expected);
+}
+
+TEST_F(SiglusParserTest, SingletonExpressionListPreservesItsValue) {
+  strs = {"single"};
+  g_cmd = {libsiglus::Command{.name = "$$list_test"}};
+  ResetParser();
+
+  Parse(Marker{}, Push{Type::Int, 0x7e000000}, Push{Type::String, 0},
+        lex::Command(elm::Signature{
+            .overload_id = 0,
+            .arglist = {.args = {elm::ArgumentList({Type::String})}},
+            .argtags = {},
+            .rettype = Type::None}));
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto& command = std::get<token::Command>(tokens[0].token);
+  const auto& args =
+      std::get<elm::Usrcmd>(command.chain.root.var).arguments.arg;
+  const std::vector<Value> expected = {List{{String{"single"}}}};
+  EXPECT_EQ(args, expected);
+}
+
 TEST_F(SiglusParserTest, SubroutineTemporariesDoNotOverwriteArguments) {
   strs = {"bg47"};
   ResetParser();
@@ -279,8 +383,9 @@ TEST_F(SiglusParserTest, NonListDeclareDoesNotConsumeStackValue) {
   auto parsed = parser->ParseAll();
   ASSERT_TRUE(parsed.has_value()) << parsed.error();
   const auto& warnings = parsed.value().second;
-  EXPECT_THAT(warnings, ::testing::Contains(::testing::HasSubstr(
-                            "expected stack to be empty")));
+  EXPECT_THAT(
+      warnings,
+      ::testing::Contains(::testing::HasSubstr("expected stack to be empty")));
 }
 
 TEST_F(SiglusParserTest, ReassignLinenoAndIgnoreLineLexeme) {

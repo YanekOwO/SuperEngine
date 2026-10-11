@@ -110,10 +110,10 @@ Value Parser::pop_arg(const elm::ArgumentList::node_t& node) {
         if constexpr (std::same_as<T, Type>)
           return pop(x);
         else {  // type is list
-          std::vector<Value> vals;
-          vals.reserve(x.args.size());
-          for (auto it = x.args.crbegin(); it != x.args.crend(); ++it)
-            vals.emplace_back(pop_arg(*it));
+          // Pop backward from the stack while retaining the source list order.
+          std::vector<Value> vals(x.args.size());
+          for (size_t i = x.args.size(); i > 0; --i)
+            vals[i - 1] = pop_arg(x.args[i - 1]);
           return List(std::move(vals));
         }
       },
