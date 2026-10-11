@@ -151,12 +151,16 @@ TEST_F(StageTest, FreeAndInitializeSingleObjectAffectFrontAndBackOnly) {
 }
 
 TEST_F(StageTest, ConstructorAndResetIncludeNextObjects) {
-  Stage stage(3, 2);
+  Stage stage(3, 2, 0, 1);
   stage.objects.Get(kLayerNext, 1).Param().SetVisible(1);
   stage.groups[kLayerFg].resize(1);
   stage.groups[kLayerBg].resize(1);
   stage.groups[kLayerNext].resize(1);
   stage.GetEffect(kLayerNext, 1).mono = 100;
+  auto next_quake = stage.GetQuakeHandle(kLayerNext, 0).lock();
+  ASSERT_TRUE(next_quake);
+  ASSERT_TRUE(next_quake->Start(QuakeState::StartParams{
+      .type = 1, .period_ms = 100, .begin_order = 0, .end_order = 0}));
   stage.SetTransitionRenderAlpha(0.25, 0.75);
 
   EXPECT_EQ(GetExistFlags(stage.objects[kLayerNext]), "010");
@@ -169,8 +173,36 @@ TEST_F(StageTest, ConstructorAndResetIncludeNextObjects) {
   EXPECT_EQ(stage.groups[kLayerNext].size(), 1);
   EXPECT_EQ(stage.effects[kLayerNext].size(), 2);
   EXPECT_EQ(GetExistFlags(stage.effects[kLayerNext]), "00");
+  EXPECT_EQ(GetExistFlags(stage.quakes[kLayerNext]), "0");
   EXPECT_DOUBLE_EQ(stage.foreground_render_alpha(), 1.0);
   EXPECT_DOUBLE_EQ(stage.next_render_alpha(), 0.0);
+}
+
+TEST_F(StageTest, WipeCopiesFrontAndPromotesBackQuakesForEveryRange) {
+  Stage stage(0, 0, 0, 1);
+  auto foreground = stage.GetQuakeHandle(kLayerFg, 0);
+  auto background = stage.GetQuakeHandle(kLayerBg, 0);
+  ASSERT_TRUE(StageElement<QuakeState>::Resolve(foreground)
+                  .Start(QuakeState::StartParams{.type = 1,
+                                                 .period_ms = 100,
+                                                 .begin_order = 50,
+                                                 .end_order = 50}));
+  ASSERT_TRUE(StageElement<QuakeState>::Resolve(background)
+                  .Start(QuakeState::StartParams{.type = 2,
+                                                 .power = 64,
+                                                 .period_ms = 200,
+                                                 .begin_order = 60,
+                                                 .end_order = 60}));
+
+  stage.Wipe(0, 0, 0, 0);
+
+  EXPECT_TRUE(foreground.expired());
+  ASSERT_FALSE(background.expired());
+  EXPECT_EQ(background.lock().get(), stage.quakes[kLayerFg][0].get());
+  ASSERT_TRUE(stage.quakes.Exists(kLayerNext, 0));
+  EXPECT_EQ(stage.quakes.Get(kLayerNext, 0).Check(), 1);
+  EXPECT_EQ(stage.quakes.Get(kLayerFg, 0).Check(), 1);
+  EXPECT_FALSE(stage.quakes.Exists(kLayerBg, 0));
 }
 
 TEST_F(StageTest, TransitionRenderAlphaIsClampedAndClearable) {

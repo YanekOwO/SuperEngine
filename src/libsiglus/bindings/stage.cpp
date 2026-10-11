@@ -107,6 +107,11 @@ class EffectArray {
   fn resize(self, size) { __stage_effect_resize(self.layer, size); }
 }
 
+class QuakeArray {
+  fn __init__(self, layer) { self.layer = layer; }
+  fn __getitem__(self, idx) { return Quake(self.layer, idx); }
+}
+
 class StageLayer {
   fn __init__(self, layer = 0) {
     self.object = nil;
@@ -148,7 +153,7 @@ class StageLayer {
 
     self.quake = nil;
     try {
-      self.quake = LazyArray(Quake);
+      self.quake = QuakeArray(layer);
     } catch (e) {
       print("Siglus stage.quake binding unavailable:", e);
     }
@@ -172,7 +177,7 @@ stage_next = stage.next;
 )";
 
   Execute(vm, std::move(src));
-  // TODO: Implement actual Mwnd, Group, Btnsel, World, and Quake classes
+  // TODO: Implement actual Mwnd, Group, Btnsel, and World classes
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "2_stage", BindStage)

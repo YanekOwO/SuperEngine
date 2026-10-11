@@ -30,6 +30,7 @@
 #include "core/gameexe.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
+#include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "srbind/srbind.hpp"
@@ -84,6 +85,7 @@ struct SiglusMachine {
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
+  std::shared_ptr<::QuakeList> screen_quakes;
   std::shared_ptr<binding::FrameActionManager> frame_action_manager;
   std::shared_ptr<MaskList> mask_list;
 

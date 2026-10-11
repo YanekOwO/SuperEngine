@@ -26,6 +26,7 @@
 
 #include "core/group.hpp"
 #include "core/object.hpp"
+#include "core/quake.hpp"
 #include "core/stage_effect.hpp"
 #include "utilities/lazy_array.hpp"
 
@@ -114,7 +115,10 @@ struct StageElement {
 
 class Stage {
  public:
-  Stage(int object_size = 0, int effect_size = 0, int group_size = 0);
+  Stage(int object_size = 0,
+        int effect_size = 0,
+        int group_size = 0,
+        int quake_size = 0);
 
   // Foreground, background and next objects
   StageElement<GraphicsObject> objects;
@@ -124,6 +128,9 @@ class Stage {
 
   // Foreground, background and next stage effects.
   StageElement<StageEffect> effects;
+
+  // Foreground, background and next stage quakes.
+  StageElement<QuakeState> quakes;
 
   // Foreground objects (at the time of the last save)
   LazyArray<GraphicsObject> saved_foreground_objects;
@@ -202,6 +209,17 @@ class Stage {
   }
   StageEffect& GetEffect(int layer, int effect_number);
   void ResizeEffects(int layer, int size);
+
+  inline const StageElement<QuakeState>::layer_type& QuakesForLayer(
+      int layer) const {
+    return quakes[layer];
+  }
+  inline StageElement<QuakeState>::layer_type& QuakesForLayer(int layer) {
+    return quakes[layer];
+  }
+  std::weak_ptr<QuakeState> GetQuakeHandle(int layer, int quake_number);
+  void AdvanceQuakes(std::int64_t elapsed_ms);
+  bool HasActiveQuakes() const;
 
  private:
   double foreground_render_alpha_ = 1.0;

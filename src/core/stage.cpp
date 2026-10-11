@@ -30,10 +30,11 @@
 #include <limits>
 #include <stdexcept>
 
-Stage::Stage(int object_size, int effect_size, int group_size)
+Stage::Stage(int object_size, int effect_size, int group_size, int quake_size)
     : objects(object_size),
       groups(group_size),
       effects(effect_size),
+      quakes(quake_size),
       saved_foreground_objects(object_size),
       saved_background_objects(object_size) {}
 
@@ -41,6 +42,7 @@ void Stage::Reset() {
   objects.Clear();
   groups.Clear();
   effects.Clear();
+  quakes.Clear();
   ClearTransitionRenderState();
 }
 
@@ -53,7 +55,7 @@ void Stage::Wipe(int begin_order,
                  int end_order,
                  int begin_layer,
                  int end_layer) {
-  // TODO(siglus): Promote mwnd, btnsel, world, and quake stage state
+  // TODO(siglus): Promote mwnd, btnsel, and world stage state
   // when those core Siglus element implementations exist.
   auto& foreground_objects = objects[kLayerFg];
   auto& background_objects = objects[kLayerBg];
@@ -165,6 +167,26 @@ void Stage::Wipe(int begin_order,
       foreground_effects[i].reset();
     }
   }
+
+  // Quakes are stage-wide render state in legacy Siglus. Unlike objects and
+  // groups, every slot participates even in a sorter-limited wipe.
+  auto& foreground_quakes = quakes[kLayerFg];
+  auto& background_quakes = quakes[kLayerBg];
+  auto& next_quakes = quakes[kLayerNext];
+  for (auto& quake : next_quakes)
+    quake.reset();
+  const size_t quake_count = std::min(
+      {foreground_quakes.size(), background_quakes.size(), next_quakes.size()});
+  for (size_t i = 0; i < quake_count; ++i) {
+    if (foreground_quakes[i])
+      quakes.Assign(kLayerNext, i, *foreground_quakes[i]);
+
+    if (background_quakes[i]) {
+      quakes.Move(kLayerFg, i, kLayerBg, i);
+    } else {
+      foreground_quakes[i].reset();
+    }
+  }
 }
 
 void Stage::SetTransitionRenderAlpha(double foreground_alpha,
@@ -188,6 +210,27 @@ void Stage::ResizeEffects(int layer, int size) {
   if (size < 0)
     throw std::runtime_error("Negative stage effect count");
   EffectsForLayer(layer).resize(static_cast<size_t>(size));
+}
+
+std::weak_ptr<QuakeState> Stage::GetQuakeHandle(int layer, int quake_number) {
+  if (quake_number < 0)
+    throw std::out_of_range("Negative stage quake index");
+  return quakes.GetHandle(layer, static_cast<size_t>(quake_number));
+}
+
+void Stage::AdvanceQuakes(std::int64_t elapsed_ms) {
+  for (auto& layer : quakes.storage)
+    for (auto& quake : layer)
+      if (quake)
+        quake->Advance(elapsed_ms);
+}
+
+bool Stage::HasActiveQuakes() const {
+  for (const auto& layer : quakes.storage)
+    for (const auto& quake : layer)
+      if (quake && quake->IsActive())
+        return true;
+  return false;
 }
 
 GraphicsObject& Stage::GetObject(int layer, int obj_number) {

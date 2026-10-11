@@ -23,12 +23,12 @@
 
 #include "libsiglus/siglus_scene_renderer.hpp"
 
+#include "core/gameexe.hpp"
 #include "core/mask.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mask.hpp"
 #include "core/stage.hpp"
-#include "log/domain_logger.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -39,8 +39,6 @@
 #include <utility>
 
 namespace libsiglus {
-
-static DomainLogger logger("SiglusSceneRenderer");
 
 class ScopedRenderParameters {
  public:
@@ -70,10 +68,17 @@ class ScopedRenderParameters {
   ObjectParameter original_;
 };
 
-SiglusSceneRenderer::SiglusSceneRenderer(Stage& stage,
-                                         System& system,
-                                         std::shared_ptr<MaskList> mask_list)
-    : stage_(stage), system_(system), mask_list_(std::move(mask_list)) {}
+SiglusSceneRenderer::SiglusSceneRenderer(
+    Stage& stage,
+    System& system,
+    std::shared_ptr<MaskList> mask_list,
+    std::shared_ptr<QuakeList> screen_quakes,
+    std::shared_ptr<Gameexe> local_config)
+    : stage_(stage),
+      system_(system),
+      mask_list_(std::move(mask_list)),
+      screen_quakes_(std::move(screen_quakes)),
+      local_config_(std::move(local_config)) {}
 
 void SiglusSceneRenderer::ExecuteFrame() {
   stage_.Execute();
@@ -123,12 +128,36 @@ void SiglusSceneRenderer::RenderQueuedObjects() {
     const int effect_layer = std::get<7>(object);
     ScopedRenderParameters parameters(graphics_object, alpha_multiplier,
                                       stage_.EffectsForLayer(effect_layer));
-    RenderObject(graphics_object, mask_list_.get());
+    std::optional<ParentObjState> quake_parent;
+    const QuakeTransform quake =
+        TransformForOrder(graphics_object.Param().z_order, effect_layer);
+    if (!quake.IsIdentity()) {
+      quake_parent = ParentObjState{};
+      quake_parent->render_state.pos_x = quake.translate_x;
+      quake_parent->render_state.pos_y = quake.translate_y;
+      quake_parent->render_state.scale_x = quake.scale;
+      quake_parent->render_state.scale_y = quake.scale;
+    }
+    RenderObject(graphics_object, mask_list_.get(), std::move(quake_parent));
   }
 }
 
+QuakeTransform SiglusSceneRenderer::TransformForOrder(int order,
+                                                      int stage_layer) const {
+  if (QuakeRenderingStopped())
+    return {};
+
+  return ComposeQuakeTransforms(order, screen_quakes_.get(),
+                                stage_.QuakesForLayer(stage_layer));
+}
+
+bool SiglusSceneRenderer::QuakeRenderingStopped() const {
+  return local_config_ && (*local_config_)("quake_stop").Int().value_or(0) != 0;
+}
+
 void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
-                                       const MaskList* mask_list) {
+                                       const MaskList* mask_list,
+                                       std::optional<ParentObjState> parent) {
   const auto resolve_mask =
       [mask_list](int index) -> std::optional<ObjectMask> {
     if (!mask_list)
@@ -161,17 +190,19 @@ void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
     if (!object.HasChildren())
       return;
 
-    if (parent)
-      logger(Severity::Warn) << "Nested parents are not supported yet.";
-
     const ParentObjState child_parent = ParentObjState::BuildFrom(object);
+    ParentObjState transformed_parent = child_parent;
+    if (parent) {
+      transformed_parent.render_state = RenderState::Fold(
+          transformed_parent.render_state, parent->render_state);
+    }
     for (auto& child : object.GetChildren()) {
       if (child)
-        self(self, *child, child_parent, mask);
+        self(self, *child, transformed_parent, mask);
     }
   };
 
-  render_object(render_object, root, std::nullopt, std::nullopt);
+  render_object(render_object, root, std::move(parent), std::nullopt);
 }
 
 }  // namespace libsiglus

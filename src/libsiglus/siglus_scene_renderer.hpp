@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "systems/scene_renderer.hpp"
 
@@ -31,6 +32,7 @@
 #include <vector>
 
 class GraphicsObject;
+class Gameexe;
 class System;
 class MaskList;
 
@@ -40,7 +42,9 @@ class SiglusSceneRenderer final : public ISceneRenderer {
  public:
   SiglusSceneRenderer(::Stage& stage,
                       ::System& system,
-                      std::shared_ptr<MaskList> mask_list);
+                      std::shared_ptr<MaskList> mask_list,
+                      std::shared_ptr<::QuakeList> screen_quakes,
+                      std::shared_ptr<::Gameexe> local_config);
 
   void ExecuteFrame() override;
   void RenderScene() override;
@@ -49,17 +53,23 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   using ToRenderVec = std::vector<
       std::tuple<int, int, int, int, int, GraphicsObject*, double, int>>;
 
-  static void RenderObject(GraphicsObject& object, const MaskList* mask_list);
+  static void RenderObject(GraphicsObject& object,
+                           const MaskList* mask_list,
+                           std::optional<ParentObjState> parent = std::nullopt);
   void RenderStageObjects(::Stage& stage, ToRenderVec& to_render);
   void QueueObjects(StageElement<GraphicsObject>::layer_type& objects,
                     int source_order,
                     double alpha_multiplier,
                     int effect_layer);
   void RenderQueuedObjects();
+  QuakeTransform TransformForOrder(int order, int stage_layer) const;
+  bool QuakeRenderingStopped() const;
 
   ::Stage& stage_;
   ::System& system_;
   std::shared_ptr<MaskList> mask_list_;
+  std::shared_ptr<::QuakeList> screen_quakes_;
+  std::shared_ptr<::Gameexe> local_config_;
   ToRenderVec to_render_;
 };
 
