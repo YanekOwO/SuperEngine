@@ -189,6 +189,14 @@ void Stage::Wipe(int begin_order,
   }
 }
 
+void Stage::SetTransitionRenderRange(int begin_order,
+                                     int end_order,
+                                     int begin_layer,
+                                     int end_layer) {
+  transition_render_range_ = TransitionRenderRange{
+      .begin = {begin_order, begin_layer}, .end = {end_order, end_layer}};
+}
+
 void Stage::SetTransitionRenderAlpha(double foreground_alpha,
                                      double next_alpha) {
   foreground_render_alpha_ = std::clamp(foreground_alpha, 0.0, 1.0);
@@ -196,6 +204,7 @@ void Stage::SetTransitionRenderAlpha(double foreground_alpha,
 }
 
 void Stage::ClearTransitionRenderState() {
+  transition_render_range_.reset();
   foreground_render_alpha_ = 1.0;
   next_render_alpha_ = 0.0;
 }

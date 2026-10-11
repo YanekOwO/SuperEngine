@@ -35,6 +35,7 @@ class GraphicsObject;
 class Gameexe;
 class System;
 class MaskList;
+struct ScreenCanvas;
 
 namespace libsiglus {
 
@@ -50,18 +51,16 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   void RenderScene() override;
 
  private:
-  using ToRenderVec = std::vector<
-      std::tuple<int, int, int, int, int, GraphicsObject*, double, int>>;
+  enum class ObjectRange { All, Below, Within, Above };
+  using ToRenderVec =
+      std::vector<std::tuple<int, int, int, int, GraphicsObject*>>;
 
   static void RenderObject(GraphicsObject& object,
                            const MaskList* mask_list,
                            std::optional<ParentObjState> parent = std::nullopt);
-  void RenderStageObjects(::Stage& stage, ToRenderVec& to_render);
-  void QueueObjects(StageElement<GraphicsObject>::layer_type& objects,
-                    int source_order,
-                    double alpha_multiplier,
-                    int effect_layer);
-  void RenderQueuedObjects();
+  void RenderStageObjects();
+  void RenderObjects(int stage_layer, ObjectRange range = ObjectRange::All);
+  void RenderQueuedObjects(int stage_layer);
   QuakeTransform TransformForOrder(int order, int stage_layer) const;
   bool QuakeRenderingStopped() const;
 
@@ -71,6 +70,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   std::shared_ptr<::QuakeList> screen_quakes_;
   std::shared_ptr<::Gameexe> local_config_;
   ToRenderVec to_render_;
+  std::shared_ptr<ScreenCanvas> transition_canvas_;
 };
 
 }  // namespace libsiglus

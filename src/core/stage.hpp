@@ -34,6 +34,7 @@
 #include <cstddef>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -102,6 +103,12 @@ struct StageElement {
 
 class Stage {
  public:
+  struct TransitionRenderRange {
+    // Inclusive bounds in lexicographic (order, layer) sorter order.
+    std::pair<int, int> begin;
+    std::pair<int, int> end;
+  };
+
   Stage(int object_size = 0,
         int effect_size = 0,
         int group_size = 0,
@@ -142,6 +149,13 @@ class Stage {
 
   double foreground_render_alpha() const { return foreground_render_alpha_; }
   double next_render_alpha() const { return next_render_alpha_; }
+  const std::optional<TransitionRenderRange>& transition_render_range() const {
+    return transition_render_range_;
+  }
+  void SetTransitionRenderRange(int begin_order,
+                                int end_order,
+                                int begin_layer,
+                                int end_layer);
   void SetTransitionRenderAlpha(double foreground_alpha, double next_alpha);
   void ClearTransitionRenderState();
 
@@ -209,6 +223,7 @@ class Stage {
   bool HasActiveQuakes() const;
 
  private:
+  std::optional<TransitionRenderRange> transition_render_range_;
   double foreground_render_alpha_ = 1.0;
   double next_render_alpha_ = 0.0;
 };

@@ -186,6 +186,7 @@ TEST_F(StageTest, ConstructorAndResetIncludeNextObjects) {
   ASSERT_TRUE(next_quake->Start(QuakeState::StartParams{
       .type = 1, .period_ms = 100, .begin_order = 0, .end_order = 0}));
   stage.SetTransitionRenderAlpha(0.25, 0.75);
+  stage.SetTransitionRenderRange(10, 20, 30, 40);
 
   EXPECT_EQ(GetExistFlags(stage.objects[kLayerNext]), "010");
   stage.Reset();
@@ -200,6 +201,7 @@ TEST_F(StageTest, ConstructorAndResetIncludeNextObjects) {
   EXPECT_EQ(GetExistFlags(stage.quakes[kLayerNext]), "0");
   EXPECT_DOUBLE_EQ(stage.foreground_render_alpha(), 1.0);
   EXPECT_DOUBLE_EQ(stage.next_render_alpha(), 0.0);
+  EXPECT_FALSE(stage.transition_render_range());
 }
 
 TEST_F(StageTest, WipeCopiesFrontAndPromotesBackQuakesForEveryRange) {
@@ -240,6 +242,35 @@ TEST_F(StageTest, TransitionRenderAlphaIsClampedAndClearable) {
 
   stage.ClearTransitionRenderState();
 
+  EXPECT_DOUBLE_EQ(stage.foreground_render_alpha(), 1.0);
+  EXPECT_DOUBLE_EQ(stage.next_render_alpha(), 0.0);
+}
+
+TEST_F(StageTest, TransitionRenderRangeStoresInclusiveSorterBounds) {
+  Stage stage;
+  EXPECT_FALSE(stage.transition_render_range());
+
+  stage.SetTransitionRenderRange(-2, 4, 3, 5);
+
+  ASSERT_TRUE(stage.transition_render_range());
+  EXPECT_EQ(stage.transition_render_range()->begin, std::make_pair(-2, 3));
+  EXPECT_EQ(stage.transition_render_range()->end, std::make_pair(4, 5));
+  stage.SetTransitionRenderRange(0, 0, std::numeric_limits<int>::min(),
+                                 std::numeric_limits<int>::max());
+  EXPECT_EQ(stage.transition_render_range()->begin,
+            std::make_pair(0, std::numeric_limits<int>::min()));
+  EXPECT_EQ(stage.transition_render_range()->end,
+            std::make_pair(0, std::numeric_limits<int>::max()));
+}
+
+TEST_F(StageTest, ClearTransitionRenderStateClearsRangeAndRestoresAlpha) {
+  Stage stage;
+  stage.SetTransitionRenderRange(1, 2, 3, 4);
+  stage.SetTransitionRenderAlpha(0.25, 0.75);
+
+  stage.ClearTransitionRenderState();
+
+  EXPECT_FALSE(stage.transition_render_range());
   EXPECT_DOUBLE_EQ(stage.foreground_render_alpha(), 1.0);
   EXPECT_DOUBLE_EQ(stage.next_render_alpha(), 0.0);
 }

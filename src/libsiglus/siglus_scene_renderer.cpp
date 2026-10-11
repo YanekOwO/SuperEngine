@@ -30,20 +30,55 @@
 #include "core/object_internal/object_mask.hpp"
 #include "core/stage.hpp"
 #include "systems/graphics_system.hpp"
+#include "systems/sdl/glrenderer.hpp"
+#include "systems/sdl/screen_canvas.hpp"
+#include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 
+#include <GL/glew.h>
+
 #include <algorithm>
-#include <cmath>
 #include <stdexcept>
 #include <utility>
 
 namespace libsiglus {
+namespace {
+
+// Scene textures must remain opaque: object alpha is already resolved into
+// their RGB, and the wipe applies its opacity to the completed scene once.
+class ScopedTransitionCanvas {
+ public:
+  ScopedTransitionCanvas() : original_screen_(SDLSurface::screen_) {
+    glGetIntegerv(GL_VIEWPORT, viewport_);
+    glGetBooleanv(GL_COLOR_WRITEMASK, colour_mask_);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer_);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer_);
+    const Size size = original_screen_->GetSize();
+    glViewport(0, 0, size.width(), size.height());
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  }
+
+  ~ScopedTransitionCanvas() {
+    SDLSurface::screen_ = std::move(original_screen_);
+    glViewport(viewport_[0], viewport_[1], viewport_[2], viewport_[3]);
+    glColorMask(colour_mask_[0], colour_mask_[1], colour_mask_[2],
+                colour_mask_[3]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_framebuffer_);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_framebuffer_);
+  }
+
+ private:
+  std::shared_ptr<glFrameBuffer> original_screen_;
+  GLint viewport_[4];
+  GLboolean colour_mask_[4];
+  GLint draw_framebuffer_;
+  GLint read_framebuffer_;
+};
 
 class ScopedRenderParameters {
  public:
   ScopedRenderParameters(GraphicsObject& object,
-                         double multiplier,
                          const StageElement<Effect>::layer_type& effects)
       : object_(object), original_(object.Param()) {
     const int order = original_.z_order;
@@ -54,11 +89,6 @@ class ScopedRenderParameters {
       if (effect->Contains(order, layer))
         effect->ApplyTo(object_.Param());
     }
-
-    const int alpha = std::clamp(
-        static_cast<int>(std::lround(object_.Param().raw_alpha() * multiplier)),
-        0, 255);
-    object_.Param().SetAlpha(alpha);
   }
 
   ~ScopedRenderParameters() { object_.Param() = std::move(original_); }
@@ -67,6 +97,8 @@ class ScopedRenderParameters {
   GraphicsObject& object_;
   ObjectParameter original_;
 };
+
+}  // namespace
 
 SiglusSceneRenderer::SiglusSceneRenderer(
     Stage& stage,
@@ -87,50 +119,84 @@ void SiglusSceneRenderer::ExecuteFrame() {
 }
 
 void SiglusSceneRenderer::RenderScene() {
-  RenderStageObjects(stage_, to_render_);
+  RenderStageObjects();
 
   if (!system_.graphics().is_interface_hidden())
     system_.text().Render();
 }
 
-void SiglusSceneRenderer::RenderStageObjects(Stage& stage,
-                                             ToRenderVec& to_render) {
-  to_render.clear();
-  QueueObjects(stage.objects[kLayerNext], 0, stage.next_render_alpha(),
-               kLayerNext);
-  QueueObjects(stage.objects[kLayerFg], 1, stage.foreground_render_alpha(),
-               kLayerFg);
-  RenderQueuedObjects();
+void SiglusSceneRenderer::RenderStageObjects() {
+  if (!stage_.transition_render_range()) {
+    RenderObjects(kLayerFg);
+    return;
+  }
+
+  const auto screen = SDLSurface::screen_;
+  ScopedTransitionCanvas render_state;
+  const double progress = stage_.foreground_render_alpha();
+
+  RenderObjects(kLayerFg, ObjectRange::Below);
+  RenderObjects(progress >= 1.0 ? kLayerFg : kLayerNext, ObjectRange::Within);
+
+  if (progress > 0.0 && progress < 1.0) {
+    const Size size = screen->GetSize();
+    if (!transition_canvas_ || transition_canvas_->GetSize() != size)
+      transition_canvas_ = std::make_shared<ScreenCanvas>(size);
+
+    SDLSurface::screen_ = transition_canvas_;
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glRenderer().ClearBuffer(transition_canvas_, RGBAColour::Black());
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+
+    // Rebuild from live stage state each frame. ScreenCanvas also supplies
+    // safe framebuffer snapshots to colour-filter objects while drawing.
+    RenderObjects(kLayerFg, ObjectRange::Below);
+    RenderObjects(kLayerFg, ObjectRange::Within);
+
+    SDLSurface::screen_ = screen;
+    RenderingConfig config;
+    config.alpha = static_cast<float>(progress);
+    const Rect bounds(Point(0, 0), size);
+    glRenderer().Render(
+        {transition_canvas_->glFrameBuffer::GetTexture(), bounds}, config,
+        {screen, bounds});
+  }
+
+  RenderObjects(kLayerFg, ObjectRange::Above);
 }
 
-void SiglusSceneRenderer::QueueObjects(
-    StageElement<GraphicsObject>::layer_type& objects,
-    int source_order,
-    double alpha_multiplier,
-    int effect_layer) {
-  for (size_t i = 0; i < objects.size(); ++i)
-    if (objects[i])
-      to_render_.emplace_back(
-          objects[i]->Param().z_order, objects[i]->Param().z_layer,
-          objects[i]->Param().z_depth, static_cast<int>(i), source_order,
-          objects[i].get(), alpha_multiplier, effect_layer);
+void SiglusSceneRenderer::RenderObjects(int stage_layer, ObjectRange range) {
+  to_render_.clear();
+  const auto& objects = stage_.objects[stage_layer];
+  for (size_t i = 0; i < objects.size(); ++i) {
+    if (!objects[i])
+      continue;
+    const auto& param = objects[i]->Param();
+    if (range != ObjectRange::All) {
+      const auto sorter = std::make_pair(param.z_order, param.z_layer);
+      const auto& bounds = *stage_.transition_render_range();
+      if ((range == ObjectRange::Below && sorter >= bounds.begin) ||
+          (range == ObjectRange::Within &&
+           (sorter < bounds.begin || sorter > bounds.end)) ||
+          (range == ObjectRange::Above && sorter <= bounds.end))
+        continue;
+    }
+    to_render_.emplace_back(param.z_order, param.z_layer, param.z_depth,
+                            static_cast<int>(i), objects[i].get());
+  }
+  RenderQueuedObjects(stage_layer);
 }
 
-void SiglusSceneRenderer::RenderQueuedObjects() {
+void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
   std::sort(to_render_.begin(), to_render_.end());
 
   for (auto& object : to_render_) {
-    const double alpha_multiplier = std::get<6>(object);
-    if (alpha_multiplier <= 0.0)
-      continue;
-
-    GraphicsObject& graphics_object = *std::get<5>(object);
-    const int effect_layer = std::get<7>(object);
-    ScopedRenderParameters parameters(graphics_object, alpha_multiplier,
-                                      stage_.EffectsForLayer(effect_layer));
+    GraphicsObject& graphics_object = *std::get<4>(object);
+    ScopedRenderParameters parameters(graphics_object,
+                                      stage_.EffectsForLayer(stage_layer));
     std::optional<ParentObjState> quake_parent;
     const QuakeTransform quake =
-        TransformForOrder(graphics_object.Param().z_order, effect_layer);
+        TransformForOrder(graphics_object.Param().z_order, stage_layer);
     if (!quake.IsIdentity()) {
       quake_parent = ParentObjState{};
       quake_parent->render_state.pos_x = quake.translate_x;

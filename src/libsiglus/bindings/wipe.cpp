@@ -454,6 +454,8 @@ struct SiglusWipe {
         MakeWipeFrameCounter(params, system_->event().GetClock());
     const double initial_progress =
         initially_terminal ? 0.0 : progress_counter.ReadFrame();
+    stage_->SetTransitionRenderRange(params.begin_order, params.end_order,
+                                     params.begin_layer, params.end_layer);
     stage_->SetTransitionRenderAlpha(initial_progress, 1.0 - initial_progress);
 
     if (initially_terminal) {
