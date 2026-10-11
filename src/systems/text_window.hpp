@@ -127,7 +127,8 @@ class TextWindow {
 
   // TODO(erg): What's SetMousePosition and how does it differ from mouse
   // listeners?
-  void SetMousePosition(const Point& pos);
+  void SetMousePosition(const Point& pos, bool update_waku = true);
+  bool HasMwndButtonAt(const Point& pos) const;
   bool HandleMouseClick(const Point& pos, bool pressed);
 
   // Sets how the name is displayed

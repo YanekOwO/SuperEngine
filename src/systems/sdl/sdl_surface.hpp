@@ -86,6 +86,11 @@ class SDLSurface {
                        bool use_src_alpha = true);
 
   void RenderToScreen(const Rect& src, const Rect& dst, int alpha = 255) const;
+  void RenderToScreen(const Rect& src,
+                      const Rect& dst,
+                      int alpha,
+                      int bright,
+                      int dark) const;
 
   void RenderToScreenAsColorMask(const Rect& src,
                                  const Rect& dst,
@@ -119,9 +124,9 @@ class SDLSurface {
   [[nodiscard]] RGBAColour GetPixelAt(Point pos) const;
 
   std::shared_ptr<SDLSurface> ClipAsColorMask(const Rect& clip_rect,
-                                           int r,
-                                           int g,
-                                           int b) const;
+                                              int r,
+                                              int g,
+                                              int b) const;
 
   [[nodiscard]] std::shared_ptr<SDLSurface> Clone() const;
 

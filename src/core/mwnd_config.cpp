@@ -225,6 +225,12 @@ const MwndConfig::Icon* MwndConfig::GetIcon(int id) const {
   return it == icons_.end() ? nullptr : &it->second;
 }
 
+const MwndConfig::ButtonSound* MwndConfig::GetButtonSound(int id) const {
+  if (id < 0 || static_cast<std::size_t>(id) >= button_sounds_.size())
+    return nullptr;
+  return &button_sounds_[id];
+}
+
 MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
   MwndConfig result;
   result.button_actions_ = ButtonActionTable::ParseReallive(gexe);
@@ -389,6 +395,17 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
 MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   MwndConfig result;
   result.button_actions_ = ButtonActionTable::ParseSiglus(gexe);
+  const int sound_count = std::clamp(gexe("BUTTON.SE.CNT").Int().value_or(16),
+                                     0, kMaximumConfigEntries);
+  result.button_sounds_.resize(sound_count);
+  for (int id = 0; id < sound_count; ++id) {
+    auto source = gexe("BUTTON", "SE", id);
+    result.button_sounds_[id] = ButtonSound{
+        .hit = source("HIT").Int().value_or(0),
+        .push = source("PUSH").Int().value_or(-1),
+        .decide = source("DECIDE").Int().value_or(1),
+    };
+  }
   result.default_window_ = gexe("MWND.DEFAULT_MWND_NO").Int().value_or(0);
   result.default_selection_window_ =
       gexe("MWND.DEFAULT_SEL_MWND_NO").Int().value_or(1);
@@ -538,13 +555,14 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
       Button button;
       button.name = std::format("BTN.{:03}", button_id);
       button.file = file;
+      button.slot_id = button_id;
       button.cut_no = button_source("CUT_NO").Int().value_or(0);
       const auto pos =
           button_source("POS").IntVec().value_or(std::vector<int>{0, 0, 0});
       button.position_base = pos[0];
       button.position = Point(pos[1], pos[2]);
       button.action_no = button_source("ACTION").Int().value_or(0);
-      button.se_no = button_source("SE").Int().value_or(-1);
+      button.se_no = button_source("SE").Int().value_or(0);
       auto type_source = button_source("TYPE");
       std::string type = type_source.StrAt(0).value_or("none");
       if (auto value = type_source.IntAt(1))
@@ -553,6 +571,18 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
         type += "," + std::to_string(*value);
       button.action =
           ParseSiglusButtonAction(type, button.action_option, button.mode);
+      switch (button.action) {
+        case ButtonAction::ReadSkip:
+        case ButtonAction::AutoMode:
+        case ButtonAction::LocalSwitch:
+        case ButtonAction::GlobalSwitch:
+        case ButtonAction::LocalMode:
+        case ButtonAction::GlobalMode:
+          button.required_mode = button.mode;
+          break;
+        default:
+          break;
+      }
       button.call = ParseCall(button_source("CALL"));
       button.frame_action = ParseCall(button_source("FRAME_ACTION"));
       waku.buttons.emplace_back(std::move(button));

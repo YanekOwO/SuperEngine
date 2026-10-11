@@ -52,6 +52,7 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   gameexe.parseLine("WAKU.003.ICON_NO = 0");
   gameexe.parseLine("WAKU.003.BTN.000.FILE = button");
   gameexe.parseLine("WAKU.003.BTN.000.POS = 3,4,5");
+  gameexe.parseLine("WAKU.003.BTN.000.ACTION = 2");
   gameexe.parseLine("WAKU.003.BTN.000.TYPE = auto_mode,1");
   gameexe.parseLine("WAKU.003.BTN.000.CALL = _00COM,$$button");
   gameexe.parseLine("WAKU.003.FACE.000.POS = 7,8");
@@ -59,6 +60,10 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   gameexe.parseLine("ICON.000.FILE = wait_icon");
   gameexe.parseLine("ICON.000.CNT = 12");
   gameexe.parseLine("ICON.000.SPEED = 50");
+  gameexe.parseLine("BUTTON.SE.CNT = 1");
+  gameexe.parseLine("BUTTON.SE.000.HIT = 4");
+  gameexe.parseLine("BUTTON.SE.000.PUSH = 5");
+  gameexe.parseLine("BUTTON.SE.000.DECIDE = 6");
 
   const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
 
@@ -77,7 +82,10 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   EXPECT_EQ(waku.filter_file, "mask");
   ASSERT_EQ(waku.buttons.size(), 1);
   EXPECT_EQ(waku.buttons[0].position_base, 3);
+  EXPECT_EQ(waku.buttons[0].slot_id, 0);
+  EXPECT_EQ(waku.buttons[0].se_no, 0);
   EXPECT_EQ(waku.buttons[0].mode, 1);
+  EXPECT_EQ(waku.buttons[0].required_mode, 1);
   EXPECT_EQ(waku.buttons[0].action, MwndConfig::ButtonAction::AutoMode);
   ASSERT_TRUE(waku.buttons[0].call);
   EXPECT_EQ(waku.buttons[0].call->scene, "_00COM");
@@ -88,8 +96,24 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   ASSERT_NE(config.GetIcon(0), nullptr);
   EXPECT_EQ(config.GetIcon(0)->file, "wait_icon");
   EXPECT_EQ(config.GetIcon(0)->pattern_count, 12);
+  ASSERT_NE(config.GetButtonSound(0), nullptr);
+  EXPECT_EQ(*config.GetButtonSound(0),
+            (MwndConfig::ButtonSound{.hit = 4, .push = 5, .decide = 6}));
   EXPECT_FALSE(gameexe.Exists("WINDOW.000.MOJI_SIZE"));
   EXPECT_FALSE(gameexe.Exists("DEFAULT_SEL_WINDOW"));
+}
+
+TEST(MwndConfigTest, SiglusButtonSoundsUseLegacyDefaults) {
+  Gameexe gameexe;
+  gameexe.parseLine("BUTTON.SE.CNT = 2");
+
+  const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
+
+  ASSERT_NE(config.GetButtonSound(1), nullptr);
+  EXPECT_EQ(*config.GetButtonSound(1),
+            (MwndConfig::ButtonSound{.hit = 0, .push = -1, .decide = 1}));
+  EXPECT_EQ(config.GetButtonSound(-1), nullptr);
+  EXPECT_EQ(config.GetButtonSound(2), nullptr);
 }
 
 TEST(MwndConfigTest, ParsesRealliveWindowWakuAndFarcall) {

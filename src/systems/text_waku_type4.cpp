@@ -218,6 +218,15 @@ void TextWakuType4::SetMousePosition(const Point& pos) {
     overlay_->SetMousePosition(pos);
 }
 
+void TextWakuType4::ClearMousePosition() {
+  if (overlay_)
+    overlay_->ClearMousePosition();
+}
+
+bool TextWakuType4::HasButtonAt(const Point& pos) const {
+  return overlay_ && overlay_->HasButtonAt(pos);
+}
+
 bool TextWakuType4::HandleMouseClick(const Point& pos, bool pressed) {
   return overlay_ && overlay_->HandleMouseClick(pos, pressed);
 }

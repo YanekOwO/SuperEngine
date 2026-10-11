@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -39,7 +36,6 @@
 #include "modules/module_sys.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
-#include "systems/rlvm_info.hpp"
 #include "systems/sdl/event_backend.hpp"
 #include "systems/sdl/graphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"

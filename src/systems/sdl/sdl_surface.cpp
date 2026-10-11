@@ -28,8 +28,8 @@
 
 #include "core/colour.hpp"
 #include "core/localrect.hpp"
-#include "pygame/alphablit.h"
 #include "core/object.hpp"
+#include "pygame/alphablit.h"
 #include "systems/sdl/gl_frame_buffer.hpp"
 #include "systems/sdl/gl_utils.hpp"
 #include "systems/sdl/glrenderer.hpp"
@@ -45,8 +45,8 @@
 #include <cstring>
 #include <format>
 #include <iostream>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 std::shared_ptr<glFrameBuffer> SDLSurface::screen_ = nullptr;
@@ -364,6 +364,26 @@ void SDLSurface::RenderToScreen(const Rect& src_rect,
   this->RenderToScreen(src_rect, dst_rect, op);
 }
 
+void SDLSurface::RenderToScreen(const Rect& src_rect,
+                                const Rect& dst_rect,
+                                int alpha,
+                                int bright,
+                                int dark) const {
+  uploadTextureIfNeeded();
+
+  for (const auto& it : textures_) {
+    auto src = src_rect, dst = dst_rect;
+    LocalRect coordinate_system(it.x_, it.y_, it.w_, it.h_);
+    if (coordinate_system.intersectAndTransform(src, dst)) {
+      RenderingConfig config;
+      config.alpha = std::clamp(alpha, 0, 255) / 255.0f;
+      config.bright = std::clamp(bright, 0, 255) / 255.0f;
+      config.dark = std::clamp(dark, 0, 255) / 255.0f;
+      glRenderer().Render({it.gltexture, src}, config, {screen_, dst});
+    }
+  }
+}
+
 // -----------------------------------------------------------------------
 
 void SDLSurface::RenderToScreenAsColorMask(const Rect& src,
@@ -640,9 +660,9 @@ std::vector<char> SDLSurface::Dump(Rect region) const {
 // -----------------------------------------------------------------------
 
 std::shared_ptr<SDLSurface> SDLSurface::ClipAsColorMask(const Rect& clip_rect,
-                                                     int r,
-                                                     int g,
-                                                     int b) const {
+                                                        int r,
+                                                        int g,
+                                                        int b) const {
   const char* function_name = "GraphicsSystem::ClipAsColorMask()";
 
   // TODO(erg): This needs to be made exception safe and so does the rest

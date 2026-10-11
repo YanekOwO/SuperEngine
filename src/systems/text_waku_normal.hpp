@@ -32,6 +32,7 @@
 #include "utilities/clock.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,8 @@ class TextWakuNormal : public TextWaku {
   // instead some sort of listener. I'm currently thinking that the individual
   // buttons that need to handle events should be listeners.
   virtual void SetMousePosition(const Point& pos) override;
+  void ClearMousePosition() override;
+  bool HasButtonAt(const Point& pos) const override;
   virtual bool HandleMouseClick(const Point& pos, bool pressed) override;
 
   void SetWakuMain(std::shared_ptr<const SDLSurface> surface);
@@ -118,4 +121,5 @@ class TextWakuNormal : public TextWaku {
     std::unique_ptr<TextWindowButton> btn;
   };
   std::vector<WakuButton> buttons_;
+  std::optional<std::size_t> captured_button_;
 };

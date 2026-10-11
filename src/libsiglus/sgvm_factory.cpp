@@ -230,6 +230,76 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
         }
       });
 
+  rt.system->text().SetMwndActionStatusHandler(
+      [local = rt.local_config, global = rt.global_config,
+       gameexe = rt.gameexe](const MwndConfig::Button& button) {
+        using Action = MwndConfig::ButtonAction;
+        TextSystem::MwndActionStatus status;
+        const auto key = [&](std::string_view root) {
+          return std::format("{}.{:03}", root, button.action_option);
+        };
+        const auto ensure_value = [](Gameexe& store, const std::string& name,
+                                     int initial) {
+          if (!store.Exists(name))
+            store.SetIntAt(name, initial);
+          return store(name).Int().value_or(initial);
+        };
+        switch (button.action) {
+          case Action::LocalSwitch: {
+            auto source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_SWITCH",
+                                     button.action_option);
+            const int initial = source.IntAt(2).value_or(0);
+            status.supported = true;
+            status.exists = (*local)(key("LOCAL_EXTRA_SWITCH") + ".EXIST")
+                                .Int()
+                                .value_or(source.IntAt(0).value_or(1)) != 0;
+            status.enabled = (*local)(key("LOCAL_EXTRA_SWITCH") + ".ENABLE")
+                                 .Int()
+                                 .value_or(source.IntAt(1).value_or(1)) != 0;
+            status.mode =
+                ensure_value(*local, key("LOCAL_EXTRA_SWITCH"), initial) != 0;
+            return status;
+          }
+          case Action::LocalMode: {
+            auto source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_MODE",
+                                     button.action_option);
+            const int initial = source.IntAt(2).value_or(0);
+            status.supported = true;
+            status.exists = (*local)(key("LOCAL_EXTRA_MODE") + ".EXIST")
+                                .Int()
+                                .value_or(source.IntAt(0).value_or(1)) != 0;
+            status.enabled = (*local)(key("LOCAL_EXTRA_MODE") + ".ENABLE")
+                                 .Int()
+                                 .value_or(source.IntAt(1).value_or(1)) != 0;
+            status.mode =
+                ensure_value(*local, key("LOCAL_EXTRA_MODE"), initial);
+            return status;
+          }
+          case Action::GlobalSwitch: {
+            const std::string name = key("GLOBAL_EXTRA_SWITCH");
+            const int initial = (*gameexe)("CONFIG", "GLOBAL_EXTRA_SWITCH",
+                                           button.action_option, "ONOFF")
+                                    .Int()
+                                    .value_or(0);
+            status.supported = true;
+            status.mode = ensure_value(*global, name, initial) != 0;
+            return status;
+          }
+          case Action::GlobalMode: {
+            const std::string name = key("GLOBAL_EXTRA_MODE");
+            const int initial = (*gameexe)("CONFIG", "GLOBAL_EXTRA_MODE",
+                                           button.action_option, "MODE")
+                                    .Int()
+                                    .value_or(0);
+            status.supported = true;
+            status.mode = ensure_value(*global, name, initial);
+            return status;
+          }
+          default:
+            return status;
+        }
+      });
+
   struct SystemEventListener : public EventListener {
     sr::VM& vm;
     System& sys;
@@ -269,6 +339,48 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
     it->second(rt);
   }
   std::shared_ptr<InputListener> input = rt.input_event_listener;
+
+  struct MwndButtonEventListener final : EventListener {
+    TextSystem& text;
+    std::shared_ptr<InputListener> input;
+
+    MwndButtonEventListener(TextSystem& text_system,
+                            std::shared_ptr<InputListener> input_listener)
+        : text(text_system), input(std::move(input_listener)) {}
+
+    void OnEvent(std::shared_ptr<Event> event) override {
+      if (!event || !input)
+        return;
+      const bool handled = std::visit(
+          [&](const auto& item) -> bool {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::same_as<T, MouseMotion>) {
+              text.SetMousePosition(item.pos);
+              return false;
+            } else if constexpr (std::same_as<T, MouseDown>) {
+              return item.button == MouseButton::LEFT &&
+                     text.HandleMouseClick(input->mouse_pos, true);
+            } else if constexpr (std::same_as<T, MouseUp>) {
+              return item.button == MouseButton::LEFT &&
+                     text.HandleMouseClick(input->mouse_pos, false);
+            } else if constexpr (std::same_as<T, KeyDown>) {
+              return IsDecideKey(item.code) &&
+                     text.HandleMouseClick(input->mouse_pos, true);
+            } else if constexpr (std::same_as<T, KeyUp>) {
+              return IsDecideKey(item.code) &&
+                     text.HandleMouseClick(input->mouse_pos, false);
+            }
+            return false;
+          },
+          *event);
+      if (handled)
+        *event = std::monostate();
+    }
+  };
+  rt.mwnd_button_event_listener =
+      std::make_shared<MwndButtonEventListener>(rt.system->text(), input);
+  rt.system->event().AddListener(18, rt.mwnd_button_event_listener);
+
   rt.interaction_manager = std::make_unique<InteractionManager>(
       *rt.stage, *input, ButtonActionTable::ParseSiglus(gexe));
   sb::module_ m(gc.get(), vm.globals_.get());

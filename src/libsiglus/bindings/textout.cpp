@@ -137,10 +137,12 @@ void BindTextout(SiglusMachine& runtime) {
          to = std::make_shared<SiglusTextout>(*runtime.vm, runtime.system.get(),
                                               runtime.local_config)](
             int scenario, int kidoku, std::string text) -> sr::Value {
+          const bool already_read = kt->HasBeenRead(scenario, kidoku);
           kt->RecordKidoku(scenario, kidoku);
 
           if (!to->sys_)
             return MakeResolvedFuture(*to->vm_.gc_);
+          to->sys_->text().SetKidokuRead(already_read);
 
           auto state = std::make_unique<SiglusTextout::Textout>(
               to->vm_, to->sys_, to->localcfg_, std::move(text));

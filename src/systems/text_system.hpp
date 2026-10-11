@@ -104,6 +104,22 @@ BOOST_CLASS_VERSION(TextSystemGlobals, 1)
 
 class TextSystem final : public EventListener {
  public:
+  enum class MwndButtonSound { Hit, Push, Decide };
+
+  struct MwndActionStatus {
+    bool supported = false;
+    bool exists = true;
+    bool enabled = true;
+    int mode = 0;
+  };
+
+  struct MwndButtonPresentation {
+    bool visible = true;
+    bool enabled = true;
+    bool touch_enabled = true;
+    bool activated = false;
+  };
+
   // Internal structure used to keep track of the state of
   typedef std::map<int, TextPage> PageSet;
 
@@ -143,14 +159,45 @@ class TextSystem final : public EventListener {
       std::function<void(const MwndConfig::CallTarget& target)>;
   using MwndActionHandler =
       std::function<bool(const MwndConfig::Button& button, bool execute)>;
+  using MwndActionStatusHandler =
+      std::function<MwndActionStatus(const MwndConfig::Button& button)>;
   void SetMwndCallHandler(MwndCallHandler handler) {
     mwnd_call_handler_ = std::move(handler);
   }
   void SetMwndActionHandler(MwndActionHandler handler) {
     mwnd_action_handler_ = std::move(handler);
   }
+  void SetMwndActionStatusHandler(MwndActionStatusHandler handler) {
+    mwnd_action_status_handler_ = std::move(handler);
+  }
   bool IsMwndButtonEnabled(const MwndConfig::Button& button) const;
+  MwndButtonPresentation GetMwndButtonPresentation(
+      const MwndConfig::Button& button) const;
   void ExecuteMwndButton(const MwndConfig::Button& button);
+  void PlayMwndButtonSound(const MwndConfig::Button& button,
+                           MwndButtonSound event);
+
+  void SetMwndButtonsEnabled(bool enabled) { mwnd_buttons_enabled_ = enabled; }
+  bool mwnd_buttons_enabled() const { return mwnd_buttons_enabled_; }
+  void SetMwndButtonEnabled(int slot, bool enabled);
+  bool IsMwndButtonSlotEnabled(int slot) const;
+  void SetMwndButtonTouchEnabled(bool enabled) {
+    mwnd_button_touch_enabled_ = enabled;
+  }
+  bool mwnd_button_touch_enabled() const { return mwnd_button_touch_enabled_; }
+  void SetReadSkipButtonAvailable(bool exists, bool enabled) {
+    readskip_button_exists_ = exists;
+    readskip_button_enabled_ = enabled;
+  }
+  void SetAutoModeButtonAvailable(bool exists, bool enabled) {
+    automode_button_exists_ = exists;
+    automode_button_enabled_ = enabled;
+  }
+  bool readskip_button_exists() const { return readskip_button_exists_; }
+  bool readskip_button_enabled() const { return readskip_button_enabled_; }
+  bool automode_button_exists() const { return automode_button_exists_; }
+  bool automode_button_enabled() const { return automode_button_enabled_; }
+  void ResetMwndButtonPolicy();
 
   void set_in_pause_state(bool in) { in_pause_state_ = in; }
 
@@ -340,6 +387,15 @@ class TextSystem final : public EventListener {
   MwndConfig mwnd_config_;
   MwndCallHandler mwnd_call_handler_;
   MwndActionHandler mwnd_action_handler_;
+  MwndActionStatusHandler mwnd_action_status_handler_;
+  bool mwnd_buttons_enabled_ = true;
+  bool mwnd_button_touch_enabled_ = true;
+  std::map<int, bool> mwnd_button_slot_enabled_;
+  std::optional<int> mwnd_capture_window_;
+  bool readskip_button_exists_ = true;
+  bool readskip_button_enabled_ = true;
+  bool automode_button_exists_ = true;
+  bool automode_button_enabled_ = true;
 
   // Whether we are reading the backlog
   bool is_reading_backlog_;

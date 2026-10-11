@@ -619,7 +619,7 @@ void TextWindow::SetRGBAF(const std::vector<int>& attr) {
   SetFilter(attr.at(4));
 }
 
-void TextWindow::SetMousePosition(const Point& pos) {
+void TextWindow::SetMousePosition(const Point& pos, bool update_waku) {
   if (state_ == State::Selection) {
     for_each(selections_.begin(), selections_.end(),
              [&](std::unique_ptr<SelectionElement>& e) {
@@ -627,7 +627,15 @@ void TextWindow::SetMousePosition(const Point& pos) {
              });
   }
 
-  textbox_waku_->SetMousePosition(pos);
+  if (update_waku)
+    textbox_waku_->SetMousePosition(pos);
+  else
+    textbox_waku_->ClearMousePosition();
+}
+
+bool TextWindow::HasMwndButtonAt(const Point& pos) const {
+  return IsVisible() && !system_.graphics().is_interface_hidden() &&
+         textbox_waku_ && textbox_waku_->HasButtonAt(pos);
 }
 
 bool TextWindow::HandleMouseClick(const Point& pos, bool pressed) {

@@ -53,6 +53,8 @@ class TextWaku {
   virtual Size GetSize(const Size& text_surface) const = 0;
 
   virtual void SetMousePosition(const Point& pos) {}
+  virtual void ClearMousePosition() {}
+  virtual bool HasButtonAt(const Point& pos) const { return false; }
   virtual bool HandleMouseClick(const Point& pos, bool pressed) {
     return false;
   }

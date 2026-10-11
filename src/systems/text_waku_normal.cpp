@@ -100,12 +100,12 @@ void TextWakuNormal::Render(Point box_location,
   }
 
   for (auto& btn : buttons_) {
-    auto [surf, src] = btn.btn->Render();
-    if (!surf || src.is_empty())
+    auto render = btn.btn->Render();
+    if (!render.surface || render.source.is_empty())
       continue;
-    Rect dst(btn.btn->GetRect().origin() + btn.btn->GetRenderOffset(),
-             src.size());
-    surf->RenderToScreen(src, dst, btn.btn->GetRenderAlpha());
+    Rect dst(render.destination, render.source.size());
+    render.surface->RenderToScreen(render.source, dst, render.alpha,
+                                   render.bright, render.dark);
   }
 
   if (icon_visible_ && clock_) {
@@ -158,14 +158,71 @@ Size TextWakuNormal::GetSize(const Size& text_surface) const {
 }
 
 void TextWakuNormal::SetMousePosition(const Point& pos) {
-  for (auto& btn : buttons_)
-    btn.btn->SetMousePosition(pos);
+  if (captured_button_ && *captured_button_ < buttons_.size()) {
+    for (std::size_t i = 0; i < buttons_.size(); ++i)
+      buttons_[i].btn->SetHovered(i == *captured_button_ &&
+                                  buttons_[i].btn->HitTest(pos));
+    return;
+  }
+
+  std::optional<std::size_t> hovered;
+  for (std::size_t i = buttons_.size(); i-- > 0;) {
+    if (buttons_[i].btn->BlocksInput() && buttons_[i].btn->HitTest(pos)) {
+      hovered = i;
+      break;
+    }
+  }
+  for (std::size_t i = 0; i < buttons_.size(); ++i)
+    buttons_[i].btn->SetHovered(hovered && *hovered == i);
+}
+
+void TextWakuNormal::ClearMousePosition() {
+  if (captured_button_)
+    return;
+  for (auto& button : buttons_)
+    button.btn->SetHovered(false);
+}
+
+bool TextWakuNormal::HasButtonAt(const Point& pos) const {
+  return std::any_of(buttons_.begin(), buttons_.end(), [&](const auto& button) {
+    return button.btn->BlocksInput() && button.btn->HitTest(pos);
+  });
 }
 
 bool TextWakuNormal::HandleMouseClick(const Point& pos, bool pressed) {
-  return std::any_of(buttons_.begin(), buttons_.end(), [&](auto& btn) {
-    return btn.btn->HandleMouseClick(pos, pressed);
-  });
+  if (pressed && captured_button_)
+    return true;
+
+  if (!pressed && captured_button_) {
+    const std::size_t index = *captured_button_;
+    captured_button_.reset();
+    if (index < buttons_.size()) {
+      const bool handled = buttons_[index].btn->HandleMouseClick(pos, false);
+      SetMousePosition(pos);
+      return handled;
+    }
+    return true;
+  }
+
+  if (pressed) {
+    for (std::size_t i = buttons_.size(); i-- > 0;) {
+      auto& button = buttons_[i].btn;
+      if (button->BlocksInput() && button->HitTest(pos)) {
+        captured_button_ = i;
+        for (std::size_t j = 0; j < buttons_.size(); ++j)
+          buttons_[j].btn->SetHovered(j == i);
+        return button->HandleMouseClick(pos, true);
+      }
+    }
+    return false;
+  }
+
+  // A release with no capture never decides an action. It is nevertheless
+  // consumed by a registered button, matching Siglus' button manager.
+  for (std::size_t i = buttons_.size(); i-- > 0;)
+    if (buttons_[i].btn->BlocksInput() && buttons_[i].btn->HitTest(pos))
+      return true;
+  return false;
 }
 
 void TextWakuNormal::SetWakuMain(std::shared_ptr<const SDLSurface> surface) {

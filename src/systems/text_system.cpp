@@ -362,34 +362,65 @@ std::shared_ptr<TextWindow> TextSystem::GetCurrentWindow() {
 }
 
 bool TextSystem::IsMwndButtonEnabled(const MwndConfig::Button& button) const {
-  if (button.call)
-    return static_cast<bool>(mwnd_call_handler_) ||
-           (button.action == MwndConfig::ButtonAction::RealliveFarcall &&
-            system_.machine_);
-  if (mwnd_action_handler_ && mwnd_action_handler_(button, false))
-    return true;
+  return GetMwndButtonPresentation(button).enabled;
+}
+
+TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
+    const MwndConfig::Button& button) const {
+  MwndActionStatus status;
+  if (mwnd_action_status_handler_)
+    status = mwnd_action_status_handler_(button);
+
   using Action = MwndConfig::ButtonAction;
-  switch (button.action) {
-    case Action::None:
-    case Action::HideWindow:
-    case Action::MessageLog:
-    case Action::ReadSkip:
-    case Action::AutoMode:
-    case Action::ClearWindow:
-    case Action::BackPage:
-    case Action::ForwardPage:
-      return true;
-    case Action::RealliveFarcall:
-      return system_.machine_ != nullptr;
-    default:
-      return false;
+  if (!status.supported) {
+    switch (button.action) {
+      case Action::None:
+      case Action::HideWindow:
+      case Action::MessageLog:
+      case Action::ReadSkip:
+      case Action::AutoMode:
+      case Action::ClearWindow:
+      case Action::BackPage:
+      case Action::ForwardPage:
+        status.supported = true;
+        break;
+      case Action::RealliveFarcall:
+        status.supported = system_.machine_ != nullptr;
+        break;
+      default:
+        break;
+    }
   }
+
+  if (button.action == Action::ReadSkip) {
+    status.exists = readskip_button_exists_;
+    status.enabled = status.enabled && readskip_button_enabled_ && kidoku_read_;
+    status.mode = skip_mode_ ? 1 : 0;
+  } else if (button.action == Action::AutoMode) {
+    status.exists = automode_button_exists_;
+    status.enabled = status.enabled && automode_button_enabled_;
+    status.mode = auto_mode_ ? 1 : 0;
+  }
+
+  const bool has_call =
+      button.call &&
+      (static_cast<bool>(mwnd_call_handler_) ||
+       (button.action == Action::RealliveFarcall && system_.machine_));
+  const bool mode_matches =
+      !button.required_mode || *button.required_mode == status.mode;
+  const bool slot_enabled = IsMwndButtonSlotEnabled(button.slot_id);
+  return MwndButtonPresentation{
+      .visible = mode_matches,
+      .enabled = (status.supported || has_call) && status.exists &&
+                 status.enabled && mwnd_buttons_enabled_ && slot_enabled,
+      .touch_enabled = mwnd_button_touch_enabled_,
+      .activated = !button.required_mode &&
+                   ((button.action == Action::ReadSkip && skip_mode_) ||
+                    (button.action == Action::AutoMode && auto_mode_)),
+  };
 }
 
 void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
-  if (button.se_no >= 0)
-    system_.sound().PlaySe(button.se_no);
-
   if (button.call) {
     if (button.action == MwndConfig::ButtonAction::RealliveFarcall &&
         system_.machine_ && button.call->entrypoint) {
@@ -431,6 +462,45 @@ void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
     default:
       break;
   }
+}
+
+void TextSystem::PlayMwndButtonSound(const MwndConfig::Button& button,
+                                     MwndButtonSound event) {
+  const MwndConfig::ButtonSound* sounds =
+      mwnd_config_.GetButtonSound(button.se_no);
+  if (!sounds)
+    return;
+  int sound = -1;
+  switch (event) {
+    case MwndButtonSound::Hit:
+      sound = sounds->hit;
+      break;
+    case MwndButtonSound::Push:
+      sound = sounds->push;
+      break;
+    case MwndButtonSound::Decide:
+      sound = sounds->decide;
+      break;
+  }
+  if (sound >= 0)
+    system_.sound().PlaySe(sound);
+}
+
+void TextSystem::SetMwndButtonEnabled(int slot, bool enabled) {
+  if (slot >= 0)
+    mwnd_button_slot_enabled_[slot] = enabled;
+}
+
+bool TextSystem::IsMwndButtonSlotEnabled(int slot) const {
+  const auto it = mwnd_button_slot_enabled_.find(slot);
+  return it == mwnd_button_slot_enabled_.end() || it->second;
+}
+
+void TextSystem::ResetMwndButtonPolicy() {
+  mwnd_buttons_enabled_ = true;
+  mwnd_button_touch_enabled_ = true;
+  mwnd_button_slot_enabled_.clear();
+  mwnd_capture_window_.reset();
 }
 
 void TextSystem::CheckAndSetBool(Gameexe& gexe,
@@ -647,19 +717,38 @@ void TextSystem::SetWindowAttrF(int i) {
 }
 
 void TextSystem::SetMousePosition(const Point& pos) {
-  for (auto const& [id, it] : text_window_) {
-    if (ShowWindow(id)) {
-      it->SetMousePosition(pos);
+  std::optional<int> target = mwnd_capture_window_;
+  if (!target) {
+    for (auto it = text_window_.rbegin(); it != text_window_.rend(); ++it) {
+      if (ShowWindow(it->first) && it->second->HasMwndButtonAt(pos)) {
+        target = it->first;
+        break;
+      }
     }
   }
+  for (auto const& [id, window] : text_window_)
+    if (ShowWindow(id))
+      window->SetMousePosition(pos, target && *target == id);
 }
 
 bool TextSystem::HandleMouseClick(const Point& pos, bool pressed) {
   if (!system_visible())
     return false;
-  for (auto const& [id, it] : text_window_) {
-    if (ShowWindow(id) && it->HandleMouseClick(pos, pressed))
+  if (!pressed && mwnd_capture_window_) {
+    const int id = *mwnd_capture_window_;
+    mwnd_capture_window_.reset();
+    const auto it = text_window_.find(id);
+    if (it != text_window_.end())
+      (void)it->second->HandleMouseClick(pos, false);
+    SetMousePosition(pos);
+    return true;
+  }
+  for (auto it = text_window_.rbegin(); it != text_window_.rend(); ++it) {
+    if (ShowWindow(it->first) && it->second->HandleMouseClick(pos, pressed)) {
+      if (pressed)
+        mwnd_capture_window_ = it->first;
       return true;
+    }
   }
 
   return false;
@@ -965,6 +1054,7 @@ void TextSystem::Reset() {
   in_selection_mode_ = false;
   kidoku_read_ = false;
   skip_mode_ = false;
+  ResetMwndButtonPolicy();
 }
 
 void TextSystem::SetKidokuRead(const int in) {

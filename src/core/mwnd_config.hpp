@@ -136,6 +136,9 @@ class MwndConfig {
   struct Button {
     std::string name;
     std::string file;
+    // The source WAKU.BTN slot. Siglus syscom addresses buttons by this id;
+    // it must not be replaced by the compacted vector index.
+    int slot_id = -1;
     int cut_no = 0;
     int position_base = 0;
     Point position;
@@ -145,11 +148,22 @@ class MwndConfig {
     ButtonAction action = ButtonAction::None;
     int action_option = 0;
     int mode = 0;
+    // Siglus uses paired buttons for mode-dependent actions. Only the button
+    // whose required mode matches the current value is registered or drawn.
+    std::optional<int> required_mode;
     std::optional<CallTarget> call;
     std::optional<CallTarget> frame_action;
     int reallive_pattern = 0;
 
     bool operator==(const Button&) const = default;
+  };
+
+  struct ButtonSound {
+    int hit = 0;
+    int push = -1;
+    int decide = 1;
+
+    bool operator==(const ButtonSound&) const = default;
   };
 
   struct Waku {
@@ -180,6 +194,7 @@ class MwndConfig {
   int default_selection_window() const { return default_selection_window_; }
   const std::vector<int>& window_attr() const { return window_attr_; }
   const ButtonActionTable& button_actions() const { return button_actions_; }
+  const ButtonSound* GetButtonSound(int id) const;
 
   const Window& GetWindow(int id) const;
   const Waku& GetWaku(int set, int variant = 0) const;
@@ -194,6 +209,7 @@ class MwndConfig {
   int default_selection_window_ = 1;
   std::vector<int> window_attr_{255, 255, 255, 255, 0};
   ButtonActionTable button_actions_;
+  std::vector<ButtonSound> button_sounds_;
   std::map<int, Window> windows_;
   std::map<std::pair<int, int>, Waku> wakus_;
   std::map<int, Icon> icons_;

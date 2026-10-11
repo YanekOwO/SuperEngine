@@ -54,6 +54,8 @@ class TextWakuType4 : public TextWaku {
   // buttons that need to handle events should be listeners.
   // normal waku only
   virtual void SetMousePosition(const Point& pos) override;
+  void ClearMousePosition() override;
+  bool HasButtonAt(const Point& pos) const override;
   virtual bool HandleMouseClick(const Point& pos, bool pressed) override;
   void SetWaitIcon(bool page, const Point& position) override;
   void HideWaitIcon() override;

@@ -53,13 +53,32 @@ enum class TextWindowButtonState : int {
 // The base class for text window buttons
 class TextWindowButton {
  public:
+  struct RenderInfo {
+    std::shared_ptr<SDLSurface> surface;
+    Rect source;
+    Point destination;
+    int alpha = 255;
+    int bright = 0;
+    int dark = 0;
+  };
+
   explicit TextWindowButton(std::shared_ptr<Clock> clock,
                             bool should_use,
                             Rect button_rect);
-  inline Rect GetRect() const { return btn_rect_; }
+  Rect GetRect() const;
 
   // Checks to see if this is a valid, used button
   bool IsValid() const;
+  bool IsVisible() const { return visible_; }
+  bool BlocksInput() const;
+  bool IsCaptured() const { return captured_; }
+  bool HitTest(const Point& pos) const;
+
+  void SetPresentation(bool visible,
+                       bool enabled,
+                       bool touch_enabled,
+                       bool activated);
+  void SetHovered(bool hovered);
 
   // Track the mouse position to see if we need to alter our state
   void SetMousePosition(const Point& pos);
@@ -69,9 +88,9 @@ class TextWindowButton {
   void SetSurface(std::shared_ptr<SDLSurface> surf, int base_pattern);
   void SetActionTableEntry(ButtonActionTable::Entry entry, int cut_no);
 
-  std::pair<std::shared_ptr<SDLSurface>, Rect> Render() const;
-  Point GetRenderOffset() const;
-  int GetRenderAlpha() const;
+  RenderInfo Render() const;
+  void SetUsePatternGeometry(bool value) { use_pattern_geometry_ = value; }
+  void SetAlphaHitTest(bool value) { alpha_hit_test_ = value; }
 
   // Called by other execute() calls while the System object has its
   // turn to do any updating
@@ -83,8 +102,15 @@ class TextWindowButton {
   // Called when the button is pressed
   std::function<void()> on_pressed_;
 
+  // Called when the pointer first enters the button.
+  std::function<void()> on_hit_;
+
   // Called when the button is released
   std::function<void()> on_release_;
+
+  // Called while a held button repeats. This is separate from the push edge
+  // so push sounds are not replayed on every repeat interval.
+  std::function<void()> on_repeat_;
 
   // When set, repeat the pressed callback periodically
   std::optional<std::chrono::milliseconds> time_between_invocations_;
@@ -92,6 +118,14 @@ class TextWindowButton {
   TextWindowButtonState state_;
 
  private:
+  struct ResolvedPattern {
+    int index;
+    ButtonActionTable::State action;
+  };
+
+  std::optional<ResolvedPattern> ResolveCurrentPattern() const;
+  void UpdateState();
+
   inline void ButtonPressed() {
     if (on_pressed_) {
       on_pressed_();
@@ -109,6 +143,15 @@ class TextWindowButton {
   std::optional<Clock::timepoint_t> last_invocation_;
 
   Rect btn_rect_;
+  bool registered_ = true;
+  bool visible_ = true;
+  bool enabled_ = true;
+  bool touch_enabled_ = true;
+  bool activated_ = false;
+  bool hovered_ = false;
+  bool captured_ = false;
+  bool use_pattern_geometry_ = false;
+  bool alpha_hit_test_ = false;
 
   std::shared_ptr<SDLSurface> button_surface_;
   int base_pattern_;
