@@ -81,15 +81,18 @@ void VisitActions(const std::shared_ptr<FrameAction>& global_action,
       visit_object(visit_object, object, layer == kLayerBg);
   }
 
-  for (const auto& [id, window] : stage.mwnd) {
-    if (!window)
-      continue;
-    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
-      if (!waku)
+  for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
+    const auto windows = stage.mwnd[layer];
+    for (const auto& window : windows) {
+      if (!window)
         continue;
 
-      for (const auto& obj : waku->objects_)
-        visit_object(visit_object, obj, false);
+      for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
+        if (!waku)
+          continue;
+        for (auto& obj : waku->objects_)
+          visit_object(visit_object, obj, layer == kLayerBg);
+      }
     }
   }
 }

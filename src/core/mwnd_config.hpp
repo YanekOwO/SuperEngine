@@ -322,6 +322,11 @@ class MwndConfig {
   static MwndConfig ParseSiglus(Gameexe& gexe);
 
   inline int default_window() const { return default_window_; }
+  bool layered_windows() const { return layered_windows_; }
+
+  int window_capacity() const {
+    return windows_.empty() ? 0 : windows_.rbegin()->first + 1;
+  }
   inline int default_selection_window() const {
     return default_selection_window_;
   }
@@ -339,7 +344,8 @@ class MwndConfig {
     return wakus_.contains({set, variant});
   }
 
- private:
+  bool layered_windows_ = false;
+  int order_ = 1;
   // Default message-window number (default_mwnd_no); RealLive defaults to 0.
   int default_window_ = 0;
   // Default selection-window number (default_sel_mwnd_no / DEFAULT_SEL_WINDOW).

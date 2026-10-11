@@ -35,6 +35,8 @@
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
+#include "systems/text_waku.hpp"
+#include "systems/text_window.hpp"
 #include "vm/future.hpp"
 #include "vm/list.hpp"
 #include "vm/promise.hpp"
@@ -393,6 +395,16 @@ struct SiglusWipe {
       CancelObjectActions(child);
   }
 
+  static void CancelWindowActions(const std::shared_ptr<TextWindow>& window) {
+    if (!window)
+      return;
+    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()})
+      if (waku)
+        for (const auto& object : waku->objects_)
+          CancelObjectActions(object);
+    window->ClearMouseCapture();
+  }
+
   void ClearWipeState() {
     if (!stage_)
       return;
@@ -404,6 +416,10 @@ struct SiglusWipe {
     }
     for (auto& effect : stage_->effects[kLayerNext])
       effect.reset();
+    for (auto& window : stage_->mwnd[kLayerNext]) {
+      CancelWindowActions(window);
+      window.reset();
+    }
     stage_->ClearTransitionRenderState();
   }
 
@@ -428,6 +444,7 @@ struct SiglusWipe {
     // Wipe clones old foreground actions into Next. Cancel only allocations
     // displaced by the swap, after their transition copies have been made.
     auto previous_foreground = stage_->objects[kLayerFg];
+    auto previous_windows = stage_->mwnd[kLayerFg];
     stage_->Wipe(params.begin_order, params.end_order, params.begin_layer,
                  params.end_layer);
     for (std::size_t i = 0; i < previous_foreground.size(); ++i) {
@@ -436,6 +453,10 @@ struct SiglusWipe {
         CancelObjectActions(previous_foreground[i]);
       }
     }
+
+    for (std::size_t i = 0; i < previous_windows.size(); ++i)
+      if (previous_windows[i] != stage_->mwnd[kLayerFg][i])
+        CancelWindowActions(previous_windows[i]);
 
     if (!system_ || (no_wipe_animation_ && *no_wipe_animation_)) {
       ClearWipeState();

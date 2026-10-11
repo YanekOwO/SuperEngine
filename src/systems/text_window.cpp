@@ -31,6 +31,7 @@
 #include "systems/selection_element.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
+#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_waku.hpp"
 #include "utilities/assertx.hpp"
@@ -75,7 +76,8 @@ TextWindow::TextWindow(System& system,
                        int window_num,
                        ITextSystem* text_impl,
                        const InitParams& params)
-    : text_impl_(text_impl),
+    : sorter_(system.text().mwnd_config().order_, 0),
+      text_impl_(text_impl),
       screen_width_(params.screen_size.width()),
       screen_height_(params.screen_size.height()),
       window_num_(window_num),
@@ -128,6 +130,112 @@ TextWindow::TextWindow(System& system,
 }
 
 TextWindow::~TextWindow() = default;
+
+void MwndMessageState::ClearKoe() {
+  current_koe = -1;
+  current_character = -1;
+  current_koe_played = false;
+  current_koe_no_auto_mode = false;
+}
+
+void MwndMessageState::MarkNovelClear(TextPage& page) {
+  block_started = false;
+  auto_mode_base_chars = page.number_of_chars_on_page();
+  ClearKoe();
+}
+
+void MwndMessageState::MarkMessageClearReady(TextPage& page) {
+  clear_ready = true;
+  MarkNovelClear(page);
+}
+
+TextPage& TextWindow::GetPage() {
+  if (!page_)
+    NewPage();
+  return *page_;
+}
+
+void TextWindow::NewPage() {
+  page_ = std::make_unique<TextPage>(system_.gameexe(), *this);
+}
+
+void TextWindow::ClearMouseCapture() {
+  for (auto* waku : {textbox_waku_.get(), namebox_waku_.get()})
+    if (waku)
+      waku->ClearMouseCapture();
+}
+
+std::shared_ptr<TextWindow> TextWindow::Clone() const {
+  auto result = std::make_shared<TextWindow>(
+      system_, window_num_, text_impl_,
+      system_.text().mwnd_config().GetWindow(window_num_));
+  result->sorter_ = sorter_;
+  result->screen_width_ = screen_width_;
+  result->screen_height_ = screen_height_;
+  result->window_num_ = window_num_;
+  result->waku_set_ = waku_set_;
+  result->layout_ = layout_;
+  result->glyph_render_offset_ = glyph_render_offset_;
+  result->last_token_was_name_ = last_token_was_name_;
+  result->current_name_ = current_name_;
+  result->default_font_size_ = default_font_size_;
+  result->use_indentation_ = use_indentation_;
+  result->default_colour_ = default_colour_;
+  result->font_colour_ = font_colour_;
+  result->action_on_pause_ = action_on_pause_;
+  result->origin_ = origin_;
+  result->x_distance_from_origin_ = x_distance_from_origin_;
+  result->y_distance_from_origin_ = y_distance_from_origin_;
+  result->upper_box_padding_ = upper_box_padding_;
+  result->lower_box_padding_ = lower_box_padding_;
+  result->left_box_padding_ = left_box_padding_;
+  result->right_box_padding_ = right_box_padding_;
+  result->window_attr_mod_ = window_attr_mod_;
+  result->colour_ = colour_;
+  result->is_filter_ = is_filter_;
+  result->is_visible_ = is_visible_;
+  result->keycursor_type_ = keycursor_type_;
+  result->keycursor_pos_ = keycursor_pos_;
+  result->name_mod_ = name_mod_;
+  result->name_waku_set_ = name_waku_set_;
+  result->name_font_size_in_pixels_ = name_font_size_in_pixels_;
+  result->name_waku_dir_set_ = name_waku_dir_set_;
+  result->name_x_spacing_ = name_x_spacing_;
+  result->horizontal_namebox_padding_ = horizontal_namebox_padding_;
+  result->vertical_namebox_padding_ = vertical_namebox_padding_;
+  result->namebox_x_offset_ = namebox_x_offset_;
+  result->namebox_y_offset_ = namebox_y_offset_;
+  result->namebox_centering_ = namebox_centering_;
+  result->minimum_namebox_size_ = minimum_namebox_size_;
+  result->name_size_ = name_size_;
+  result->namebox_characters_ = namebox_characters_;
+  result->state_ = state_;
+  result->next_char_italic_ = next_char_italic_;
+  result->koe_replay_button_ = koe_replay_button_;
+
+  result->text_surface_ = text_surface_ ? text_surface_->Clone() : nullptr;
+  result->name_surface_ = name_surface_ ? name_surface_->Clone() : nullptr;
+  result->textbox_waku_ = textbox_waku_ ? textbox_waku_->Clone() : nullptr;
+  result->namebox_waku_ = namebox_waku_ ? namebox_waku_->Clone() : nullptr;
+  *result->message_state_ = *message_state_;
+  if (page_)
+    result->page_ = std::make_unique<TextPage>(page_->CloneFor(*result));
+  for (int i = 0; i < kNumFaceSlots; ++i)
+    result->face_slot_[i] =
+        face_slot_[i] ? std::make_unique<FaceSlot>(*face_slot_[i]) : nullptr;
+  if (koe_replay_info_)
+    result->koe_replay_info_ =
+        std::make_unique<KoeReplayInfo>(*koe_replay_info_);
+  for (const auto& selection : selections_) {
+    auto clone = std::make_unique<SelectionElement>(*selection);
+    clone->OnMouseover([system = &system_] {
+      if (system->sound().HasSe(0))
+        system->sound().PlaySe(0);
+    });
+    result->selections_.push_back(std::move(clone));
+  }
+  return result;
+}
 
 void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
   ASSERTX_NE(waku.get(), nullptr);

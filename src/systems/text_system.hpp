@@ -109,8 +109,8 @@ class TextSystem final : public EventListener {
     bool activated = false;
   };
 
-  // Internal structure used to keep track of the state of
-  typedef std::map<int, TextPage> PageSet;
+  // Owning foreground page snapshots used for message history.
+  using PageSet = std::map<int, TextPage>;
 
  public:
   TextSystem(System& system,
@@ -127,6 +127,7 @@ class TextSystem final : public EventListener {
   void ExecuteTextSystem();
 
   void Render();
+  void RenderWindow(TextWindow& window);
   void HideTextWindow(int win_number);
   void HideAllTextWindows();
   void HideAllTextWindowsExcept(int i);
@@ -141,6 +142,9 @@ class TextSystem final : public EventListener {
   // Text window, aka mwnd. Consists of waku decoration and TextPage layout
   // management
   std::shared_ptr<TextWindow> GetMwnd(int text_window_number);
+  std::shared_ptr<TextWindow> GetMwnd(int layer, int text_window_number);
+  std::shared_ptr<TextWindow> FindMwnd(int layer, int index) const;
+  bool IsForegroundWindow(const TextWindow* window) const;
   std::shared_ptr<TextWindow> GetMwnd(
       int num,
       std::function<std::shared_ptr<TextWindow>()> orelse);
@@ -209,8 +213,7 @@ class TextSystem final : public EventListener {
 
   TextPage& GetPageOnWindow(std::shared_ptr<TextWindow> window);
 
-  // Get the active page. This function will return
-  // windows_[active_window_].page().
+  // Get the active foreground window's live page.
   TextPage& GetCurrentPage();
 
   // Clears the screen, moves back one page and renders it.
@@ -382,7 +385,7 @@ class TextSystem final : public EventListener {
   bool mwnd_buttons_enabled_ = true;
   bool mwnd_button_touch_enabled_ = true;
   std::map<int, bool> mwnd_button_slot_enabled_;
-  std::optional<int> mwnd_capture_window_;
+  std::optional<std::weak_ptr<TextWindow>> mwnd_capture_window_;
   bool readskip_button_exists_ = true;
   bool readskip_button_enabled_ = true;
   bool automode_button_exists_ = true;
@@ -392,6 +395,7 @@ class TextSystem final : public EventListener {
   bool is_reading_backlog_;
 
   // The current page set. Represents what is on the screen right now.
+  void CollectCurrentPages();
   PageSet current_pageset_;
 
   // Name mappings. Clannad English Edition maps name boxes from the key to the

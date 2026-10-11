@@ -155,6 +155,13 @@ void TextWindowButton::SetPresentation(bool visible,
   UpdateState();
 }
 
+void TextWindowButton::ClearMouseCapture() {
+  captured_ = false;
+  hovered_ = false;
+  last_invocation_.reset();
+  UpdateState();
+}
+
 void TextWindowButton::SetHovered(bool hovered) {
   const bool changed = hovered_ != hovered;
   hovered_ = hovered;

@@ -1084,4 +1084,15 @@ TEST_F(ElementParserTest, UsrcmdGlobal) {
   EXPECT_EQ(chain(elm), "@1.2:$$cmd(int:20)");
 }
 
+TEST_F(ElementParserTest, LayeredMwndCommandsPreserveStageSelection) {
+  EXPECT_EQ(chain(37, 3, -1, 0, 10), "stage.back.mwnd[int:0].get_layer()");
+  ElementCode setter{73, 3, -1, 1, 10};
+  setter.ForceBind({1, {v(-2)}});
+  EXPECT_EQ(chain(setter), "stage.next.mwnd[int:1].set_layer(int:-2)");
+  EXPECT_EQ(chain(38, 3, 3), "stage.front.mwnd.close_nowait()");
+  ElementCode create{37, 1};
+  create.ForceBind({0, {v(3)}});
+  EXPECT_EQ(chain(create), "stage.back.create_mwnd(int:3)");
+}
+
 }  // namespace siglus_test

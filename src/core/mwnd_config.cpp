@@ -394,6 +394,8 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
 
 MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   MwndConfig result;
+  result.layered_windows_ = true;
+  result.order_ = gexe("MWND.ORDER").Int().value_or(1);
   result.button_actions_ = ButtonActionTable::ParseSiglus(gexe);
   const RGBAColour configured_filter_colour =
       ParseRGBA(gexe("CONFIG.FILTER_COLOR")

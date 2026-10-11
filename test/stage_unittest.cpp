@@ -650,3 +650,25 @@ TEST_F(StageTest, WipeCopyPreservesFrontUnlessBackErases) {
   EXPECT_EQ(stage.GetEffect(kLayerFg, 0).mono, 200);
   EXPECT_EQ(stage.GetEffect(kLayerBg, 0).mono, 0);
 }
+
+TEST(StageElementTest, FactoryAllocatesOnlyOnSuccessAndOnlyOnce) {
+  StageElement<int> elements(1);
+  int calls = 0;
+  auto factory = [&] {
+    ++calls;
+    return std::make_shared<int>(7);
+  };
+  EXPECT_THROW(elements.Get(3, 0, factory), std::runtime_error);
+  EXPECT_THROW(elements.Get(kLayerFg, 1, factory), std::out_of_range);
+  EXPECT_EQ(calls, 0);
+  EXPECT_THROW(elements.Get(kLayerFg, 0,
+                            []() -> std::shared_ptr<int> {
+                              throw std::runtime_error("unavailable");
+                            }),
+               std::runtime_error);
+  EXPECT_FALSE(elements.Exists(kLayerFg, 0));
+  auto value = elements.Get(kLayerFg, 0, factory);
+  EXPECT_EQ(*value, 7);
+  EXPECT_EQ(elements.Get(kLayerFg, 0, factory), value);
+  EXPECT_EQ(calls, 1);
+}

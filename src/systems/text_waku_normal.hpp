@@ -51,7 +51,10 @@ class TextWindowButton;
 class TextWakuNormal : public TextWaku {
  public:
   TextWakuNormal();
+  TextWakuNormal(const TextWakuNormal& source);
   ~TextWakuNormal() override;
+  std::unique_ptr<TextWaku> Clone() const override;
+  void ClearMouseCapture() override;
 
   void AddButton(std::string btn_name,
                  std::unique_ptr<TextWindowButton> btn_impl);

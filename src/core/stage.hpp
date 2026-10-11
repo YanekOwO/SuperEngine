@@ -33,7 +33,6 @@
 #include <array>
 #include <cstddef>
 #include <deque>
-#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -67,9 +66,14 @@ struct StageElement {
   }
 
   pointer_type Get(int layer, size_t pos) {
+    return Get(layer, pos, [] { return std::make_shared<T>(); });
+  }
+
+  template <class Factory>
+  pointer_type Get(int layer, size_t pos, Factory factory) {
     pointer_type& element = (*this)[layer].at(pos);
     if (!element)
-      element = std::make_shared<T>();
+      element = factory();
     return element;
   }
 
@@ -117,10 +121,9 @@ class Stage {
         int group_size = 0,
         int quake_size = 0);
 
-  // Message windows, ordered by their window number.
-  // TODO: Make mwnd a StageElement, Reallive uses only one array of windows,
-  // Siglus uses next/fg/bg with fg[DEFAULT_MWND_NO] as default current window
-  std::map<int, std::shared_ptr<TextWindow>> mwnd;
+  // RealLive uses foreground only; Siglus has three fixed-size window lists.
+  StageElement<TextWindow> mwnd;
+  int mwnd_order = 1;
 
   // Foreground, background and next objects
   StageElement<GraphicsObject> objects;

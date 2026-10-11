@@ -166,6 +166,12 @@ TextSystem::TextSystem(System& system,
       kidoku_read_(false),
       in_selection_mode_(false),
       system_(system) {
+  stage_.mwnd_order = mwnd_config_.order_;
+  for (int layer : {kLayerFg, kLayerBg, kLayerNext})
+    stage_.mwnd.Resize(layer,
+                       layer == kLayerFg || mwnd_config_.layered_windows()
+                           ? mwnd_config_.window_capacity()
+                           : 0);
   text_impl_->InitSystem();
 
   GameexeInterpretObject ctrl_use(gexe("CTRL_USE"));
@@ -202,79 +208,85 @@ TextSystem::~TextSystem() {
 }
 
 void TextSystem::ExecuteTextSystem() {
-  // Check to see if the cursor is displayed
-  if (ShowWindow(active_window_)) {
-    auto it = stage_.mwnd.find(active_window_);
-    if (it != stage_.mwnd.end() && it->second->IsVisible() && in_pause_state_ &&
-        !IsReadingBacklog()) {
-      if (!text_key_cursor_)
-        SetKeyCursor(0);
-
-      text_key_cursor_->Execute();
-    }
+  auto current = FindMwnd(kLayerFg, active_window_);
+  if (!mwnd_config_.layered_windows() && current &&
+      ShowWindow(active_window_) && current->IsVisible() && in_pause_state_ &&
+      !IsReadingBacklog()) {
+    if (!text_key_cursor_)
+      SetKeyCursor(0);
+    text_key_cursor_->Execute();
   }
+  for (int layer : {kLayerBg, kLayerFg, kLayerNext})
+    for (const auto& window : stage_.mwnd[layer])
+      if (window)
+        window->Execute(layer == kLayerFg &&
+                        ShowWindow(window->window_number()));
+}
 
-  // Let each window update any TextWindowButton s.
-  for (auto& [id, mwnd] : stage_.mwnd)
-    mwnd->Execute(ShowWindow(id));
+void TextSystem::RenderWindow(TextWindow& window) {
+  if (!system_visible() || !ShowWindow(window.window_number()) ||
+      system_.graphics().is_interface_hidden())
+    return;
+  window.Render();
 }
 
 void TextSystem::Render() {
-  if (!system_visible())
-    return;
-  for (auto& [id, mwnd] : stage_.mwnd) {
-    if (ShowWindow(id))
-      mwnd->Render();
-  }
-
-  if (ShowWindow(active_window_)) {
-    auto it = stage_.mwnd.find(active_window_);
-
-    if (it != stage_.mwnd.end() && it->second->IsVisible() && in_pause_state_ &&
-        !IsReadingBacklog()) {
-      if (!text_key_cursor_)
-        SetKeyCursor(0);
-
-      text_key_cursor_->Render(*it->second);
-    }
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window)
+      RenderWindow(*window);
+  auto current = FindMwnd(kLayerFg, active_window_);
+  if (!mwnd_config_.layered_windows() && system_visible() && current &&
+      ShowWindow(active_window_) && current->IsVisible() && in_pause_state_ &&
+      !IsReadingBacklog() && !system_.graphics().is_interface_hidden()) {
+    if (!text_key_cursor_)
+      SetKeyCursor(0);
+    text_key_cursor_->Render(*current);
   }
 }
 
-void TextSystem::HideTextWindow(int win_number) {
-  auto it = stage_.mwnd.find(win_number);
-  if (it != stage_.mwnd.end()) {
-    it->second->SetVisible(false);
-  }
+std::shared_ptr<TextWindow> TextSystem::FindMwnd(int layer, int index) const {
+  const auto& windows = stage_.mwnd[layer];
+  return index >= 0 && static_cast<std::size_t>(index) < windows.size()
+             ? windows[index]
+             : nullptr;
+}
+
+bool TextSystem::IsForegroundWindow(const TextWindow* window) const {
+  return window && FindMwnd(kLayerFg, window->window_number()).get() == window;
+}
+
+void TextSystem::HideTextWindow(int id) {
+  if (auto window = FindMwnd(kLayerFg, id))
+    window->SetVisible(false);
 }
 
 void TextSystem::HideAllTextWindows() {
-  for (auto& [id, mwnd] : stage_.mwnd)
-    mwnd->SetVisible(false);
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window)
+      window->SetVisible(false);
 }
 
-void TextSystem::HideAllTextWindowsExcept(int i) {
-  for (auto& [id, mwnd] : stage_.mwnd) {
-    if (id == i)
-      continue;
-    mwnd->SetVisible(false);
-  }
+void TextSystem::HideAllTextWindowsExcept(int id) {
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window && window->window_number() != id)
+      window->SetVisible(false);
 }
 
-void TextSystem::ShowTextWindow(int win_number) {
-  auto it = stage_.mwnd.find(win_number);
-  if (it != stage_.mwnd.end()) {
-    it->second->SetVisible(true);
-  }
+void TextSystem::ShowTextWindow(int id) {
+  if (auto window = FindMwnd(kLayerFg, id))
+    window->SetVisible(true);
 }
 
 void TextSystem::ShowAllTextWindows() {
-  for (auto& [id, mwnd] : stage_.mwnd)
-    mwnd->SetVisible(true);
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window)
+      window->SetVisible(true);
 }
 
 void TextSystem::ClearAllTextWindows() {
-  for (auto& [id, mwnd] : stage_.mwnd)
-    mwnd->ClearWin();
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window)
+      window->ClearWin();
 }
 
 void TextSystem::SetVisualOverride(int win_number, bool show_window) {
@@ -292,20 +304,22 @@ void TextSystem::ClearVisualOverrides() { window_visual_override_.clear(); }
 std::shared_ptr<TextWindow> TextSystem::GetMwnd(
     int window_id,
     std::function<std::shared_ptr<TextWindow>()> orelse) {
-  auto [it, inserted] = stage_.mwnd.try_emplace(window_id, nullptr);
-  try {
-    if (inserted) {
-      it->second = orelse();
-    }
-  } catch (...) {
-    stage_.mwnd.erase(window_id);
-    throw;
-  }
-  return it->second;
+  if (window_id < 0)
+    throw std::out_of_range("Negative message-window index");
+  if (!mwnd_config_.layered_windows() &&
+      static_cast<std::size_t>(window_id) >= stage_.mwnd.Size(kLayerFg))
+    stage_.mwnd.Resize(kLayerFg, static_cast<std::size_t>(window_id) + 1);
+  return stage_.mwnd.Get(kLayerFg, window_id, std::move(orelse));
 }
 
 std::shared_ptr<TextWindow> TextSystem::GetMwnd(int window_id) {
-  return GetMwnd(window_id, [this, window_id]() {
+  return GetMwnd(kLayerFg, window_id);
+}
+
+std::shared_ptr<TextWindow> TextSystem::GetMwnd(int layer, int window_id) {
+  if (window_id < 0 || !mwnd_config_.HasWindow(window_id))
+    throw std::out_of_range("Invalid message-window index");
+  return stage_.mwnd.Get(layer, window_id, [this, window_id]() {
     Gameexe& gexe = system_.gameexe();
     TextWindow::InitParams params = mwnd_config_.GetWindow(window_id);
     if (params.window_attr_mod == 0) {
@@ -332,6 +346,9 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int window_id) {
           waku_factory.CreateWaku(system_, *tw, params.namebox.waku_set, 0));
     }
 
+    const auto& waku = mwnd_config_.GetWaku(params.waku_set);
+    tw->message_state()->waku_file = waku.main_file;
+    tw->message_state()->filter_file = waku.filter_file;
     tw->ClearWin();
     tw->SetKoeReplayInfo(BuildKoeReplayInfo(system_, gexe));
     return tw;
@@ -339,7 +356,7 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int window_id) {
 }
 
 bool TextSystem::HasCurrentWindow() const {
-  return stage_.mwnd.contains(active_window_);
+  return static_cast<bool>(FindMwnd(kLayerFg, active_window_));
 }
 
 std::shared_ptr<TextWindow> TextSystem::GetCurrentMwnd() {
@@ -522,19 +539,26 @@ void TextSystem::OnEvent(std::shared_ptr<Event> event) {
 }
 
 std::vector<int> TextSystem::GetActiveWindows() {
-  std::vector<int> tmp;
-  for (PageSet::iterator it = current_pageset_.begin();
-       it != current_pageset_.end(); ++it) {
-    tmp.push_back(it->first);
-  }
-  return tmp;
+  std::vector<int> result;
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window && window->HasPage())
+      result.push_back(window->window_number());
+  return result;
+}
+
+void TextSystem::CollectCurrentPages() {
+  current_pageset_.clear();
+  for (const auto& window : stage_.mwnd[kLayerFg])
+    if (window && window->HasPage())
+      current_pageset_.emplace(window->window_number(),
+                               window->GetPage().CloneFor(*window, window));
 }
 
 void TextSystem::Snapshot() {
-  bool all_empty = std::all_of(
-      current_pageset_.begin(), current_pageset_.end(),
-      [&](std::pair<const int, TextPage>& rhs) { return rhs.second.empty(); });
-
+  CollectCurrentPages();
+  const bool all_empty =
+      std::all_of(current_pageset_.begin(), current_pageset_.end(),
+                  [](const auto& entry) { return entry.second.empty(); });
   if (!all_empty) {
     previous_page_sets_.push_back(current_pageset_);
     ExpireOldPages();
@@ -545,17 +569,9 @@ void TextSystem::NewPageOnWindow(int window_id) {
   NewPageOnWindow(GetMwnd(window_id));
 }
 
-void TextSystem::NewPageOnWindow(std::shared_ptr<TextWindow> text_window) {
-  const int window_id = text_window->window_number();
-  // Erase the current instance of this window if it exists
-  PageSet::iterator it = current_pageset_.find(window_id);
-  if (it != current_pageset_.end()) {
-    current_pageset_.erase(it);
-  }
-
+void TextSystem::NewPageOnWindow(std::shared_ptr<TextWindow> window) {
+  window->NewPage();
   previous_page_it_ = previous_page_sets_.end();
-  current_pageset_.emplace(window_id,
-                           TextPage(system().gameexe(), text_window));
   ExpireOldPages();
 }
 
@@ -563,23 +579,13 @@ TextPage& TextSystem::GetCurrentPage() {
   return GetPageOnWindow(GetCurrentMwnd());
 }
 
-TextPage& TextSystem::GetPageOnWindow(std::shared_ptr<TextWindow> text_window) {
-  const int window_id = text_window->window_number();
-  PageSet::iterator it = current_pageset_.find(window_id);
-  if (it != current_pageset_.end() && it->second.window() != text_window) {
-    current_pageset_.erase(it);
-    it = current_pageset_.end();
-  }
-  if (it == current_pageset_.end())
-    it = current_pageset_
-             .emplace(window_id,
-                      TextPage(system().gameexe(), std::move(text_window)))
-             .first;
-
-  return it->second;
+TextPage& TextSystem::GetPageOnWindow(std::shared_ptr<TextWindow> window) {
+  return window->GetPage();
 }
 
 void TextSystem::BackPage() {
+  if (!is_reading_backlog_)
+    CollectCurrentPages();
   is_reading_backlog_ = true;
 
   if (previous_page_it_ != previous_page_sets_.begin()) {
@@ -594,6 +600,8 @@ void TextSystem::BackPage() {
 }
 
 void TextSystem::ForwardPage() {
+  if (!is_reading_backlog_)
+    CollectCurrentPages();
   is_reading_backlog_ = true;
 
   if (previous_page_it_ != previous_page_sets_.end()) {
@@ -613,7 +621,9 @@ void TextSystem::ForwardPage() {
 void TextSystem::ReplayPageSet(PageSet& set, bool is_current_page) {
   for (PageSet::iterator it = set.begin(); it != set.end(); ++it) {
     try {
-      it->second.Replay(is_current_page);
+      auto window = GetMwnd(it->first);
+      auto page = it->second.CloneFor(*window);
+      page.Replay(is_current_page);
     } catch (rlvm::Exception& e) {
       // Currently, the text system can throw on a few unimplemented situations,
       // such as ruby across lines.
@@ -632,6 +642,7 @@ void TextSystem::StopReadingBacklog() {
   // Clear all windows
   ClearAllTextWindows();
   HideAllTextWindows();
+  CollectCurrentPages();
   ReplayPageSet(current_pageset_, true);
 }
 
@@ -667,10 +678,10 @@ int TextSystem::GetCursorNumber() const {
 
 void TextSystem::UpdateWindowsForChangeToWindowAttr() {
   // Check each text window to see if it needs updating
-  for (auto [id, mwnd] : stage_.mwnd) {
-    if (!mwnd->GetAttrMod())
-      mwnd->SetRGBAF(window_attr());
-  }
+  for (const auto& layer : stage_.mwnd.storage)
+    for (const auto& window : layer)
+      if (window && !window->GetAttrMod())
+        window->SetRGBAF(window_attr());
 }
 
 bool TextSystem::ShowWindow(int win_num) const {
@@ -713,40 +724,41 @@ void TextSystem::SetWindowAttrF(int i) {
 }
 
 void TextSystem::SetMousePosition(const Point& pos) {
-  std::optional<int> target = mwnd_capture_window_;
-  if (!target) {
-    for (auto it = stage_.mwnd.rbegin(); it != stage_.mwnd.rend(); ++it) {
-      if (ShowWindow(it->first) && it->second->HasMwndButtonAt(pos)) {
-        target = it->first;
+  auto target = mwnd_capture_window_ ? mwnd_capture_window_->lock() : nullptr;
+  if (target && !IsForegroundWindow(target.get()))
+    target.reset();
+  const auto& windows = stage_.mwnd[kLayerFg];
+  if (!target)
+    for (auto it = windows.rbegin(); it != windows.rend(); ++it)
+      if (*it && ShowWindow((*it)->window_number()) &&
+          (*it)->HasMwndButtonAt(pos)) {
+        target = *it;
         break;
       }
-    }
-  }
-  for (auto const& [id, window] : stage_.mwnd)
-    if (ShowWindow(id))
-      window->SetMousePosition(pos, target && *target == id);
+  for (const auto& window : windows)
+    if (window && ShowWindow(window->window_number()))
+      window->SetMousePosition(pos, window == target);
 }
 
 bool TextSystem::HandleMouseClick(const Point& pos, bool pressed) {
   if (!system_visible())
     return false;
   if (!pressed && mwnd_capture_window_) {
-    const int id = *mwnd_capture_window_;
+    auto window = mwnd_capture_window_->lock();
     mwnd_capture_window_.reset();
-    const auto it = stage_.mwnd.find(id);
-    if (it != stage_.mwnd.end())
-      (void)it->second->HandleMouseClick(pos, false);
+    if (window && IsForegroundWindow(window.get()))
+      (void)window->HandleMouseClick(pos, false);
     SetMousePosition(pos);
     return true;
   }
-  for (auto it = stage_.mwnd.rbegin(); it != stage_.mwnd.rend(); ++it) {
-    if (ShowWindow(it->first) && it->second->HandleMouseClick(pos, pressed)) {
+  const auto& windows = stage_.mwnd[kLayerFg];
+  for (auto it = windows.rbegin(); it != windows.rend(); ++it)
+    if (*it && ShowWindow((*it)->window_number()) &&
+        (*it)->HandleMouseClick(pos, pressed)) {
       if (pressed)
-        mwnd_capture_window_ = it->first;
+        mwnd_capture_window_ = *it;
       return true;
     }
-  }
-
   return false;
 }
 
@@ -1043,7 +1055,7 @@ void TextSystem::Reset() {
   previous_page_it_ = previous_page_sets_.end();
 
   window_visual_override_.clear();
-  stage_.mwnd.clear();
+  stage_.mwnd.Clear();
 
   system_visible_ = true;
   in_pause_state_ = false;

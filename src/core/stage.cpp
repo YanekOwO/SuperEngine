@@ -25,6 +25,7 @@
 #include "core/stage.hpp"
 
 #include "core/object_internal/objdrawer.hpp"
+#include "systems/text_window.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -39,7 +40,7 @@ Stage::Stage(int object_size, int effect_size, int group_size, int quake_size)
       saved_background_objects(object_size) {}
 
 void Stage::Reset() {
-  mwnd.clear();
+  mwnd.Clear();
   objects.Clear();
   groups.Clear();
   effects.Clear();
@@ -56,8 +57,10 @@ void Stage::Wipe(int begin_order,
                  int end_order,
                  int begin_layer,
                  int end_layer) {
-  // TODO(siglus): Promote mwnd, btnsel, and world stage state
+  // TODO(siglus): Promote btnsel and world stage state
   // when those core Siglus element implementations exist.
+
+  // Promote objects
   auto& foreground_objects = objects[kLayerFg];
   auto& background_objects = objects[kLayerBg];
   auto& next_objects = objects[kLayerNext];
@@ -108,6 +111,29 @@ void Stage::Wipe(int begin_order,
     }
   }
 
+  // promote mwnd
+  auto& fg_mwnd = mwnd[kLayerFg];
+  auto& bg_mwnd = mwnd[kLayerBg];
+  auto& next_mwnd = mwnd[kLayerNext];
+  for (auto& window : next_mwnd)
+    window.reset();
+  const size_t window_count =
+      std::min({fg_mwnd.size(), bg_mwnd.size(), next_mwnd.size()});
+  for (size_t i = 0; i < window_count; ++i) {
+    const auto sorter =
+        fg_mwnd[i] ? fg_mwnd[i]->sorter() : std::make_pair(mwnd_order, 0);
+    if (!InWipeRange(sorter))
+      continue;
+    if (fg_mwnd[i]) {
+      next_mwnd[i] = fg_mwnd[i]->Clone();
+      fg_mwnd[i]->ClearMouseCapture();
+    }
+    mwnd.Move(kLayerFg, i, kLayerBg, i);
+    if (fg_mwnd[i])
+      fg_mwnd[i]->ClearMouseCapture();
+  }
+
+  // promote groups
   auto& foreground_groups = groups[kLayerFg];
   auto& background_groups = groups[kLayerBg];
   auto& next_groups = groups[kLayerNext];
@@ -139,6 +165,7 @@ void Stage::Wipe(int begin_order,
     }
   }
 
+  // promote effects
   auto& foreground_effects = effects[kLayerFg];
   auto& background_effects = effects[kLayerBg];
   auto& next_effects = effects[kLayerNext];
@@ -169,6 +196,7 @@ void Stage::Wipe(int begin_order,
     }
   }
 
+  // promote quakes
   // Quakes are stage-wide render state in legacy Siglus. Unlike objects and
   // groups, every slot participates even in a sorter-limited wipe.
   auto& foreground_quakes = quakes[kLayerFg];

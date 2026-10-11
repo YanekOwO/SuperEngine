@@ -236,3 +236,16 @@ TEST(MwndConfigTest, ParsesRealliveWindowWakuAndFarcall) {
   EXPECT_EQ(waku.buttons[0].call->scene, "7");
   EXPECT_EQ(waku.buttons[0].call->entrypoint, 8);
 }
+
+TEST(MwndConfigTest, SiglusWindowOrderAndCapacityAreExplicit) {
+  Gameexe gameexe;
+  const auto defaults = MwndConfig::ParseSiglus(gameexe);
+  EXPECT_TRUE(defaults.layered_windows());
+  EXPECT_EQ(defaults.order_, 1);
+  gameexe.parseLine("MWND.ORDER = -3");
+  gameexe.parseLine("MWND.CNT = 4");
+  const auto config = MwndConfig::ParseSiglus(gameexe);
+  EXPECT_EQ(config.order_, -3);
+  EXPECT_EQ(config.window_capacity(), 4);
+  EXPECT_FALSE(MwndConfig::ParseReallive(gameexe).layered_windows());
+}

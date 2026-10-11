@@ -35,6 +35,17 @@
 TextWaku::TextWaku(bool should_center_w, bool should_center_h)
     : center_w_(should_center_w), center_h_(should_center_h) {}
 
+TextWaku::TextWaku(const TextWaku& source)
+    : center_w_(source.center_w_),
+      center_h_(source.center_h_),
+      objects_(source.objects_.size()),
+      renderer_(source.renderer_) {
+  for (std::size_t i = 0; i < objects_.size(); ++i)
+    if (source.objects_[i])
+      objects_[i] =
+          std::make_shared<GraphicsObject>(source.objects_[i]->Clone());
+}
+
 void TextWaku::Execute() {
   for (auto& obj : objects_) {
     if (!obj)

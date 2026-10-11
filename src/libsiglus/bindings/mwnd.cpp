@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2025 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -46,7 +47,6 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
-#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -57,8 +57,6 @@
 namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
-
-namespace {
 
 struct MwndObjectList {
   std::shared_ptr<TextWindow> window;
@@ -107,37 +105,6 @@ bool AutoModeEnabled(System* system, const std::shared_ptr<Gameexe>& cfg) {
   return system &&
          (system->text().auto_mode() != 0 || ConfigFlag(cfg, "auto_mode"));
 }
-
-struct MwndMessageState {
-  bool block_started = false;
-  bool clear_ready = false;
-  int auto_mode_base_chars = 0;
-  int current_koe = -1;
-  int current_character = -1;
-  bool current_koe_played = false;
-  bool current_koe_no_auto_mode = false;
-
-  void ClearKoe() {
-    current_koe = -1;
-    current_character = -1;
-    current_koe_played = false;
-    current_koe_no_auto_mode = false;
-  }
-
-  std::string waku_file;
-  std::string filter_file;
-  std::optional<std::string> pending_ruby;
-
-  void MarkNovelClear(TextPage& page) {
-    block_started = false;
-    auto_mode_base_chars = page.number_of_chars_on_page();
-    ClearKoe();
-  }
-  void MarkMessageClearReady(TextPage& page) {
-    clear_ready = true;
-    MarkNovelClear(page);
-  }
-};
 
 struct KoeCallParams {
   int koe = 0;
@@ -297,36 +264,9 @@ struct MwndHandle {
   std::shared_ptr<TextWindow> mwnd;
 };
 
-struct MwndArrayHandle {};
-
-// Weak keys keep bookkeeping from retaining discarded windows. Handles and
-// pending waits retain their selected window independently.
-struct MwndContext {
-  std::map<std::weak_ptr<TextWindow>,
-           std::shared_ptr<MwndMessageState>,
-           std::owner_less<std::weak_ptr<TextWindow>>>
-      messages;
-  PendingCoroutineTasks pending_waits;
-
-  std::shared_ptr<MwndMessageState> GetState(
-      const std::shared_ptr<TextWindow>& window,
-      const MwndConfig& config) {
-    std::erase_if(messages,
-                  [](const auto& entry) { return entry.first.expired(); });
-    auto [it, inserted] = messages.try_emplace(window);
-    if (inserted) {
-      it->second = std::make_shared<MwndMessageState>();
-      if (config.HasWaku(window->waku_set())) {
-        const auto& waku = config.GetWaku(window->waku_set());
-        it->second->waku_file = waku.main_file;
-        it->second->filter_file = waku.filter_file;
-      }
-    }
-    return it->second;
-  }
+struct MwndArrayHandle {
+  int layer = kLayerFg;
 };
-
-}  // namespace
 
 void BindMwnd(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
@@ -340,19 +280,16 @@ void BindMwnd(SiglusMachine& runtime) {
   auto page = [sys, get](const MwndHandle* h) -> TextPage& {
     return sys->text().GetPageOnWindow(get(h));
   };
-  auto context = std::make_shared<MwndContext>();
-  auto state = [sys, get, context](const MwndHandle* h) {
-    return context->GetState(get(h), sys->text().mwnd_config());
-  };
+  auto context = std::make_shared<PendingCoroutineTasks>();
+  auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
   auto wait = [sys, get, context, cfg = runtime.local_config](
                   MwndHandle* h, sr::VM& vm,
                   MwndWaitTask::AfterWait after_wait) {
     auto window = get(h);
-    auto message_state = context->GetState(window, sys->text().mwnd_config());
+    auto message_state = window->message_state();
     auto task = std::make_unique<MwndWaitTask>(
         vm, sys, std::move(window), cfg, std::move(message_state), after_wait);
-    return sr::Value(
-        context->pending_waits.MakeFuture(*vm.gc_, std::move(task)));
+    return sr::Value(context->MakeFuture(*vm.gc_, std::move(task)));
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -367,31 +304,53 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.inst("mwnd", nullptr);  // Top-level mwnd resolves the active window.
 
   sb::class_<MwndArrayHandle> array(m, "MwndArray");
-  array.def(sb::init<>());
+  array.def(sb::init([stage = runtime.stage.get()](int layer) {
+              (void)stage->mwnd[layer];
+              return std::make_unique<MwndArrayHandle>(layer);
+            }),
+            sb::arg("layer") = static_cast<int>(kLayerFg));
   array.add_gc_root(mwnd);
   array.def(
       "__getitem__",
-      [sys, mwnd](MwndArrayHandle*, int index) mutable {
+      [sys, mwnd](MwndArrayHandle* array, int index) mutable {
         if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
           throw sr::RuntimeError("Invalid message-window number: " +
                                  std::to_string(index));
-        return sr::Value(mwnd.make_inst(sys->text().GetMwnd(index)));
+        return sr::Value(
+            mwnd.make_inst(sys->text().GetMwnd(array->layer, index)));
       },
       sb::arg("index"));
   auto close_all = [sys, stage = runtime.stage.get()](MwndArrayHandle*) {
     sys->text().set_in_pause_state(false);
-    for (const auto& [id, window] : stage->mwnd)
-      if (window)
-        window->SetVisible(false);
+    for (const auto& layer : stage->mwnd.storage)
+      for (const auto& window : layer)
+        if (window) {
+          window->SetVisible(false);
+          window->ClearMouseCapture();
+        }
   };
   array.def("close", close_all);
   array.def("close_nowait", close_all);
   array.def("close_wait", close_all);
+  array.def(
+      "resize",
+      [](MwndArrayHandle*, int) {
+        throw sr::RuntimeError("stage.mwnd has a fixed size");
+      },
+      sb::arg("size"));
+
+  mwnd.def("get_layer",
+           [get](MwndHandle* h) { return get(h)->sorter().second; });
+  mwnd.def(
+      "set_layer",
+      [get](MwndHandle* h, int layer) { get(h)->set_layer(layer); },
+      sb::arg("layer"));
 
   auto open = [get](MwndHandle* h) { get(h)->SetVisible(true); };
   auto close = [get, sys](MwndHandle* h) {
     sys->text().set_in_pause_state(false);
     get(h)->SetVisible(false);
+    get(h)->ClearMouseCapture();
   };
   mwnd.def("open", open);
   mwnd.def("open_nowait", open);

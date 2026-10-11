@@ -55,6 +55,42 @@ TextWakuType4::TextWakuType4()
       area_left_(0),
       area_right_(0) {}
 
+TextWakuType4::TextWakuType4(const TextWakuType4& source) : TextWaku(source) {
+  area_top_ = source.area_top_;
+  area_bottom_ = source.area_bottom_;
+  area_left_ = source.area_left_;
+  area_right_ = source.area_right_;
+  waku_main_ = source.waku_main_;
+  filter_colour_ = source.filter_colour_;
+  use_config_colour_ = source.use_config_colour_;
+  use_config_opacity_ = source.use_config_opacity_;
+  filter_rendering_ = source.filter_rendering_;
+  top_left_ = source.top_left_;
+  top_center_ = source.top_center_;
+  top_right_ = source.top_right_;
+  left_side_ = source.left_side_;
+  right_side_ = source.right_side_;
+  bottom_left_ = source.bottom_left_;
+  bottom_center_ = source.bottom_center_;
+  bottom_right_ = source.bottom_right_;
+
+  filter_surface_ =
+      source.filter_surface_ ? source.filter_surface_->Clone() : nullptr;
+  if (filter_surface_)
+    filter_surface_->SetIsMask(true);
+  if (source.overlay_)
+    overlay_ = std::make_unique<TextWakuNormal>(*source.overlay_);
+}
+
+std::unique_ptr<TextWaku> TextWakuType4::Clone() const {
+  return std::make_unique<TextWakuType4>(*this);
+}
+
+void TextWakuType4::ClearMouseCapture() {
+  if (overlay_)
+    overlay_->ClearMouseCapture();
+}
+
 void TextWakuType4::Execute() {
   if (overlay_)
     overlay_->Execute();

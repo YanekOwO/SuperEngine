@@ -46,6 +46,8 @@ class TextWaku {
  public:
   TextWaku(bool should_center_w, bool should_center_h);
   virtual ~TextWaku() = default;
+  virtual std::unique_ptr<TextWaku> Clone() const = 0;
+  virtual void ClearMouseCapture() {}
 
   virtual void Execute();
   virtual void Render(Point box_location,
@@ -79,4 +81,7 @@ class TextWaku {
   std::vector<std::shared_ptr<GraphicsObject>> objects_;
 
   std::shared_ptr<ISceneRenderer> renderer_;
+
+ protected:
+  TextWaku(const TextWaku& source);
 };

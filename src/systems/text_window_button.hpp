@@ -71,6 +71,7 @@ class TextWindowButton {
   bool IsVisible() const { return visible_; }
   bool BlocksInput() const;
   bool IsCaptured() const { return captured_; }
+  void ClearMouseCapture();
   bool HitTest(const Point& pos) const;
 
   void SetPresentation(bool visible,

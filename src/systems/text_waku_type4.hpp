@@ -37,6 +37,9 @@ class TextWakuNormal;
 class TextWakuType4 : public TextWaku {
  public:
   TextWakuType4();
+  TextWakuType4(const TextWakuType4& source);
+  std::unique_ptr<TextWaku> Clone() const override;
+  void ClearMouseCapture() override;
 
   virtual void Execute() override;
   virtual void Render(Point box_location,

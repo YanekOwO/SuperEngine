@@ -35,12 +35,25 @@
 // -----------------------------------------------------------------------
 
 TextPage::TextPage(Gameexe& g, std::shared_ptr<TextWindow> window)
+    : TextPage(g, *window) {
+  window_owner_ = std::move(window);
+}
+
+TextPage::TextPage(Gameexe& g, TextWindow& window)
     : gexe(g),
-      text_window_(window),
+      text_window_(&window),
       number_of_chars_on_page_(0),
       in_ruby_gloss_(false) {}
 
 TextPage::~TextPage() = default;
+
+TextPage TextPage::CloneFor(TextWindow& window,
+                            std::shared_ptr<TextWindow> owner) const {
+  TextPage result(*this);
+  result.text_window_ = &window;
+  result.window_owner_ = std::move(owner);
+  return result;
+}
 
 void TextPage::Replay(bool is_active_page) {
   // Reset the font color.
@@ -86,21 +99,17 @@ void TextPage::KoeMarker(int id) {
 }
 
 void TextPage::HardBrake() {
-  AddAction([](TextPage& page, bool) {
-    page.text_window_->Layout().HardBreak();
-  });
+  AddAction(
+      [](TextPage& page, bool) { page.text_window_->Layout().HardBreak(); });
 }
 
 void TextPage::SetIndentation() {
-  AddAction([](TextPage& page, bool) {
-    page.text_window_->SetIndentation();
-  });
+  AddAction([](TextPage& page, bool) { page.text_window_->SetIndentation(); });
 }
 
 void TextPage::ResetIndentation() {
-  AddAction([](TextPage& page, bool) {
-    page.text_window_->ResetIndentation();
-  });
+  AddAction(
+      [](TextPage& page, bool) { page.text_window_->ResetIndentation(); });
 }
 
 void TextPage::FontColour(int colour) {
@@ -181,15 +190,13 @@ void TextPage::FaceOpen(const std::string& filename, int index) {
 }
 
 void TextPage::FaceClose(int index) {
-  AddAction([index](TextPage& page, bool) {
-    page.text_window_->FaceClose(index);
-  });
+  AddAction(
+      [index](TextPage& page, bool) { page.text_window_->FaceClose(index); });
 }
 
 void TextPage::NextCharIsItalic() {
-  AddAction([](TextPage& page, bool) {
-    page.text_window_->NextCharIsItalic();
-  });
+  AddAction(
+      [](TextPage& page, bool) { page.text_window_->NextCharIsItalic(); });
 }
 
 bool TextPage::IsFull() const { return text_window_->IsFull(); }

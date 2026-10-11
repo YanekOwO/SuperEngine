@@ -45,6 +45,8 @@ constexpr int kButtonSelect = 3;
 constexpr int kButtonDisable = 4;
 
 struct HitCandidate {
+  int owner_order;
+  int owner_layer;
   int display_order;
   int z_order;
   int z_layer;
@@ -55,10 +57,10 @@ struct HitCandidate {
 
   std::strong_ordering operator<=>(const HitCandidate& o) const {
     // greater means better candidate
-    return std::tie(display_order, z_order, z_layer, z_depth, object_id,
-                    traversal_order) <=>
-           std::tie(o.display_order, o.z_order, o.z_layer, o.z_depth,
-                    o.object_id, o.traversal_order);
+    return std::tie(owner_order, owner_layer, display_order, z_order, z_layer,
+                    z_depth, object_id, traversal_order) <=>
+           std::tie(o.owner_order, o.owner_layer, o.display_order, o.z_order,
+                    o.z_layer, o.z_depth, o.object_id, o.traversal_order);
   }
 };
 
@@ -81,7 +83,8 @@ struct CandidateVisitor {
   void Visit(GraphicsObject& object,
              std::optional<ParentObjState> parent,
              int object_id,
-             int display_order) {
+             int display_order,
+             std::optional<std::pair<int, int>> owner_sorter = std::nullopt) {
     const std::size_t current_traversal_order = traversal_order++;
     const ObjectParameter& param = object.Param();
     if (!param.visible())
@@ -98,7 +101,11 @@ struct CandidateVisitor {
         param.GetButtonState() != kButtonSelect &&
         param.GetButtonState() != kButtonDisable && !param.click_disable &&
         object.GetDrawer().HitTest(object, mouse_pos, parent)) {
-      HitCandidate candidate{.display_order = display_order,
+      const auto sorter =
+          owner_sorter.value_or(std::make_pair(param.z_order, param.z_layer));
+      HitCandidate candidate{.owner_order = sorter.first,
+                             .owner_layer = sorter.second,
+                             .display_order = display_order,
                              .z_order = param.z_order,
                              .z_layer = param.z_layer,
                              .z_depth = param.z_depth,
@@ -121,7 +128,7 @@ struct CandidateVisitor {
     for (auto& child : object.GetChildren()) {
       if (!child)
         continue;
-      Visit(*child, child_parent, object_id, display_order);
+      Visit(*child, child_parent, object_id, display_order, owner_sorter);
     }
   }
 };
@@ -257,27 +264,25 @@ void InteractionManager::UpdateLayer(int layer) {
     visitor.Visit(*objects[i], std::nullopt, static_cast<int>(i), 0);
   }
 
-  if (layer == kLayerFg) {
-    int display_order = 1;
-    for (const auto& [id, window] : stage_.mwnd) {
-      if (window) {
-        const auto visit_waku = [&](TextWaku* waku, const Point& origin,
-                                    int order) {
-          const auto parent = TextWaku::ObjectParent(origin);
-          for (std::size_t i = 0; i < waku->objects_.size(); ++i)
-            if (waku->objects_[i])
-              visitor.Visit(*waku->objects_[i], parent, static_cast<int>(i),
-                            order);
-        };
-        if (window->IsTextboxWakuVisible())
-          visit_waku(window->GetTextboxWaku(), window->GetWindowRect().origin(),
-                     display_order);
-        if (window->IsNameboxWakuVisible())
-          visit_waku(window->GetNameboxWaku(),
-                     window->GetNameboxWakuRect().origin(), display_order + 1);
-      }
-      display_order += 2;
+  int display_order = 1;
+  for (const auto& window : stage_.mwnd[layer]) {
+    if (window) {
+      const auto visit_waku = [&](TextWaku* waku, const Point& origin,
+                                  int order) {
+        const auto parent = TextWaku::ObjectParent(origin);
+        for (std::size_t i = 0; i < waku->objects_.size(); ++i)
+          if (waku->objects_[i])
+            visitor.Visit(*waku->objects_[i], parent, static_cast<int>(i),
+                          order, window->sorter());
+      };
+      if (window->IsTextboxWakuVisible())
+        visit_waku(window->GetTextboxWaku(), window->GetWindowRect().origin(),
+                   display_order);
+      if (window->IsNameboxWakuVisible())
+        visit_waku(window->GetNameboxWaku(),
+                   window->GetNameboxWakuRect().origin(), display_order + 1);
     }
+    display_order += 2;
   }
 
   auto candidates = std::move(visitor.candidates);
@@ -294,17 +299,16 @@ void InteractionManager::UpdateLayer(int layer) {
   for (auto& object : objects)
     if (object)
       ApplyButtonOverrides(*object, groups, button_actions_);
-  if (layer == kLayerFg) {
-    for (const auto& [id, window] : stage_.mwnd) {
-      if (!window)
+
+  for (const auto& window : stage_.mwnd[layer]) {
+    if (!window)
+      continue;
+    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
+      if (!waku)
         continue;
-      for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
-        if (!waku)
-          continue;
-        for (const auto& object : waku->objects_)
-          if (object)
-            ApplyButtonOverrides(*object, groups, button_actions_);
-      }
+      for (const auto& object : waku->objects_)
+        if (object)
+          ApplyButtonOverrides(*object, groups, button_actions_);
     }
   }
 }

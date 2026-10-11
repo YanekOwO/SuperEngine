@@ -46,9 +46,13 @@ class TextTextPageElement;
 class TextPage {
  public:
   TextPage(Gameexe& gexe, std::shared_ptr<TextWindow> window);
+  // Live pages belong to their window and must not retain it.
+  TextPage(Gameexe& gexe, TextWindow& window);
   ~TextPage();
 
-  const std::shared_ptr<TextWindow>& window() const { return text_window_; }
+  TextWindow* window() const { return text_window_; }
+  TextPage CloneFor(TextWindow& window,
+                    std::shared_ptr<TextWindow> owner = {}) const;
 
   // Returns the number of characters printed with Character() and Name().
   int number_of_chars_on_page() const { return number_of_chars_on_page_; }
@@ -133,7 +137,9 @@ class TextPage {
   Gameexe& gexe;
 
   // Current window that this page is rendering into
-  std::shared_ptr<TextWindow> text_window_;
+  TextWindow* text_window_;
+  // Standalone pages and backlog snapshots keep their windows alive.
+  std::shared_ptr<TextWindow> window_owner_;
 
   // Number of characters on this page (used in automode)
   int number_of_chars_on_page_;

@@ -31,6 +31,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -45,6 +46,24 @@ class TextSystem;
 class ITextSystem;
 class TextWaku;
 class TextWindowButton;
+class TextPage;
+
+struct MwndMessageState {
+  bool block_started = false;
+  bool clear_ready = false;
+  int auto_mode_base_chars = 0;
+  int current_koe = -1;
+  int current_character = -1;
+  bool current_koe_played = false;
+  bool current_koe_no_auto_mode = false;
+  std::string waku_file;
+  std::string filter_file;
+  std::optional<std::string> pending_ruby;
+
+  void ClearKoe();
+  void MarkNovelClear(TextPage& page);
+  void MarkMessageClearReady(TextPage& page);
+};
 
 constexpr int kNumFaceSlots = MwndConfig::kNumFaceSlots;
 
@@ -65,6 +84,17 @@ class TextWindow {
              ITextSystem* text_impl,
              const InitParams& params);
   ~TextWindow();
+
+  std::shared_ptr<TextWindow> Clone() const;
+  TextPage& GetPage();
+  bool HasPage() const { return static_cast<bool>(page_); }
+  void NewPage();
+  const std::shared_ptr<MwndMessageState>& message_state() const {
+    return message_state_;
+  }
+  std::pair<int, int> sorter() const { return sorter_; }
+  void set_layer(int layer) { sorter_.second = layer; }
+  void ClearMouseCapture();
 
   inline TextLayout& Layout() { return layout_; }
   inline TextLayout const& Layout() const { return layout_; }
@@ -235,6 +265,10 @@ class TextWindow {
   void EndSelection();
 
  private:
+  std::pair<int, int> sorter_;
+  std::unique_ptr<TextPage> page_;
+  std::shared_ptr<MwndMessageState> message_state_ =
+      std::make_shared<MwndMessageState>();
   std::vector<std::unique_ptr<SelectionElement>> selections_;
 
   // Render faces implementation.

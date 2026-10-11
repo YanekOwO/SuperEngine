@@ -43,6 +43,49 @@ using namespace std::chrono_literals;
 TextWakuNormal::TextWakuNormal() : TextWaku(true, false) {}
 TextWakuNormal::~TextWakuNormal() = default;
 
+TextWakuNormal::TextWakuNormal(const TextWakuNormal& source)
+    : TextWaku(source) {
+  main_surface_ = source.main_surface_;
+  filter_margin_ = source.filter_margin_;
+  filter_colour_ = source.filter_colour_;
+  use_config_colour_ = source.use_config_colour_;
+  use_config_opacity_ = source.use_config_opacity_;
+  render_filter_ = source.render_filter_;
+  filter_rendering_ = source.filter_rendering_;
+  key_icon_surface_ = source.key_icon_surface_;
+  page_icon_surface_ = source.page_icon_surface_;
+  key_icon_ = source.key_icon_;
+  page_icon_ = source.page_icon_;
+  icon_position_type_ = source.icon_position_type_;
+  icon_position_base_ = source.icon_position_base_;
+  icon_position_ = source.icon_position_;
+  dynamic_icon_position_ = source.dynamic_icon_position_;
+  clock_ = source.clock_;
+  icon_start_ = source.icon_start_;
+  icon_visible_ = source.icon_visible_;
+  page_icon_visible_ = source.page_icon_visible_;
+
+  backing_surface_ =
+      source.backing_surface_ ? source.backing_surface_->Clone() : nullptr;
+  if (backing_surface_)
+    backing_surface_->SetIsMask(true);
+  for (const auto& button : source.buttons_) {
+    auto clone = std::make_unique<TextWindowButton>(*button.btn);
+    clone->ClearMouseCapture();
+    AddButton(button.name, std::move(clone));
+  }
+}
+
+std::unique_ptr<TextWaku> TextWakuNormal::Clone() const {
+  return std::make_unique<TextWakuNormal>(*this);
+}
+
+void TextWakuNormal::ClearMouseCapture() {
+  captured_button_.reset();
+  for (auto& button : buttons_)
+    button.btn->ClearMouseCapture();
+}
+
 void TextWakuNormal::AddButton(std::string btn_name,
                                std::unique_ptr<TextWindowButton> btn_impl) {
   if (!btn_impl)

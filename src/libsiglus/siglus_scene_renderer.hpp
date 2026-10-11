@@ -57,8 +57,9 @@ class SiglusSceneRenderer final : public ISceneRenderer {
 
  private:
   enum class ObjectRange { All, Below, Within, Above };
-  using ToRenderVec =
-      std::vector<std::tuple<int, int, int, int, GraphicsObject*>>;
+  // Sort by order, layer, kind (objects before windows), depth, then index.
+  using ToRenderVec = std::vector<
+      std::tuple<int, int, int, int, int, GraphicsObject*, TextWindow*>>;
 
   void RenderStageObjects();
   void RenderObjects(int stage_layer, ObjectRange range = ObjectRange::All);

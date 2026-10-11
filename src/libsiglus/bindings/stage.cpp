@@ -27,7 +27,6 @@
 #include "libsiglus/bindings/util.hpp"
 
 namespace libsiglus::binding {
-namespace sb = srbind;
 
 void BindStage(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
@@ -36,26 +35,9 @@ void BindStage(SiglusMachine& runtime) {
   src += R"(
 class StageLayer {
   fn __init__(self, layer = 0) {
-    self.object = nil;
-    try {
-      self.object = ObjectArray(layer);
-    } catch (e) {
-      print("Siglus stage.object binding unavailable:", e);
-    }
-
-    self.mwnd = nil;
-    try {
-      self.mwnd = MwndArray();
-    } catch (e) {
-      print("Siglus stage.mwnd binding unavailable:", e);
-    }
-
-    self.objgroup = nil;
-    try {
-      self.objgroup = GroupArray(layer);
-    } catch (e) {
-      print("Siglus stage.objgroup binding unavailable:", e);
-    }
+    self.object = ObjectArray(layer);
+    self.mwnd = MwndArray(layer);
+    self.objgroup = GroupArray(layer);
 
     self.btnsel = nil;
     try {
@@ -72,14 +54,9 @@ class StageLayer {
     }
 
     self.effect = EffectArray(layer);
-
-    self.quake = nil;
-    try {
-      self.quake = QuakeArray(layer);
-    } catch (e) {
-      print("Siglus stage.quake binding unavailable:", e);
-    }
+    self.quake = QuakeArray(layer);
   }
+  fn create_mwnd(self, count) { self.mwnd.resize(count); }
 }
 
 class Stage {

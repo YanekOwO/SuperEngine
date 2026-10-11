@@ -35,6 +35,7 @@
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
 
 #include <GL/glew.h>
 
@@ -118,12 +119,7 @@ void SiglusSceneRenderer::ExecuteFrame() {
     mask_list_->Execute();
 }
 
-void SiglusSceneRenderer::RenderScene() {
-  RenderStageObjects();
-
-  if (!system_.graphics().is_interface_hidden())
-    system_.text().Render();
-}
+void SiglusSceneRenderer::RenderScene() { RenderStageObjects(); }
 
 void SiglusSceneRenderer::RenderStageObjects() {
   if (!stage_.transition_render_range()) {
@@ -167,22 +163,32 @@ void SiglusSceneRenderer::RenderStageObjects() {
 
 void SiglusSceneRenderer::RenderObjects(int stage_layer, ObjectRange range) {
   to_render_.clear();
+  const auto in_range = [&](std::pair<int, int> sorter) {
+    if (range == ObjectRange::All)
+      return true;
+    const auto& bounds = *stage_.transition_render_range();
+    if (range == ObjectRange::Below)
+      return sorter < bounds.begin;
+    if (range == ObjectRange::Above)
+      return sorter > bounds.end;
+    return bounds.begin <= sorter && sorter <= bounds.end;
+  };
   const auto& objects = stage_.objects[stage_layer];
   for (size_t i = 0; i < objects.size(); ++i) {
     if (!objects[i])
       continue;
     const auto& param = objects[i]->Param();
-    if (range != ObjectRange::All) {
-      const auto sorter = std::make_pair(param.z_order, param.z_layer);
-      const auto& bounds = *stage_.transition_render_range();
-      if ((range == ObjectRange::Below && sorter >= bounds.begin) ||
-          (range == ObjectRange::Within &&
-           (sorter < bounds.begin || sorter > bounds.end)) ||
-          (range == ObjectRange::Above && sorter <= bounds.end))
-        continue;
-    }
-    to_render_.emplace_back(param.z_order, param.z_layer, param.z_depth,
-                            static_cast<int>(i), objects[i].get());
+    if (in_range({param.z_order, param.z_layer}))
+      to_render_.emplace_back(param.z_order, param.z_layer, 0, param.z_depth,
+                              static_cast<int>(i), objects[i].get(), nullptr);
+  }
+  const auto& windows = stage_.mwnd[stage_layer];
+  for (size_t i = 0; i < windows.size(); ++i) {
+    if (!windows[i] || !in_range(windows[i]->sorter()))
+      continue;
+    const auto [order, layer] = windows[i]->sorter();
+    to_render_.emplace_back(order, layer, 1, 0, static_cast<int>(i), nullptr,
+                            windows[i].get());
   }
   RenderQueuedObjects(stage_layer);
 }
@@ -191,7 +197,11 @@ void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
   std::sort(to_render_.begin(), to_render_.end());
 
   for (auto& object : to_render_) {
-    GraphicsObject& graphics_object = *std::get<4>(object);
+    if (auto* window = std::get<6>(object)) {
+      system_.text().RenderWindow(*window);
+      continue;
+    }
+    GraphicsObject& graphics_object = *std::get<5>(object);
     ScopedRenderParameters parameters(graphics_object,
                                       stage_.EffectsForLayer(stage_layer));
     std::optional<ParentObjState> quake_parent;
