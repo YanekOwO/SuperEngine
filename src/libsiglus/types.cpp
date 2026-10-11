@@ -89,6 +89,11 @@ std::string ToString(Type type) {
     case Type::Mouse:
       return "mouse";
 
+    case Type::FrameAction:
+      return "frame_action";
+    case Type::FrameActionList:
+      return "frame_action[]";
+
     case Type::Invalid:
       return "invalid";
     case Type::Other:

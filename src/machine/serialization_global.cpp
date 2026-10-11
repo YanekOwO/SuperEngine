@@ -81,7 +81,7 @@ void saveGlobalMemoryTo(std::ostream& oss, RLMachine& machine) {
   boost::archive::text_oarchive oa(filtered_output);
   System& sys = machine.GetSystem();
 
-  oa << CURRENT_GLOBAL_VERSION << machine.GetMemory().GetGlobalMemory()
+  oa << CURRENT_GLOBAL_VERSION << machine.GetMemoryStorage().GetGlobalMemory()
      << machine.GetKidokus() << machine.GetGenerics()
      << const_cast<const SystemGlobals&>(sys.globals())
      << const_cast<const GraphicsSystemGlobals&>(sys.graphics().globals())
@@ -132,7 +132,7 @@ void loadGlobalMemoryFrom(std::istream& iss, RLMachine& machine) {
   // Load global memory.
   GlobalMemory global_memory;
   ia >> global_memory;
-  machine.GetMemory().PartialReset(std::move(global_memory));
+  machine.GetMemoryStorage().PartialReset(std::move(global_memory));
 
   ia >> machine.GetKidokus();
   ia >> machine.GetGenerics();

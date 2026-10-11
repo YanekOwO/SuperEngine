@@ -27,12 +27,12 @@
 
 #include "core/gameexe.hpp"
 #include "core/memory_internal/proxy.hpp"
-#include "machine/call_stack.hpp"
 #include "utilities/string_utilities.hpp"
 
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 LocalMemory::LocalMemory()
     : A(2000),
@@ -51,30 +51,17 @@ LocalMemory::LocalMemory()
 LocalMemory::~LocalMemory() = default;
 
 Memory::Memory() {
-  for (size_t i = 0; i < int_bank_cnt; ++i)
-    intbanks_[i].resize(kDefaultBankSize);
-  for (size_t i = 0; i < str_bank_cnt; ++i)
-    strbanks_[i].resize(kDefaultBankSize);
-}
-
-Memory::Memory(const Memory& other)
-    : intbanks_(other.intbanks_), strbanks_(other.strbanks_) {}
-
-Memory& Memory::operator=(const Memory& other) {
-  if (this == &other)
-    return *this;
-
-  intbanks_ = other.intbanks_;
-  strbanks_ = other.strbanks_;
-  call_stack_ = nullptr;
-  return *this;
+  for (size_t i = 0; i < int_bank_cnt; ++i) {
+    if (static_cast<IntBank>(i) != IntBank::L)
+      intbanks_[i].resize(kDefaultBankSize);
+  }
+  for (size_t i = 0; i < str_bank_cnt; ++i) {
+    if (static_cast<StrBank>(i) != StrBank::K)
+      strbanks_[i].resize(kDefaultBankSize);
+  }
 }
 
 Memory::~Memory() = default;
-
-void Memory::AttachCallStack(CallStack* call_stack) {
-  call_stack_ = call_stack;
-}
 
 void Memory::LoadFrom(Gameexe& gameexe) {
   // Note: We ignore the \#NAME_MAXLEN variable because manual allocation is
@@ -105,13 +92,8 @@ std::vector<int>& Memory::GetIntBankData(IntBank bank) {
   if (bankidx >= int_bank_cnt)
     throw std::invalid_argument("Memory: invalid int bank " +
                                 std::to_string(bankidx));
-
-  if (bank == IntBank::L && call_stack_ != nullptr) {
-    auto* frame = call_stack_->FindTopRealFrame();
-    if (frame == nullptr)
-      throw std::runtime_error("Memory: stack memory requested with no frame.");
-    return frame->intL;
-  }
+  if (bank == IntBank::L)
+    throw std::logic_error("Memory: stack bank L requires a MemoryHandle.");
 
   return intbanks_[bankidx];
 }
@@ -121,13 +103,8 @@ const std::vector<int>& Memory::GetIntBankData(IntBank bank) const {
   if (bankidx >= int_bank_cnt)
     throw std::invalid_argument("Memory: invalid int bank " +
                                 std::to_string(bankidx));
-
-  if (bank == IntBank::L && call_stack_ != nullptr) {
-    auto* frame = call_stack_->FindTopRealFrame();
-    if (frame == nullptr)
-      throw std::runtime_error("Memory: stack memory requested with no frame.");
-    return frame->intL;
-  }
+  if (bank == IntBank::L)
+    throw std::logic_error("Memory: stack bank L requires a MemoryHandle.");
 
   return intbanks_[bankidx];
 }
@@ -137,13 +114,8 @@ std::vector<std::string>& Memory::GetStrBankData(StrBank bank) {
   if (bankidx >= str_bank_cnt)
     throw std::invalid_argument("Memory: invalid string bank " +
                                 std::to_string(bankidx));
-
-  if (bank == StrBank::K && call_stack_ != nullptr) {
-    auto* frame = call_stack_->FindTopRealFrame();
-    if (frame == nullptr)
-      throw std::runtime_error("Memory: stack memory requested with no frame.");
-    return frame->strK;
-  }
+  if (bank == StrBank::K)
+    throw std::logic_error("Memory: stack bank K requires a MemoryHandle.");
 
   return strbanks_[bankidx];
 }
@@ -153,13 +125,8 @@ const std::vector<std::string>& Memory::GetStrBankData(StrBank bank) const {
   if (bankidx >= str_bank_cnt)
     throw std::invalid_argument("Memory: invalid string bank " +
                                 std::to_string(bankidx));
-
-  if (bank == StrBank::K && call_stack_ != nullptr) {
-    auto* frame = call_stack_->FindTopRealFrame();
-    if (frame == nullptr)
-      throw std::runtime_error("Memory: stack memory requested with no frame.");
-    return frame->strK;
-  }
+  if (bank == StrBank::K)
+    throw std::logic_error("Memory: stack bank K requires a MemoryHandle.");
 
   return strbanks_[bankidx];
 }
@@ -221,16 +188,6 @@ void Memory::Resize(StrBank bankid, std::size_t size) {
   GetStrBankData(bankid).resize(size);
 }
 
-Memory::Stack Memory::GetStackMemory() const {
-  return Stack{.L = GetIntBankData(IntBank::L),
-               .K = GetStrBankData(StrBank::K)};
-}
-
-void Memory::PartialReset(Stack stack_memory) {
-  GetIntBankData(IntBank::L) = std::move(stack_memory.L);
-  GetStrBankData(StrBank::K) = std::move(stack_memory.K);
-}
-
 GlobalMemory Memory::GetGlobalMemory() const {
   return GlobalMemory{
       .G = intbanks_[static_cast<uint8_t>(IntBank::G)],
@@ -279,4 +236,196 @@ void Memory::PartialReset(LocalMemory local_memory) {
   strbanks_[static_cast<uint8_t>(StrBank::S)] = std::move(local_memory.S);
   strbanks_[static_cast<uint8_t>(StrBank::local_name)] =
       std::move(local_memory.local_names);
+}
+
+MemoryHandle Memory::CreateHandle() { return MemoryHandle(*this); }
+
+// ------------------------------------------------------------------------------
+// class MemoryHandle
+MemoryHandle::MemoryHandle(Memory& memory)
+    : MemoryHandle(memory, std::make_shared<StackMemory>()) {}
+MemoryHandle::MemoryHandle(Memory& memory, std::shared_ptr<StackMemory> stack)
+    : memory_(memory), stack_(std::move(stack)) {
+  if (!stack_)
+    throw std::invalid_argument("MemoryHandle: stack memory is null.");
+  if (stack_->L.size() != stack_->K.size())
+    throw std::invalid_argument("MemoryHandle: mismatched stack bank depths.");
+}
+
+std::vector<int>& MemoryHandle::GetIntBankData(IntBank bank) {
+  if (bank != IntBank::L)
+    return memory_.GetIntBankData(bank);
+  if (stack_->L.empty())
+    throw std::runtime_error("MemoryHandle: stack bank L has no frame.");
+  return stack_->L.back();
+}
+
+const std::vector<int>& MemoryHandle::GetIntBankData(IntBank bank) const {
+  if (bank != IntBank::L)
+    return memory_.GetIntBankData(bank);
+  if (stack_->L.empty())
+    throw std::runtime_error("MemoryHandle: stack bank L has no frame.");
+  return stack_->L.back();
+}
+
+std::vector<std::string>& MemoryHandle::GetStrBankData(StrBank bank) {
+  if (bank != StrBank::K)
+    return memory_.GetStrBankData(bank);
+  if (stack_->K.empty())
+    throw std::runtime_error("MemoryHandle: stack bank K has no frame.");
+  return stack_->K.back();
+}
+
+const std::vector<std::string>& MemoryHandle::GetStrBankData(
+    StrBank bank) const {
+  if (bank != StrBank::K)
+    return memory_.GetStrBankData(bank);
+  if (stack_->K.empty())
+    throw std::runtime_error("MemoryHandle: stack bank K has no frame.");
+  return stack_->K.back();
+}
+
+int MemoryHandle::Read(IntMemoryLocation loc) {
+  return IntListProxy(GetIntBankData(loc.Bank()))
+      .Get(loc.Index(), loc.Bitwidth());
+}
+
+int MemoryHandle::Read(IntBank bank, size_t index) {
+  return IntListProxy(GetIntBankData(bank)).Get(index);
+}
+
+std::string MemoryHandle::Read(StrMemoryLocation loc) {
+  return Read(loc.Bank(), loc.Index());
+}
+
+std::string MemoryHandle::Read(StrBank bank, size_t index) {
+  return StrListProxy(GetStrBankData(bank)).Get(index);
+}
+
+size_t MemoryHandle::Size(IntBank bank) const {
+  return GetIntBankData(bank).size();
+}
+
+size_t MemoryHandle::Size(StrBank bank) const {
+  return GetStrBankData(bank).size();
+}
+
+void MemoryHandle::Write(IntMemoryLocation loc, int value) {
+  IntListProxy(GetIntBankData(loc.Bank()))
+      .Set(loc.Index(), value, loc.Bitwidth());
+}
+
+void MemoryHandle::Write(IntBank bankid, size_t index, int value) {
+  IntListProxy(GetIntBankData(bankid)).Set(index, value);
+}
+
+void MemoryHandle::Write(StrMemoryLocation loc, const std::string& value) {
+  StrListProxy(GetStrBankData(loc.Bank())).Set(loc.Index(), value);
+}
+
+void MemoryHandle::Write(StrBank bank, size_t index, const std::string& value) {
+  Write(StrMemoryLocation(bank, index), value);
+}
+
+void MemoryHandle::Fill(IntBank bankid, size_t begin, size_t end, int value) {
+  IntListProxy(GetIntBankData(bankid)).Fill(begin, end, value);
+}
+
+void MemoryHandle::Fill(StrBank bankid,
+                        size_t begin,
+                        size_t end,
+                        const std::string& value) {
+  StrListProxy(GetStrBankData(bankid)).Fill(begin, end, value);
+}
+
+void MemoryHandle::Resize(IntBank bankid, std::size_t size) {
+  GetIntBankData(bankid).resize(size);
+}
+
+void MemoryHandle::Resize(StrBank bankid, std::size_t size) {
+  GetStrBankData(bankid).resize(size);
+}
+
+std::vector<int>& MemoryHandle::GetIntStackFrame(std::size_t frame_offset) {
+  if (frame_offset >= stack_->L.size())
+    throw std::out_of_range("MemoryHandle: integer stack frame out of range.");
+  return stack_->L[stack_->L.size() - 1 - frame_offset];
+}
+
+std::vector<std::string>& MemoryHandle::GetStrStackFrame(
+    std::size_t frame_offset) {
+  if (frame_offset >= stack_->K.size())
+    throw std::out_of_range("MemoryHandle: string stack frame out of range.");
+  return stack_->K[stack_->K.size() - 1 - frame_offset];
+}
+
+int MemoryHandle::ReadStack(IntBank bank,
+                            std::size_t frame_offset,
+                            std::size_t index) {
+  if (bank != IntBank::L)
+    throw std::invalid_argument("MemoryHandle: expected stack bank L.");
+  return IntListProxy(GetIntStackFrame(frame_offset)).Get(index);
+}
+
+std::string MemoryHandle::ReadStack(StrBank bank,
+                                    std::size_t frame_offset,
+                                    std::size_t index) {
+  if (bank != StrBank::K)
+    throw std::invalid_argument("MemoryHandle: expected stack bank K.");
+  return StrListProxy(GetStrStackFrame(frame_offset)).Get(index);
+}
+
+void MemoryHandle::WriteStack(IntBank bank,
+                              std::size_t frame_offset,
+                              std::size_t index,
+                              int value) {
+  if (bank != IntBank::L)
+    throw std::invalid_argument("MemoryHandle: expected stack bank L.");
+  IntListProxy(GetIntStackFrame(frame_offset)).Set(index, value);
+}
+
+void MemoryHandle::WriteStack(StrBank bank,
+                              std::size_t frame_offset,
+                              std::size_t index,
+                              const std::string& value) {
+  if (bank != StrBank::K)
+    throw std::invalid_argument("MemoryHandle: expected stack bank K.");
+  StrListProxy(GetStrStackFrame(frame_offset)).Set(index, value);
+}
+
+void MemoryHandle::PushStackFrame(std::size_t int_size, std::size_t str_size) {
+  std::vector<int> int_frame(int_size);
+  std::vector<std::string> str_frame(str_size);
+  stack_->L.emplace_back(std::move(int_frame));
+  try {
+    stack_->K.emplace_back(std::move(str_frame));
+  } catch (...) {
+    stack_->L.pop_back();
+    throw;
+  }
+}
+
+void MemoryHandle::PopStackFrame() {
+  if (stack_->L.empty() || stack_->K.empty())
+    throw std::underflow_error("MemoryHandle: stack frame underflow.");
+  stack_->L.pop_back();
+  stack_->K.pop_back();
+}
+
+std::size_t MemoryHandle::StackDepth() const {
+  if (stack_->L.size() != stack_->K.size())
+    throw std::logic_error("MemoryHandle: mismatched stack bank depths.");
+  return stack_->L.size();
+}
+
+StackMemory MemoryHandle::GetStackMemory() const { return *stack_; }
+
+void MemoryHandle::ResetStackMemory(StackMemory stack) {
+  if (stack.L.size() != stack.K.size())
+    throw std::invalid_argument("MemoryHandle: mismatched stack bank depths.");
+  *stack_ = std::move(stack);
+}
+
+MemoryHandle MemoryHandle::Clone() const {
+  return MemoryHandle(memory_, std::make_shared<StackMemory>(*stack_));
 }

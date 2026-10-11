@@ -39,7 +39,9 @@ class MemoryStressTest : public ::testing::Test {
         int_dist(std::numeric_limits<int>::min(),
                  std::numeric_limits<int>::max()),
         bankid_dist(0, static_cast<uint8_t>(IntBank::CNT) - 1),
-        memory_(std::make_shared<Memory>()) {}
+        memory_(backing_memory_.CreateHandle()) {
+    memory_.PushStackFrame(kStressBankSize, kStressBankSize);
+  }
 
   std::random_device rd;
   std::mt19937 gen;
@@ -52,7 +54,8 @@ class MemoryStressTest : public ::testing::Test {
                              index_dist(gen));
   }
 
-  std::shared_ptr<Memory> memory_;
+  Memory backing_memory_;
+  MemoryHandle memory_;
 };
 
 TEST_F(MemoryStressTest, DynamicAllocation) {
@@ -65,48 +68,23 @@ TEST_F(MemoryStressTest, DynamicAllocation) {
 
   EXPECT_NO_THROW({
     for (uint8_t i = 0; i < static_cast<uint8_t>(IntBank::CNT); ++i)
-      memory_->Resize(static_cast<IntBank>(i), kStressBankSize);
+      memory_.Resize(static_cast<IntBank>(i), kStressBankSize);
   }) << "Memory class should dynamically allocate memory on demand";
 
   for (const auto& [loc, val] : fake_memory)
-    memory_->Write(loc, val);
+    memory_.Write(loc, val);
 
-  std::vector<std::map<IntMemoryLocation, int>> expect{fake_memory};
-  std::vector<std::shared_ptr<Memory>> actual_version{
-      std::make_shared<Memory>(*memory_)};
-
-  // Create 10 versions of memory
+  // Repeatedly grow and update memory across every integer bank.
   for (int ver = 1; ver < 10; ++ver) {
     for (int j = 0; j < 30; ++j) {
       auto loc = RandomIntLocation();
       auto val = int_dist(gen);
-      memory_->Write(loc, val);
+      memory_.Write(loc, val);
       fake_memory[loc] = val;
     }
-
-    expect.push_back(fake_memory);
-    actual_version.emplace_back(std::make_shared<Memory>(*memory_));
   }
 
-  // Check the values
-  for (int ver = 0; ver < 10; ++ver) {
-    for (const auto& [loc, val] : expect[ver]) {
-      EXPECT_EQ(actual_version[ver]->Read(loc), val)
-          << "version " << ver << " location " << loc;
-    }
+  for (const auto& [loc, val] : fake_memory) {
+    EXPECT_EQ(memory_.Read(loc), val) << "location " << loc;
   }
-}
-
-TEST_F(MemoryStressTest, DeepCopyIsIndependent) {
-  Memory memory_copy = *memory_;
-
-  IntMemoryLocation loc(IntBank::F, 500);
-  memory_->Write(loc, 123);
-
-  EXPECT_EQ(memory_copy.Read(loc), 0) << "The copy should not be affected";
-  memory_copy.Write(loc, 456);
-
-  EXPECT_EQ(memory_->Read(loc), 123)
-      << "Original memory should not be affected";
-  EXPECT_EQ(memory_copy.Read(loc), 456);
 }

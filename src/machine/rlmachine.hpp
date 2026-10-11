@@ -125,9 +125,13 @@ class RLMachine {
 
   Gameexe& GetGameexe();
 
-  // Returns the internal memory object for raw access to the machine object's
-  // memory.
-  Memory& GetMemory() { return *memory_; }
+  // Returns the memory view bound to the active call stack.
+  MemoryHandle& GetMemory() { return call_stack_.GetMemory(); }
+  const MemoryHandle& GetMemory() const { return call_stack_.GetMemory(); }
+
+  // Returns the shared backing storage for persistence operations.
+  Memory& GetMemoryStorage() { return *memory_; }
+  const Memory& GetMemoryStorage() const { return *memory_; }
 
   KidokuTable& GetKidokus() { return kidoku_table_; }
 
@@ -251,7 +255,6 @@ class RLMachine {
 
   // The Reallive VM's integer and string memory
   std::unique_ptr<Memory> memory_;
-  Memory savepoint_memory_;
 
   KidokuTable kidoku_table_;
 

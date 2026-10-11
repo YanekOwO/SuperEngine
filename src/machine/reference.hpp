@@ -32,7 +32,7 @@
 
 template <typename T>
 class MemoryReferenceIterator;
-class Memory;
+class MemoryHandle;
 
 // Accessor class passed back to user when the iterator is
 // dereferenced. Each IntAcessor will (probably) be a short-lived
@@ -101,7 +101,7 @@ class MemoryReferenceIterator {
   explicit MemoryReferenceIterator(int* store_register);
 
   // Explicit reference creation
-  MemoryReferenceIterator(Memory* in_machine,
+  MemoryReferenceIterator(MemoryHandle* in_machine,
                           const int in_type,
                           const int in_location);
 
@@ -170,13 +170,14 @@ class MemoryReferenceIterator {
     return !operator==(rhs);
   }
 
-  MemoryReferenceIterator<ACCESS> changeMemoryTo(Memory* new_mem_obj) const {
+  MemoryReferenceIterator<ACCESS> changeMemoryTo(
+      MemoryHandle* new_mem_obj) const {
     return MemoryReferenceIterator<ACCESS>(new_mem_obj, type_, location_);
   }
 
  private:
   int* store_register_ = NULL;
-  Memory* memory_ = NULL;
+  MemoryHandle* memory_ = NULL;
   int type_ = -1;
   int location_ = 0;
 
@@ -193,7 +194,7 @@ MemoryReferenceIterator<ACCESS>::MemoryReferenceIterator(int* store_register)
     : store_register_(store_register) {}
 
 template <typename ACCESS>
-MemoryReferenceIterator<ACCESS>::MemoryReferenceIterator(Memory* memory,
+MemoryReferenceIterator<ACCESS>::MemoryReferenceIterator(MemoryHandle* memory,
                                                          const int in_type,
                                                          const int in_location)
     : memory_(memory), type_(in_type), location_(in_location) {}

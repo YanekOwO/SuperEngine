@@ -28,7 +28,6 @@
 #include "modules/module_jmp.hpp"
 
 #include "core/memory.hpp"
-#include "core/memory_internal/proxy.hpp"
 #include "libreallive/intmemref.hpp"
 #include "libreallive/parser.hpp"
 #include "machine/rlmachine.hpp"
@@ -426,17 +425,9 @@ struct push_string_value_up : public RLOpcode<IntConstant_T, StrConstant_T> {
       throw std::invalid_argument("push_string_value_up: Invalid index {}." +
                                   std::to_string(index));
 
-    bool set = false;
-    auto& stack = machine.GetCallStack();
-    for (auto it = stack.begin(); it != stack.end(); ++it) {
-      if (it->frame_type != StackFrame::TYPE_LONGOP) {
-        if (!set)
-          set = true;
-        else {
-          StrListProxy(it->strK).Set(index, val);
-        }
-      }
-    }
+    auto& memory = machine.GetMemory();
+    if (memory.StackDepth() > 1)
+      memory.WriteStack(StrBank::K, 1, index, val);
   }
 };
 

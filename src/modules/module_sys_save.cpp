@@ -236,23 +236,25 @@ struct GetSaveFlag : public RLStoreOpcode<IntConstant_T, GetSaveFlagList> {
     if (!fileExists)
       return 0;
 
-    auto global_memory = machine.GetMemory().GetGlobalMemory();
+    auto global_memory = machine.GetMemoryStorage().GetGlobalMemory();
     Memory overlayedMemory;
     Serialization::loadLocalMemoryForSlot(machine, slot, overlayedMemory);
     overlayedMemory.PartialReset(std::move(global_memory));
+    auto overlayed_handle = overlayedMemory.CreateHandle();
+    overlayed_handle.PushStackFrame(2000, 2000);
 
     for (GetSaveFlagList::type::iterator it = flagList.begin();
          it != flagList.end(); ++it) {
       switch (it->type) {
         case 0: {
           IntReferenceIterator jt =
-              get<0>(it->first).changeMemoryTo(&overlayedMemory);
+              get<0>(it->first).changeMemoryTo(&overlayed_handle);
           std::copy_n(jt, get<2>(it->first), get<1>(it->first));
           break;
         }
         case 1: {
           StringReferenceIterator jt =
-              get<0>(it->second).changeMemoryTo(&overlayedMemory);
+              get<0>(it->second).changeMemoryTo(&overlayed_handle);
           std::copy_n(jt, get<2>(it->second), get<1>(it->second));
           break;
         }

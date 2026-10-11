@@ -25,14 +25,12 @@
 
 #include "machine/rlmachine.hpp"
 
-#include "core/event_listener.hpp"
 #include "core/haikei.hpp"
 #include "core/memory.hpp"
-#include "core/memory_internal/serialization_local.hpp"
+#include "core/memory_internal/memory.hpp"
 #include "core/stage.hpp"
 #include "libreallive/parser.hpp"
 #include "log/domain_logger.hpp"
-#include "long_operations/pause_long_operation.hpp"
 #include "long_operations/textout_long_operation.hpp"
 #include "machine/long_operation.hpp"
 #include "machine/reallive_dll.hpp"
@@ -44,25 +42,19 @@
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
-#include "systems/system_error.hpp"
 #include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/clock.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/string_utilities.hpp"
 
-#include <filesystem>
 #include <format>
 #include <functional>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
-#include <vector>
-
-namespace fs = std::filesystem;
 
 // -----------------------------------------------------------------------
 // RLMachine
@@ -71,14 +63,12 @@ static DomainLogger logger("RLMachine");
 RLMachine::RLMachine(std::shared_ptr<System> system,
                      std::shared_ptr<IScriptor> scriptor,
                      std::unique_ptr<Memory> memory)
-    : memory_(std::move(memory)),
+    : memory_(memory ? std::move(memory) : std::make_unique<Memory>()),
       module_manager_(ModuleManager::CreatePrototype()),
       scriptor_(scriptor),
-      system_(*system) {
-  if (!memory_)
-    memory_ = std::make_unique<Memory>();
-  memory_->AttachCallStack(&call_stack_);
-
+      system_(*system),
+      call_stack_(*memory_),
+      savepoint_call_stack_(*memory_) {
   if (system) {
     stage_ = std::make_unique<Stage>(system->graphics().GetObjectLayerSize());
     auto backend = system->graphics().GetBackend();
@@ -105,9 +95,7 @@ RLMachine::RLMachine(std::shared_ptr<System> system,
 
 RLMachine::~RLMachine() = default;
 
-void RLMachine::Update() {
-  system_.Run();
-}
+void RLMachine::Update() { system_.Run(); }
 
 Stage& RLMachine::stage() { return *stage_; }
 
@@ -119,7 +107,6 @@ const Haikei& RLMachine::haikei() const { return *haikei_; }
 
 void RLMachine::MarkSavepoint() {
   savepoint_call_stack_ = call_stack_.Clone();
-  savepoint_memory_ = Memory();
   stage().TakeSavepointSnapshot();
   GetSystem().text().TakeSavepointSnapshot();
 }
@@ -282,15 +269,15 @@ void RLMachine::PushLongOperation(
 }
 
 void RLMachine::Reset() {
-  call_stack_ = CallStack();
-  savepoint_call_stack_ = CallStack();
+  call_stack_.Clear();
+  savepoint_call_stack_.Clear();
   stage().Reset();
   haikei().Reset();
   GetSystem().Reset();
 }
 
 void RLMachine::LocalReset() {
-  savepoint_call_stack_ = CallStack();
+  savepoint_call_stack_.Clear();
   memory_->PartialReset(LocalMemory());
   stage().Reset();
   haikei().Reset();

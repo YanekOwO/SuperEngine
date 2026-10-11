@@ -30,12 +30,15 @@
  * objects.
  */
 
+#include "core/memory.hpp"
 #include "machine/stack_frame.hpp"
 
 #include <boost/serialization/serialization.hpp>
 #include <boost/serialization/split_member.hpp>
+#include <boost/serialization/vector.hpp>
 
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -46,10 +49,7 @@
  */
 class CallStack {
  public:
-  /**
-   * @brief Default constructor.
-   */
-  CallStack() = default;
+  explicit CallStack(Memory& memory);
 
   /**
    * @brief Copy constructor is deleted. Use `Clone()` instead.
@@ -72,6 +72,11 @@ class CallStack {
    * @throws std::runtime_error If the `CallStack` is locked.
    */
   CallStack Clone() const;
+
+  MemoryHandle& GetMemory();
+  const MemoryHandle& GetMemory() const;
+
+  void Clear();
 
   /**
    * @brief Pushes a `StackFrame` onto the call stack.
@@ -161,6 +166,7 @@ class CallStack {
       delayed_modifications_;  ///< Queue of delayed modifications.
   bool is_locked_ =
       false;  ///< Indicates whether the `CallStack` is currently locked.
+  std::unique_ptr<MemoryHandle> memory_;
 
   /**
    * @brief Applies all delayed modifications to the `CallStack`.
@@ -170,14 +176,16 @@ class CallStack {
    */
   void ApplyDelayedModifications();
 
+  explicit CallStack(MemoryHandle memory);
+
   // Boost serialization support
   friend class boost::serialization::access;
   BOOST_SERIALIZATION_SPLIT_MEMBER();
 
   void save(auto& ar, const unsigned int version) const {
-    ar & stack_.size();
-    for (StackFrame frame : stack_)
-      ar & frame;
+    ar & stack_;
+    StackMemory stack_memory = memory_->GetStackMemory();
+    ar & stack_memory;
   }
 
   void load(auto& ar, const unsigned int version) {
@@ -186,18 +194,18 @@ class CallStack {
     delayed_modifications_.clear();
     is_locked_ = false;
 
-    std::size_t size;
-    ar & size;
-    stack_.reserve(size);
+    StackMemory stack_memory;
+    ar & stack_ & stack_memory;
 
-    for (std::size_t i = 0; i < size; ++i) {
-      StackFrame frame;
-      ar & frame;
+    for (std::size_t i = 0; i < stack_.size(); ++i)
+      if (stack_[i].frame_type != StackFrame::TYPE_LONGOP)
+        real_frames_.push_back(i);
 
-      if (frame.frame_type != StackFrame::TYPE_LONGOP)
-        real_frames_.push_back(stack_.size());
-      stack_.emplace_back(std::move(frame));
-    }
+    if (stack_memory.L.size() != real_frames_.size() ||
+        stack_memory.K.size() != real_frames_.size())
+      throw std::runtime_error(
+          "CallStack: serialized memory depth does not match real frames.");
+    memory_->ResetStackMemory(std::move(stack_memory));
   }
 };
 

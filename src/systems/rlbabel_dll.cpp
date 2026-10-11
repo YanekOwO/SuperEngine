@@ -207,7 +207,7 @@ int RlBabelDLL::TextoutAdd(const std::string& str) {
         idx = (idx + 1) * 26 + string[1] - 0x60;
         string += 2;
       }
-      Memory& memory = machine_.GetMemory();
+      MemoryHandle& memory = machine_.GetMemory();
       const auto nameloc = StrMemoryLocation(
           global ? StrBank::global_name : StrBank::local_name, idx);
       const std::string name = memory.Read(nameloc);
@@ -674,7 +674,7 @@ IntReferenceIterator RlBabelDLL::GetIvar(int addr) {
 }
 
 StringReferenceIterator RlBabelDLL::GetSvar(int addr) {
-  Memory* m = &(machine_.GetMemory());
+  MemoryHandle* m = &(machine_.GetMemory());
   int bank = addr >> 16;
 
   switch (bank) {

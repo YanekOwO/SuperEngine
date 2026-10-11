@@ -34,6 +34,7 @@
 #include "vm/promise.hpp"
 #include "vm/value.hpp"
 
+#include <any>
 #include <bit>
 #include <cstdint>
 #include <functional>
@@ -225,6 +226,8 @@ struct Fiber : public IObject {
 
   // Internal promise that represents this fiber's completion.
   std::shared_ptr<Promise> completion_promise;
+
+  std::any usrdata;
 
   std::vector<std::shared_ptr<Upvalue>> open_upvalues;
   std::shared_ptr<Upvalue> capture_upvalue(Value* slot);

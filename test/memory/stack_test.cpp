@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2024 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,96 +26,75 @@
 #include <gtest/gtest.h>
 
 #include "core/memory.hpp"
-#include "core/memory_internal/proxy.hpp"
-#include "machine/call_stack.hpp"
-#include "machine/stack_frame.hpp"
 
-class FakeStack : public CallStack {
- public:
-  StackFrame* FindTopRealFrame() const { return frame.get(); }
-
-  std::shared_ptr<StackFrame> frame;
-};
-
-class StackRoutingTest : public ::testing::Test {
- protected:
-  void SetUp() { memory.AttachCallStack(&stack); }
-
-  FakeStack stack;
+TEST(MemoryHandleTest, RoutesStackBanksToTopFrame) {
   Memory memory;
-};
+  auto handle = memory.CreateHandle();
 
-TEST_F(StackRoutingTest, IntL) {
-  auto frame1 = std::make_shared<StackFrame>();
-  auto frame2 = std::make_shared<StackFrame>();
-  auto frame3 = std::make_shared<StackFrame>();
+  handle.PushStackFrame(40, 40);
+  handle.Write(IntBank::L, 0, 10);
+  handle.Write(StrBank::K, 0, "root");
+  handle.PushStackFrame(8, 8);
 
-  IntListProxy frame1_l(frame1->intL);
-  IntListProxy frame2_l(frame2->intL);
-  IntListProxy frame3_l(frame3->intL);
-  for (int i = 0; i < 40; ++i) {
-    frame1_l.Set(i, i);
-    frame2_l.Set(i, i * 2);
-    frame3_l.Set(i, i * i);
-  }
+  EXPECT_EQ(handle.StackDepth(), 2);
+  EXPECT_EQ(handle.Read(IntBank::L, 0), 0);
+  EXPECT_EQ(handle.Read(StrBank::K, 0), "");
+  handle.Write(IntBank::L, 0, 20);
+  handle.Write(StrBank::K, 0, "callee");
 
-  stack.frame = frame1;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(IntBank::L, i), i);
-  }
-  stack.frame = frame2;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(IntBank::L, i), i * 2);
-  }
-  stack.frame = frame3;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(IntBank::L, i), i * i);
-  }
+  handle.PopStackFrame();
+  EXPECT_EQ(handle.Read(IntBank::L, 0), 10);
+  EXPECT_EQ(handle.Read(StrBank::K, 0), "root");
 }
 
-TEST_F(StackRoutingTest, StrK) {
-  auto frame1 = std::make_shared<StackFrame>();
-  auto frame2 = std::make_shared<StackFrame>();
-  auto frame3 = std::make_shared<StackFrame>();
+TEST(MemoryHandleTest, HandlesHaveIndependentStacksAndSharedNonStackMemory) {
+  Memory memory;
+  auto first = memory.CreateHandle();
+  auto second = memory.CreateHandle();
+  first.PushStackFrame(8, 8);
+  second.PushStackFrame(8, 8);
 
-  StrListProxy frame1_k(frame1->strK);
-  StrListProxy frame2_k(frame2->strK);
-  StrListProxy frame3_k(frame3->strK);
-  for (int i = 0; i < 40; ++i) {
-    frame1_k.Set(i, std::to_string(i));
-    frame2_k.Set(i, std::to_string(i * 2));
-    frame3_k.Set(i, std::to_string(i * i));
-  }
+  first.Write(IntBank::L, 0, 10);
+  second.Write(IntBank::L, 0, 20);
+  first.Write(IntBank::A, 0, 30);
 
-  stack.frame = frame1;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(StrBank::K, i), std::to_string(i));
-  }
-  stack.frame = frame2;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(StrBank::K, i), std::to_string(i * 2));
-  }
-  stack.frame = frame3;
-  for (int i = 0; i < 40; ++i) {
-    EXPECT_EQ(memory.Read(StrBank::K, i), std::to_string(i * i));
-  }
+  EXPECT_EQ(first.Read(IntBank::L, 0), 10);
+  EXPECT_EQ(second.Read(IntBank::L, 0), 20);
+  EXPECT_EQ(second.Read(IntBank::A, 0), 30);
 }
 
-TEST_F(StackRoutingTest, GetStackMemorySnapshotsCurrentFrame) {
-  auto frame1 = std::make_shared<StackFrame>();
-  auto frame2 = std::make_shared<StackFrame>();
+TEST(MemoryHandleTest, CopiesAreViewsAndCloneIsASnapshot) {
+  Memory memory;
+  auto original = memory.CreateHandle();
+  original.PushStackFrame(8, 8);
+  original.Write(IntBank::L, 0, 10);
 
-  IntListProxy(frame1->intL).Set(0, 10);
-  StrListProxy(frame1->strK).Set(0, "first");
-  IntListProxy(frame2->intL).Set(0, 20);
-  StrListProxy(frame2->strK).Set(0, "second");
+  auto view = original;
+  auto snapshot = original.Clone();
+  view.Write(IntBank::L, 0, 20);
 
-  stack.frame = frame1;
-  auto snapshot = memory.GetStackMemory();
+  EXPECT_EQ(original.Read(IntBank::L, 0), 20);
+  EXPECT_EQ(snapshot.Read(IntBank::L, 0), 10);
+}
 
-  stack.frame = frame2;
-  EXPECT_EQ(memory.Read(IntBank::L, 0), 20);
-  EXPECT_EQ(memory.Read(StrBank::K, 0), "second");
-  EXPECT_EQ(IntListProxy(snapshot.L).Get(0), 10);
-  EXPECT_EQ(StrListProxy(snapshot.K).Get(0), "first");
+TEST(MemoryHandleTest, AddressesFramesRelativeToTheTop) {
+  Memory memory;
+  auto handle = memory.CreateHandle();
+  handle.PushStackFrame(8, 8);
+  handle.Write(StrBank::K, 0, "caller");
+  handle.PushStackFrame(8, 8);
+
+  handle.WriteStack(StrBank::K, 1, 0, "updated");
+
+  EXPECT_EQ(handle.ReadStack(StrBank::K, 1, 0), "updated");
+  EXPECT_THROW(handle.ReadStack(StrBank::K, 2, 0), std::out_of_range);
+}
+
+TEST(MemoryHandleTest, RejectsStackAccessWithoutAFrame) {
+  Memory memory;
+  auto handle = memory.CreateHandle();
+
+  EXPECT_THROW(handle.Read(IntBank::L, 0), std::runtime_error);
+  EXPECT_THROW(handle.Read(StrBank::K, 0), std::runtime_error);
+  EXPECT_THROW(handle.PopStackFrame(), std::underflow_error);
 }

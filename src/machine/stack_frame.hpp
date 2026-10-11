@@ -27,17 +27,11 @@
 
 #pragma once
 
-#include <boost/serialization/split_member.hpp>
-#include <boost/serialization/version.hpp>
-#include <boost/serialization/vector.hpp>
+#include "machine/iscriptor.hpp"
+
+#include <boost/serialization/access.hpp>
 
 #include <memory>
-#include <optional>
-#include <string>
-#include <vector>
-
-#include "core/memory.hpp"
-#include "machine/iscriptor.hpp"
 
 class LongOperation;
 
@@ -78,10 +72,6 @@ struct StackFrame {
   // Pointer to the owned LongOperation if this is of TYPE_LONGOP.
   std::shared_ptr<LongOperation> long_op;
 
-  // Stack memory, used for passing parameters.
-  std::vector<int> intL;
-  std::vector<std::string> strK;
-
   FrameType frame_type;
 
  private:
@@ -90,6 +80,5 @@ struct StackFrame {
 
   void serialize(auto& ar, const unsigned int version) {
     ar & pos & frame_type;
-    ar & intL & strK;
   }
 };

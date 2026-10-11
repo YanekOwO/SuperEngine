@@ -1008,7 +1008,7 @@ template void TextSystem::load<boost::archive::text_iarchive>(
 
 // -----------------------------------------------------------------------
 
-std::string parseNames(Memory& memory, const std::string& input) {
+std::string parseNames(MemoryHandle& memory, const std::string& input) {
   std::string output;
   const char* cur = input.c_str();
 

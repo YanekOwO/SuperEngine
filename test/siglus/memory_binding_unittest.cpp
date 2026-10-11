@@ -159,23 +159,45 @@ TEST_F(SiglusMemoryBindingTest, PushAndPopFrameRestoresStackBanks) {
   Eval(R"(
 L[0] = 42;
 K[0] = "old";
-)");
-  EXPECT_EQ(runtime.memory->Read(IntBank::L, 0), 42);
-  EXPECT_EQ(runtime.memory->Read(StrBank::K, 0), "old");
-
-  Eval(R"(
 __builtin_push_frame([1, 2], ["arg"]);
+A[0] = L[0];
+A[1] = L[1];
+S[0] = K[0];
 L[0] = 99;
 K[1] = "new";
+A[2] = L[0];
+S[1] = K[1];
+__builtin_pop_frame();
+A[3] = L[0];
+S[2] = K[0];
 )");
-  EXPECT_EQ(runtime.memory->Read(IntBank::L, 0), 99);
-  EXPECT_EQ(runtime.memory->Read(IntBank::L, 1), 2);
-  EXPECT_EQ(runtime.memory->Read(StrBank::K, 0), "arg");
-  EXPECT_EQ(runtime.memory->Read(StrBank::K, 1), "new");
 
-  Eval("__builtin_pop_frame();");
-  EXPECT_EQ(runtime.memory->Read(IntBank::L, 0), 42);
-  EXPECT_EQ(runtime.memory->Read(StrBank::K, 0), "old");
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 0), 1);
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 1), 2);
+  EXPECT_EQ(runtime.memory->Read(StrBank::S, 0), "arg");
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 2), 99);
+  EXPECT_EQ(runtime.memory->Read(StrBank::S, 1), "new");
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 3), 42);
+  EXPECT_EQ(runtime.memory->Read(StrBank::S, 2), "old");
+}
+
+TEST_F(SiglusMemoryBindingTest, StackBanksAreFiberBounded) {
+  Eval(R"(
+fn write_stack() {
+  L[0] = 42;
+  return L[0];
+}
+fn read_stack() {
+  return L[0];
+}
+writer = spawn write_stack();
+reader = spawn read_stack();
+A[0] = await writer;
+A[1] = await reader;
+)");
+
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 0), 42);
+  EXPECT_EQ(runtime.memory->Read(IntBank::A, 1), 0);
 }
 
 TEST_F(SiglusMemoryBindingTest, RuntimeResetClearsLocalAndStackBanksOnly) {
@@ -191,12 +213,17 @@ K[0] = "stack";
   for (auto& cb : runtime.reset_local_memory)
     cb();
 
+  Eval(R"(
+G[1] = L[0];
+M[1] = K[0];
+)");
+
   EXPECT_EQ(runtime.memory->Read(IntBank::A, 0), 0);
   EXPECT_EQ(runtime.memory->Read(StrBank::S, 0), "");
-  EXPECT_EQ(runtime.memory->Read(IntBank::L, 0), 0);
-  EXPECT_EQ(runtime.memory->Read(StrBank::K, 0), "");
   EXPECT_EQ(runtime.memory->Read(IntBank::G, 0), 22);
   EXPECT_EQ(runtime.memory->Read(StrBank::M, 0), "global");
+  EXPECT_EQ(runtime.memory->Read(IntBank::G, 1), 0);
+  EXPECT_EQ(runtime.memory->Read(StrBank::M, 1), "");
 }
 
 }  // namespace libsiglus::binding

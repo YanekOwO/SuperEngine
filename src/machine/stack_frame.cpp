@@ -33,21 +33,12 @@
 #include <iostream>
 #include <typeinfo>
 
-StackFrame::StackFrame() : pos(), frame_type() {
-  intL.resize(40);
-  strK.resize(40);
-}
+StackFrame::StackFrame() : pos(), frame_type() {}
 
 StackFrame::StackFrame(ScriptLocation it, FrameType t)
-    : pos(it), frame_type(t) {
-  intL.resize(40);
-  strK.resize(40);
-}
+    : pos(it), frame_type(t) {}
 
 StackFrame::StackFrame(ScriptLocation it, std::shared_ptr<LongOperation> op)
-    : pos(it), long_op(op), frame_type(TYPE_LONGOP) {
-  intL.resize(40);
-  strK.resize(40);
-}
+    : pos(it), long_op(op), frame_type(TYPE_LONGOP) {}
 
 StackFrame::~StackFrame() = default;

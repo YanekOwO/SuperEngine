@@ -22,7 +22,6 @@
 //
 // -----------------------------------------------------------------------
 
-#include "core/memory_internal/proxy.hpp"
 #include "machine/call_stack.hpp"
 #include "machine/stack_frame.hpp"
 
@@ -47,7 +46,8 @@ class CallStackTest : public ::testing::Test {
                        static_cast<int>(frame.frame_type));
   }
 
-  CallStack stack;
+  Memory memory;
+  CallStack stack{memory};
 };
 
 TEST_F(CallStackTest, PushPop) {
@@ -73,18 +73,56 @@ TEST_F(CallStackTest, FindNotLongopFrame) {
   EXPECT_EQ(stack.FindTopRealFrame()->frame_type, StackFrame::TYPE_GOSUB);
 }
 
+TEST_F(CallStackTest, LongOperationsUseTheCurrentRealFramesMemory) {
+  stack.Push(MakeFrame(StackFrame::TYPE_ROOT));
+  stack.GetMemory().Write(IntBank::L, 0, 42);
+
+  stack.Push(MakeFrame(StackFrame::TYPE_LONGOP));
+
+  EXPECT_EQ(stack.GetMemory().StackDepth(), 1);
+  EXPECT_EQ(stack.GetMemory().Read(IntBank::L, 0), 42);
+  stack.Pop();
+  EXPECT_EQ(stack.GetMemory().StackDepth(), 1);
+}
+
+TEST(CallStackOwnershipTest, StackMemoryIsCallStackBounded) {
+  Memory memory;
+  CallStack first(memory);
+  CallStack second(memory);
+  StackFrame first_root;
+  first_root.frame_type = StackFrame::TYPE_ROOT;
+  StackFrame second_root;
+  second_root.frame_type = StackFrame::TYPE_ROOT;
+  first.Push(std::move(first_root));
+  second.Push(std::move(second_root));
+
+  first.GetMemory().Write(IntBank::L, 0, 10);
+  second.GetMemory().Write(IntBank::L, 0, 20);
+  first.GetMemory().Write(IntBank::A, 0, 30);
+
+  EXPECT_EQ(first.GetMemory().Read(IntBank::L, 0), 10);
+  EXPECT_EQ(second.GetMemory().Read(IntBank::L, 0), 20);
+  EXPECT_EQ(second.GetMemory().Read(IntBank::A, 0), 30);
+}
+
 TEST_F(CallStackTest, CreateCopy) {
   stack.Push(MakeFrame(StackFrame::TYPE_ROOT));
+  stack.GetMemory().Write(IntBank::L, 0, 10);
   stack.Push(MakeFrame(StackFrame::TYPE_LONGOP));
   stack.Push(MakeFrame(StackFrame::TYPE_FARCALL));
+  stack.GetMemory().Write(IntBank::L, 0, 20);
 
   auto duplicated = stack.Clone();
+  duplicated.GetMemory().Write(IntBank::L, 0, 30);
   duplicated.Push(MakeFrame(StackFrame::TYPE_GOSUB));
 
   EXPECT_EQ(stack.Top()->frame_type, StackFrame::TYPE_FARCALL);
+  EXPECT_EQ(stack.GetMemory().Read(IntBank::L, 0), 20);
   stack.Pop();
   stack = duplicated.Clone();
   EXPECT_EQ(stack.Top()->frame_type, StackFrame::TYPE_GOSUB);
+  stack.Pop();
+  EXPECT_EQ(stack.GetMemory().Read(IntBank::L, 0), 30);
 }
 
 TEST_F(CallStackTest, LockStack) {
@@ -139,16 +177,16 @@ TEST_F(CallStackTest, Serialization) {
 
   {
     StackFrame frame1(ScriptLocation(1, 10), StackFrame::TYPE_ROOT);
-    StrListProxy(frame1.strK).Set(2, "root");
     StackFrame frame2(ScriptLocation(1, 20), StackFrame::TYPE_GOSUB);
     StackFrame frame3(ScriptLocation(2, 20), StackFrame::TYPE_FARCALL);
-    StrListProxy(frame3.strK).Set(2, "hello ");
-    StrListProxy(frame3.strK).Set(3, "world");
     StackFrame frame4(ScriptLocation(2, 20), StackFrame::TYPE_LONGOP);
 
     stack.Push(std::move(frame1));
+    stack.GetMemory().Write(StrBank::K, 2, "root");
     stack.Push(std::move(frame2));
     stack.Push(std::move(frame3));
+    stack.GetMemory().Write(StrBank::K, 2, "hello ");
+    stack.GetMemory().Write(StrBank::K, 3, "world");
     stack.Push(std::move(frame4));
 
     boost::archive::text_oarchive oa(ss);
@@ -156,13 +194,14 @@ TEST_F(CallStackTest, Serialization) {
   }
 
   {
-    CallStack deserialized;
+    Memory deserialized_memory;
+    CallStack deserialized(deserialized_memory);
     boost::archive::text_iarchive ia(ss);
     ia >> deserialized;
 
     StackFrame* frame3 = deserialized.FindTopRealFrame();
-    EXPECT_EQ(StrListProxy(frame3->strK).Get(2) +
-                  StrListProxy(frame3->strK).Get(3),
+    EXPECT_EQ(deserialized.GetMemory().Read(StrBank::K, 2) +
+                  deserialized.GetMemory().Read(StrBank::K, 3),
               "hello world");
     EXPECT_EQ(desc(*deserialized.Top()), "(2,20) 3");
     EXPECT_EQ(desc(*frame3), "(2,20) 2");
@@ -171,5 +210,6 @@ TEST_F(CallStackTest, Serialization) {
     EXPECT_EQ(desc(*deserialized.Top()), "(1,20) 1");
     deserialized.Pop();
     EXPECT_EQ(desc(*deserialized.Top()), "(1,10) 0");
+    EXPECT_EQ(deserialized.GetMemory().Read(StrBank::K, 2), "root");
   }
 }

@@ -41,9 +41,12 @@
 
 namespace serilang {
 class VM;
+struct Fiber;
 };  // namespace serilang
 
+template <class... Ts>
 class IntListFacade;
+template <class... Ts>
 class StrListFacade;
 class BgmTable;
 class KidokuTable;
@@ -53,6 +56,9 @@ class CounterList;
 class MaskList;
 
 namespace libsiglus {
+using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
+using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
+
 class Archive;
 class SiglusSceneRenderer;
 
@@ -82,8 +88,8 @@ struct SiglusRuntime {
   std::vector<std::function<void()>> reset_local_memory;
   std::shared_ptr<IPlatformImplementor> platform_implementor;
 
-  std::shared_ptr<srbind::class_<IntListFacade>> ilist_cls;
-  std::shared_ptr<srbind::class_<StrListFacade>> slist_cls;
+  std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;
+  std::shared_ptr<srbind::class_<SiglusStrListFacade>> slist_cls;
   std::function<serilang::Value(std::weak_ptr<Counter>)> make_counter;
 
   SiglusRuntime() = default;

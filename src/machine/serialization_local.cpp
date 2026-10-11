@@ -103,7 +103,7 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
   try {
     boost::archive::text_oarchive oa(filtered_output);
     oa << CURRENT_LOCAL_VERSION << header
-       << machine.GetMemory().GetLocalMemory()
+       << machine.GetMemoryStorage().GetLocalMemory()
        << const_cast<const RLMachine&>(machine)
        << const_cast<const System&>(machine.GetSystem())
        << const_cast<const GraphicsSystem&>(machine.GetSystem().graphics())
@@ -198,11 +198,17 @@ void loadGameFrom(std::istream& iss, RLMachine& machine) {
 
     boost::archive::text_iarchive ia(filtered_input);
     LocalMemory local_memory;
-    ia >> version >> header >> local_memory >> machine >> machine.GetSystem() >>
+    ia >> version >> header;
+    if (version != CURRENT_LOCAL_VERSION) {
+      throw std::runtime_error("Unsupported local save version " +
+                               std::to_string(version) + "; expected " +
+                               std::to_string(CURRENT_LOCAL_VERSION));
+    }
+    ia >> local_memory >> machine >> machine.GetSystem() >>
         machine.GetSystem().graphics() >> machine.GetSystem().text() >>
         machine.GetSystem().sound();
 
-    machine.GetMemory().PartialReset(std::move(local_memory));
+    machine.GetMemoryStorage().PartialReset(std::move(local_memory));
     machine.ReplayGraphicsStackCommand();
     machine.GetSystem().graphics().ForceRefresh();
   } catch (std::exception& e) {

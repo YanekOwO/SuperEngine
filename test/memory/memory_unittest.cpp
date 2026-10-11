@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2024 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,15 +30,18 @@
 
 #include <bitset>
 #include <limits>
-#include <map>
-#include <sstream>
 #include <string>
 
 class MemoryTest : public ::testing::Test {
  protected:
-  MemoryTest() : memory_(std::make_unique<Memory>()) {}
+  MemoryTest()
+      : memory_(
+            std::make_unique<MemoryHandle>(backing_memory_.CreateHandle())) {
+    memory_->PushStackFrame(2000, 2000);
+  }
 
-  std::unique_ptr<Memory> memory_;
+  Memory backing_memory_;
+  std::unique_ptr<MemoryHandle> memory_;
 };
 
 TEST_F(MemoryTest, Init) {
@@ -243,14 +247,14 @@ TEST_F(MemoryTest, GetStack) {
 
   // check stack frame 1
   for (int i = 0; i < 15; ++i) {
-    EXPECT_EQ(IntListProxy(frame1.L).Get(i), i);
-    EXPECT_EQ(StrListProxy(frame1.K).Get(i), std::to_string(i));
+    EXPECT_EQ(IntListProxy(frame1.L.back()).Get(i), i);
+    EXPECT_EQ(StrListProxy(frame1.K.back()).Get(i), std::to_string(i));
   }
 
   // check stack frame 2
   for (int i = 10; i < 20; ++i) {
-    EXPECT_EQ(IntListProxy(frame2.L).Get(i), i * i);
-    EXPECT_EQ(StrListProxy(frame2.K).Get(i), std::to_string(i * i));
+    EXPECT_EQ(IntListProxy(frame2.L.back()).Get(i), i * i);
+    EXPECT_EQ(StrListProxy(frame2.K.back()).Get(i), std::to_string(i * i));
   }
 
   // check memory
@@ -265,15 +269,15 @@ TEST_F(MemoryTest, GetStack) {
 }
 
 TEST_F(MemoryTest, SetStack) {
-  Memory::Stack frame1, frame2;
-  frame1.L.resize(50);
-  frame1.K.resize(50);
-  frame2.L.resize(60);
-  frame2.K.resize(60);
-  IntListProxy frame1_l(frame1.L);
-  StrListProxy frame1_k(frame1.K);
-  IntListProxy frame2_l(frame2.L);
-  StrListProxy frame2_k(frame2.K);
+  StackMemory frame1, frame2;
+  frame1.L.emplace_back(50);
+  frame1.K.emplace_back(50);
+  frame2.L.emplace_back(60);
+  frame2.K.emplace_back(60);
+  IntListProxy frame1_l(frame1.L.back());
+  StrListProxy frame1_k(frame1.K.back());
+  IntListProxy frame2_l(frame2.L.back());
+  StrListProxy frame2_k(frame2.K.back());
 
   for (int i = 0; i < 15; ++i) {
     frame1_l.Set(i, i);
@@ -286,13 +290,13 @@ TEST_F(MemoryTest, SetStack) {
 
   memory_->Fill(IntBank::L, 0, 100, -123);
   memory_->Fill(StrBank::K, 0, 100, "some string");
-  memory_->PartialReset(frame1);
+  memory_->ResetStackMemory(frame1);
   for (int i = 0; i < 15; ++i) {
     EXPECT_EQ(memory_->Read(IntBank::L, i), i);
     EXPECT_EQ(memory_->Read(StrBank::K, i), std::to_string(i));
   }
 
-  memory_->PartialReset(frame2);
+  memory_->ResetStackMemory(frame2);
   for (int i = 0; i < 10; ++i) {
     EXPECT_EQ(memory_->Read(IntBank::L, i), 0);
     EXPECT_EQ(memory_->Read(StrBank::K, i), "");

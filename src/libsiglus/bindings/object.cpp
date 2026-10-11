@@ -1187,16 +1187,17 @@ void BindObject(SiglusRuntime& runtime) {
              });
 
   auto ilist_param = [&](const char* name, auto&& F) {
-    obj.subcls(name, *runtime.ilist_cls,
-               [F = std::move(F)](
-                   SiglusObject* parent) -> std::unique_ptr<IntListFacade> {
-                 auto getter = [ref = parent->ref_,
-                                &F]() mutable -> std::vector<int>& {
-                   auto& object = ref.get();
-                   return std::invoke(F, object.Param());
-                 };
-                 return std::make_unique<IntListFacade>(std::move(getter));
-               });
+    obj.subcls(
+        name, *runtime.ilist_cls,
+        [F = std::move(F)](
+            SiglusObject* parent) -> std::unique_ptr<SiglusIntListFacade> {
+          auto getter = [ref = parent->ref_,
+                         &F](serilang::Fiber&) mutable -> std::vector<int>& {
+            auto& object = ref.get();
+            return std::invoke(F, object.Param());
+          };
+          return std::make_unique<SiglusIntListFacade>(std::move(getter));
+        });
   };
   ilist_param("F", &ObjectParameter::F);
   ilist_param("x_rep", &ObjectParameter::adjustment_offsets_x);

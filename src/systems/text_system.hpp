@@ -42,7 +42,7 @@
 #include <vector>
 
 class Gameexe;
-class Memory;
+class MemoryHandle;
 class Point;
 class RGBColour;
 class RLMachine;
@@ -409,7 +409,7 @@ class TextSystem final : public EventListener {
 // variable placeholders with the names from Memory. This function assumes that
 // text is in CP932 encoding, and will need to be generalized when we try to
 // support other hacks on top of cp932.
-std::string parseNames(Memory& memory, const std::string& input);
+std::string parseNames(MemoryHandle& memory, const std::string& input);
 
 // LongOperation which just calls text().set_system_visible(true) and removes
 // itself from the callstack.
