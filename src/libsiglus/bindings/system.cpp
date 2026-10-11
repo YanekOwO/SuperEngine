@@ -43,7 +43,7 @@ namespace fs = std::filesystem;
 
 static void nop() {}
 
-void BindSystem(SiglusRuntime& runtime) {
+void BindSystem(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
 
   sb::module_ m(vm, "system");

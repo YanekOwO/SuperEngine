@@ -519,7 +519,7 @@ struct SiglusWipe {
   PendingCoroutineTasks pending_;
 };
 
-void BindWipe(SiglusRuntime& runtime) {
+void BindWipe(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusWipe> wipe_cls(m, "Wipe", false);

@@ -142,7 +142,7 @@ std::string FullWidthAscii(std::string input) {
 
 }  // namespace
 
-void BindMath(SiglusRuntime& runtime) {
+void BindMath(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm, "math");
 

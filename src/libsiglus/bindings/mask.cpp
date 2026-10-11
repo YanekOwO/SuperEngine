@@ -67,7 +67,7 @@ struct MaskEventHandle {
   inline Mask& Get() { return mask_.Get(); }
 };
 
-void BindMask(SiglusRuntime& runtime) {
+void BindMask(SiglusMachine& runtime) {
   std::shared_ptr<MaskList> list = runtime.mask_list;
   if (!list)
     throw std::runtime_error("mask binding requires mask state");

@@ -40,6 +40,7 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
 #include "libsiglus/intern_name.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "log/domain_logger.hpp"
 #include "m6/vm_factory.hpp"
@@ -106,8 +107,10 @@ static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
   return {};
 }
 
-SiglusRuntime SGVMFactory::Create() {
-  SiglusRuntime rt;
+std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
+  std::unique_ptr<SiglusMachine> ret = std::make_unique<SiglusMachine>();
+  SiglusMachine& rt = *ret;
+
   rt.platform_implementor = platform_implementor_;
   rt.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
   sr::VM& vm = *rt.vm;
@@ -356,7 +359,7 @@ SiglusRuntime SGVMFactory::Create() {
   rt.vm->scheduler_.PushCallbackAfter(rt.exec_sdl_callback,
                                       chr::milliseconds(2));
 
-  return rt;
+  return ret;
 }
 
 }  // namespace libsiglus

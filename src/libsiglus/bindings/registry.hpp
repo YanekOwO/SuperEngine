@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "utilities/static_registry.hpp"
 
 #include <functional>
@@ -32,7 +32,7 @@
 namespace libsiglus::binding {
 
 struct SiglusBindingRegistryTag;
-using BindFn = std::function<void(SiglusRuntime&)>;
+using BindFn = std::function<void(SiglusMachine&)>;
 using SiglusBindingRegistry =
     StaticRegistry<SiglusBindingRegistryTag, std::string, BindFn>;
 

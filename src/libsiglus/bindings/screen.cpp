@@ -82,7 +82,7 @@ class SiglusQuake {
 
 }  // namespace
 
-void BindScreen(SiglusRuntime& runtime) {
+void BindScreen(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusQuake> quake(m, "Quake");

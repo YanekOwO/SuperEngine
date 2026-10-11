@@ -26,7 +26,7 @@
 #include "core/group.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "vm/exception.hpp"
 
 #include <cstddef>
@@ -50,7 +50,7 @@ static std::optional<int> FirstOptionalInt(std::vector<sr::Value> raw_args) {
   return AsInt(packet.args.front());
 }
 
-void BindGroup(SiglusRuntime& runtime) {
+void BindGroup(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<GroupHandle> grp(m, "Group");

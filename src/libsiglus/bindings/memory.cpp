@@ -121,7 +121,7 @@ void BindStrSequenceMethods(sb::class_<SiglusStrListFacade>& klass) {
 
 }  // namespace
 
-void BindMemory(SiglusRuntime& rt) {
+void BindMemory(SiglusMachine& rt) {
   VM& vm = *rt.vm;
   sb::module_ m(vm.gc_.get(), rt.vm->globals_.get());
   if (!rt.memory)

@@ -117,7 +117,7 @@ class SiglusTextout {
   std::shared_ptr<Gameexe> localcfg_;
 };
 
-void BindTextout(SiglusRuntime& runtime) {
+void BindTextout(SiglusMachine& runtime) {
   sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   m.def("__builtin_name", [sys = runtime.system.get()](std::string name) {
     if (!sys || name.empty())

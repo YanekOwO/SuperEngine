@@ -41,7 +41,7 @@ StageEffect& ResolveEffect(const EffectHandle& handle) {
   return StageElement<StageEffect>::Resolve(handle);
 }
 
-void BindStage(SiglusRuntime& runtime) {
+void BindStage(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage_state = runtime.stage.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());

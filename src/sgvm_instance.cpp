@@ -25,6 +25,7 @@
 #include "sgvm_instance.hpp"
 
 #include "libsiglus/sgvm_factory.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "systems/graphics_system.hpp"
 #include "vm/function.hpp"
 #include "vm/instruction.hpp"
@@ -45,7 +46,9 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
     factory.debug_ = debug_;
     factory.fast_forward_ = fast_forward_;
     factory.platform_implementor_ = platform_implementor_;
-    SiglusRuntime rt = factory.Create();
+    std::unique_ptr<SiglusMachine> machine = factory.Create();
+    SiglusMachine& rt = *machine;
+
     rt.system->graphics().SetDebugFrameDumpConfig(debug_frame_dump_config_);
     sr::VM& vm = *rt.vm;
 
@@ -63,14 +66,9 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
       throw std::runtime_error(std::move(errmsg));
     }
 
-    sr::Code* thunk = vm.gc_->Allocate<sr::Code>();
-    thunk->const_pool.emplace_back(script);
-    thunk->Append(sr::Push{0});
-    thunk->Append(sr::Call{.argcnt = 0, .kwargcnt = 0});
-    thunk->Append(sr::Return{});
+    vm.ScheduleExecute(script);
+    vm.Run();
 
-    sr::Value result = vm.Evaluate(thunk);
-    std::cout << "Result is: " << result.Desc() << std::endl;
     return 0;
 
   } catch (const sr::UnhandledError& e) {

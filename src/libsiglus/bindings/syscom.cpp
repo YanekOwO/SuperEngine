@@ -96,7 +96,7 @@ std::pair<std::string, int> ReadMenuScene(Gameexe& gameexe) {
 
 }  // namespace
 
-void BindSyscom(SiglusRuntime& runtime) {
+void BindSyscom(SiglusMachine& runtime) {
   auto* sys = runtime.system.get();
   auto* stage = runtime.stage.get();
   auto* loader = runtime.loader.get();

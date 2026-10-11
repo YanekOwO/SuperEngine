@@ -478,7 +478,7 @@ class SiglusPcmch {
   std::string pcm_name_;
 };
 
-void BindSound(SiglusRuntime& runtime) {
+void BindSound(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 

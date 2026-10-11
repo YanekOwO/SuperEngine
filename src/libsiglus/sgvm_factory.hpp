@@ -23,15 +23,16 @@
 
 #pragma once
 
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 
 #include <filesystem>
+#include <memory>
 
 namespace libsiglus {
 
 class SGVMFactory {
  public:
-  SiglusRuntime Create();
+  std::unique_ptr<SiglusMachine> Create();
 
   std::filesystem::path base_path_;
   bool debug_ = false;

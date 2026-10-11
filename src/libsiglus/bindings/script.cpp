@@ -39,7 +39,7 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 using namespace serilang;
 
-void BindScript(SiglusRuntime& rt) {
+void BindScript(SiglusMachine& rt) {
   if (!rt.local_config)
     rt.local_config = std::make_shared<Gameexe>();
   if (!rt.global_config)

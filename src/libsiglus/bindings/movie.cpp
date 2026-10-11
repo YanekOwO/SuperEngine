@@ -28,7 +28,7 @@
 #include "core/queue.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/bindings/wait_helpers.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "srbind/module.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
@@ -76,7 +76,7 @@ struct MovieRect {
 
 class SiglusMovie {
  public:
-  explicit SiglusMovie(SiglusRuntime& runtime)
+  explicit SiglusMovie(SiglusMachine& runtime)
       : vm_(runtime.vm.get()),
         system_(runtime.system.get()),
         asset_scanner_(runtime.asset_scanner) {}
@@ -389,7 +389,7 @@ static std::pair<std::string, std::optional<MovieRect>> ParsePlayArgs(
   return {std::move(file_name), rect};
 }
 
-void BindMovie(SiglusRuntime& runtime) {
+void BindMovie(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusMovie> movie_cls(m, "Movie", false);

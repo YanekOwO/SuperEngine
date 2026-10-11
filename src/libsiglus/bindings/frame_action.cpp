@@ -26,7 +26,7 @@
 #include "core/gameexe.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
@@ -350,7 +350,7 @@ void FrameActionManager::CancelGlobals() {
     action.Reset();
 }
 
-void BindFrameActions(SiglusRuntime& runtime) {
+void BindFrameActions(SiglusMachine& runtime) {
   if (!runtime.frame_action_manager || !runtime.make_counter)
     throw std::runtime_error(
         "frame-action binding requires action and counter state");

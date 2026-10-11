@@ -25,7 +25,7 @@
 
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "m6/vm_factory.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
@@ -38,7 +38,7 @@ namespace libsiglus::binding {
 
 class SiglusMemoryBindingTest : public ::testing::Test {
  protected:
-  SiglusRuntime runtime;
+  SiglusMachine runtime;
 
   void SetUp() override {
     runtime.vm = std::make_unique<serilang::VM>(m6::VMFactory::Create());

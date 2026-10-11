@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/sgvm_factory.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
 #include "utilities/file.hpp"
@@ -178,8 +179,9 @@ int main(int argc, char* argv[]) {
 
   try {
     if (!siglus_path.empty()) {
-      auto env = libsiglus::SGVMFactory(std::move(siglus_path)).Create();
-      run_repl(*env.vm);
+      std::unique_ptr<libsiglus::SiglusMachine> env =
+          libsiglus::SGVMFactory(std::move(siglus_path)).Create();
+      run_repl(*env->vm);
     } else {
       auto vm = m6::VMFactory::Create();
       run_repl(vm);

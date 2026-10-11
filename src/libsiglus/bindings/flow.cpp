@@ -84,7 +84,7 @@ sr::Function* ResolveSceneEntry(Loader& loader,
   return ResolveEntry(*mod, entry_name);
 }
 
-void BindFlow(SiglusRuntime& rt) {
+void BindFlow(SiglusMachine& rt) {
   sr::VM& vm = *rt.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   m.def(

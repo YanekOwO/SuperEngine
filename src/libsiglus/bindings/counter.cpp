@@ -55,7 +55,7 @@ struct CounterHandle {
   }
 };
 
-void BindCounter(SiglusRuntime& runtime) {
+void BindCounter(SiglusMachine& runtime) {
   std::shared_ptr<CounterList> list = runtime.counter_list;
   if (!list)
     throw std::runtime_error("counter binding requires counter state");

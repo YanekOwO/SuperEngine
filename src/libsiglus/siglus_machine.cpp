@@ -22,12 +22,12 @@
 //
 // -----------------------------------------------------------------------
 
-#include "libsiglus/siglus_runtime.hpp"
-
-#include "libsiglus/bindings/frame_action.hpp"
+#include "libsiglus/siglus_machine.hpp"
 
 namespace libsiglus {
 
-SiglusRuntime::~SiglusRuntime() = default;
+SiglusMachine::~SiglusMachine() = default;
+
+void SiglusMachine::Run() {}
 
 }  // namespace libsiglus

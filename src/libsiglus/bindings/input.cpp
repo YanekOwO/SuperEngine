@@ -24,7 +24,7 @@
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/input.hpp"
-#include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "systems/event_system.hpp"
 
 #include <memory>
@@ -33,7 +33,7 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
 
-void BindInput(SiglusRuntime& runtime) {
+void BindInput(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ mm(vm.gc_.get(), vm.globals_.get());
   mm.def("frame", [] {});

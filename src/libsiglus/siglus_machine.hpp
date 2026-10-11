@@ -67,7 +67,7 @@ class SiglusSceneRenderer;
 
 using SiglusWipeEndHook = std::function<void()>;
 
-struct SiglusRuntime {
+struct SiglusMachine {
   std::filesystem::path base_pth, save_pth;
   std::shared_ptr<Gameexe> gameexe;
   std::shared_ptr<Archive> archive;
@@ -103,12 +103,14 @@ struct SiglusRuntime {
   std::shared_ptr<srbind::class_<SiglusStrListFacade>> slist_cls;
   std::function<serilang::Value(std::weak_ptr<Counter>)> make_counter;
 
-  SiglusRuntime() = default;
-  ~SiglusRuntime();
-  SiglusRuntime(const SiglusRuntime&) = delete;
-  SiglusRuntime& operator=(const SiglusRuntime&) = delete;
-  SiglusRuntime(SiglusRuntime&&) noexcept = default;
-  SiglusRuntime& operator=(SiglusRuntime&&) noexcept = default;
+  SiglusMachine() = default;
+  ~SiglusMachine();
+  SiglusMachine(const SiglusMachine&) = delete;
+  SiglusMachine& operator=(const SiglusMachine&) = delete;
+  SiglusMachine(SiglusMachine&&) noexcept = delete;
+  SiglusMachine& operator=(SiglusMachine&&) noexcept = delete;
+
+  void Run();
 };
 
 }  // namespace libsiglus
