@@ -38,7 +38,9 @@ class SDLTextImpl final : public ITextSystem {
   virtual void QuitSystem() override;
 
   std::shared_ptr<IFont> GetFont(const std::filesystem::path& font_file,
-                                 int font_size) override;
+                                 int font_size,
+                                 bool bold = false,
+                                 int face_index = 0) override;
 
   Size RenderGlyphOnto(const std::string& text,
                        FontFace font,

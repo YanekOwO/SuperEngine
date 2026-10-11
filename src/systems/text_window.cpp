@@ -690,7 +690,10 @@ bool TextWindow::DisplayCharacter(const std::string& current,
     std::shared_ptr<IFont> font =
         system_.text().LoadFont(font_size_in_pixels());
     FontFace font_face{.font = font,
-                       .is_italic = std::exchange(next_char_italic_, false)};
+                       .is_italic = std::exchange(next_char_italic_, false),
+                       .is_shadow = system_.text().globals().font_shadow,
+                       .is_futidoru = system_.text().globals().font_futidoru};
+    const bool has_shadow = font_face.is_shadow || font_face.is_futidoru;
 
     // If our font is not monospaced ASCII, we aren't using
     // the recommended font so we'll try laying out the text so that
@@ -705,7 +708,7 @@ bool TextWindow::DisplayCharacter(const std::string& current,
       return false;
 
     std::optional<RGBColour> shadow;
-    if (system_.text().font_shadow())
+    if (has_shadow)
       shadow = RGBAColour::Black().rgb();
 
     text_impl_->RenderGlyphOnto(current, font_face, font_colour_, shadow,

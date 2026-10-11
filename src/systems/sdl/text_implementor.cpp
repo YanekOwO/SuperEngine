@@ -81,14 +81,22 @@ void SDLTextImpl::QuitSystem() { TTF_Quit(); }
 
 std::shared_ptr<IFont> SDLTextImpl::GetFont(
     const std::filesystem::path& font_file,
-    int font_size) {
+    int font_size,
+    bool bold,
+    int face_index) {
   const auto utf8_path = font_file.u8string();
-  TTF_Font* f = TTF_OpenFont(reinterpret_cast<const char*>(utf8_path.c_str()),
-                           static_cast<float>(font_size));
+  SDL_PropertiesID properties = SDL_CreateProperties();
+  SDL_SetStringProperty(properties, TTF_PROP_FONT_CREATE_FILENAME_STRING,
+                        reinterpret_cast<const char*>(utf8_path.c_str()));
+  SDL_SetFloatProperty(properties, TTF_PROP_FONT_CREATE_SIZE_FLOAT, font_size);
+  SDL_SetNumberProperty(properties, TTF_PROP_FONT_CREATE_FACE_NUMBER,
+                        face_index);
+  TTF_Font* f = TTF_OpenFontWithProperties(properties);
+  SDL_DestroyProperties(properties);
   if (f == nullptr)
     throw std::runtime_error("Error loading font: "s + SDL_GetError());
 
-  TTF_SetFontStyle(f, TTF_STYLE_NORMAL);
+  TTF_SetFontStyle(f, bold ? TTF_STYLE_BOLD : TTF_STYLE_NORMAL);
 
   std::shared_ptr<TTF_Font> font(f, TTF_CloseFont);
 
@@ -108,9 +116,14 @@ Size SDLTextImpl::RenderGlyphOnto(const std::string& text,
     throw std::runtime_error("RenderGlyph: ttf font is nullptr");
   TTF_Font* f = ttf_font->ttf_font.get();
 
-  if (font.is_italic) {
-    TTF_SetFontStyle(f, TTF_STYLE_ITALIC);
-  }
+  const auto style = TTF_GetFontStyle(f);
+  struct RestoreStyle {
+    TTF_Font* font;
+    TTF_FontStyleFlags style;
+    ~RestoreStyle() { TTF_SetFontStyle(font, style); }
+  } restore{f, style};
+  if (font.is_italic)
+    TTF_SetFontStyle(f, style | TTF_STYLE_ITALIC);
 
   std::shared_ptr<SDL_Surface> character(
       TTF_RenderText_Blended(f, text.c_str(), 0, ToSDLColor(font_color)),
@@ -125,22 +138,27 @@ Size SDLTextImpl::RenderGlyphOnto(const std::string& text,
   }
 
   std::shared_ptr<SDL_Surface> shadow = nullptr;
-  if (shadow_color) {
+  if (shadow_color && (font.is_shadow || font.is_futidoru)) {
     SDL_Color sdl_shadow_color = ToSDLColor(*shadow_color);
     shadow.reset(TTF_RenderText_Blended(f, text.c_str(), 0, sdl_shadow_color),
                  SDL_DestroySurface);
   }
 
-  // reset the font back to normal
-  if (font.is_italic) {
-    TTF_SetFontStyle(f, TTF_STYLE_NORMAL);
-  }
-
   constexpr int alpha = 255;
   if (shadow) {
-    Size offset(shadow->w, shadow->h);
-    sdl_surface->blitFROMSurface(shadow.get(), Rect(Point(0, 0), offset),
-                                 Rect(insertion + Point(2, 2), offset), alpha);
+    const Size extent(shadow->w, shadow->h);
+    const auto blit = [&](Point offset) {
+      sdl_surface->blitFROMSurface(shadow.get(), Rect(Point(0, 0), extent),
+                                   Rect(insertion + offset, extent), alpha);
+    };
+    if (font.is_shadow)
+      blit(Point(2, 2));
+    if (font.is_futidoru) {
+      for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+          if (x || y)
+            blit(Point(x, y));
+    }
   }
 
   Size size(character->w, character->h);
@@ -157,7 +175,13 @@ std::shared_ptr<SDLSurface> SDLTextImpl::RenderText(
   SDL_Color color = ToSDLColor(c);
   TTF_Font* f = static_cast<TTF_Font*>(get_ttf(font.font));
   assert(f != nullptr);
+  const auto original_style = TTF_GetFontStyle(f);
+  if (font.is_italic)
+    TTF_SetFontStyle(f, original_style | TTF_STYLE_ITALIC);
   SDL_Surface* tmp = TTF_RenderText_Blended(f, text.c_str(), 0, color);
+  TTF_SetFontStyle(f, original_style);
+  if (!tmp)
+    throw std::runtime_error("RenderText failed: "s + SDL_GetError());
   return std::make_shared<SDLSurface>(tmp);
 }
 

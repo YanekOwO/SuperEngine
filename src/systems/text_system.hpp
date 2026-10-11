@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2006, 2007 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,7 +30,8 @@
 #include "machine/long_operation.hpp"
 
 #include <boost/serialization/split_member.hpp>
-#include <boost/serialization/version.hpp>
+#include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
 
 #include <filesystem>
 #include <functional>
@@ -69,27 +71,21 @@ struct TextSystemGlobals {
   // Message speed; range from 0 to 255
   char message_speed;
 
-  // Whether we should be bolded.
-  int font_weight;
-
-  // Whether we should draw a shadow.
-  int font_shadow;
+  std::string font_name;
+  bool font_bold;
+  bool font_shadow;
+  bool font_futidoru;
 
   // The default #WINDOW_ATTR. This is what is changed by the
   std::vector<int> window_attr;
 
   // boost::serialization support
   template <class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar & auto_mode_base_time & auto_mode_char_time & message_speed &
-        window_attr;
-
-    if (version > 0)
-      ar & font_weight & font_shadow;
+  void serialize(Archive& ar, const unsigned int /* version */) {
+    ar & auto_mode_base_time & auto_mode_char_time & message_speed & font_name &
+        font_bold & font_shadow & font_futidoru & window_attr;
   }
 };
-
-BOOST_CLASS_VERSION(TextSystemGlobals, 1)
 
 // -----------------------------------------------------------------------
 
@@ -274,11 +270,17 @@ class TextSystem final : public EventListener {
   int message_speed() const { return globals_.message_speed; }
   void set_message_speed(int i) { globals_.message_speed = i; }
 
-  int font_weight() const { return globals_.font_weight; }
-  void set_font_weight(int i) { globals_.font_weight = i; }
+  int font_weight() const { return globals_.font_bold; }
+  void set_font_weight(int i) { globals_.font_bold = i; }
 
-  int font_shadow() const { return globals_.font_shadow; }
-  void set_font_shadow(int i) { globals_.font_shadow = i; }
+  // Script decoration mode: bit 0 enables shadow, bit 1 enables futidoru.
+  int font_shadow() const {
+    return (globals_.font_shadow ? 1 : 0) | (globals_.font_futidoru ? 2 : 0);
+  }
+  void set_font_shadow(int i) {
+    globals_.font_shadow = (i & 1) != 0;
+    globals_.font_futidoru = (i & 2) != 0;
+  }
 
   const std::vector<int>& window_attr() const { return globals_.window_attr; }
   void SetDefaultWindowAttr(const std::vector<int>& attr);
@@ -344,7 +346,9 @@ class TextSystem final : public EventListener {
 
   ITextSystem& impl() { return *text_impl_; }
 
-  // Load a font of given size
+  // Resolve the active family or filename and load it at the given pixel size
+  // with the current bold setting. Reuse cached fonts with matching file, size,
+  // style and collection face; throw if resolution or loading fails.
   std::shared_ptr<IFont> LoadFont(int size);
 
  private:
@@ -358,11 +362,6 @@ class TextSystem final : public EventListener {
 
   // Platform dependent text implementor
   std::unique_ptr<ITextSystem> text_impl_;
-
-  std::filesystem::path default_font_file_;
-
-  // Cached instances of default font of various sizes
-  std::unordered_map<int, std::shared_ptr<IFont>> font_cache_;
 
   // TextPage will call our internals since it actually does most of
   // the work while we hold state.
@@ -454,6 +453,14 @@ class TextSystem final : public EventListener {
   // values that should be saved to disk.
   int savepoint_active_window_;
   int savepoint_cursor_number_;
+
+  // cached font data
+  std::map<std::string, std::pair<std::filesystem::path, int>> resolved_fonts_;
+
+  std::map<std::tuple<std::filesystem::path, int, bool, int>,
+           // Cached fonts by file, size, weight, and face index.
+           std::shared_ptr<IFont>>
+      font_cache_;
 
   // boost::serialization support
   friend class boost::serialization::access;

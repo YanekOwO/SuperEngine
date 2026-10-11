@@ -68,6 +68,11 @@ pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3>=3.2.0)
 pkg_check_modules(SDL3_TTF REQUIRED IMPORTED_TARGET sdl3-ttf>=3.2.0)
 
 # -------------------------------------------------------------------
+# Find fontconfig
+# -------------------------------------------------------------------
+pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+
+# -------------------------------------------------------------------
 # Find Theora decoder library
 # -------------------------------------------------------------------
 pkg_check_modules(THEORADEC REQUIRED IMPORTED_TARGET theoradec)

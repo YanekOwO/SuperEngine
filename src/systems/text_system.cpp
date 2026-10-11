@@ -22,16 +22,11 @@
 //
 // -----------------------------------------------------------------------
 
+#include <fontconfig/fontconfig.h>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 
 #include "systems/text_system.hpp"
-
-#include <algorithm>
-#include <map>
-#include <optional>
-#include <string>
-#include <vector>
 
 #include "core/gameexe.hpp"
 #include "core/stage.hpp"
@@ -51,9 +46,20 @@
 #include "utf8.h"
 #include "utilities/assertx.hpp"
 #include "utilities/exception.hpp"
-#include "utilities/find_font_file.hpp"
 #include "utilities/graphics.hpp"
 #include "utilities/string_utilities.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <system_error>
+#include <vector>
+
+namespace fs = std::filesystem;
 
 const unsigned int MAX_PAGE_HISTORY = 100;
 
@@ -115,8 +121,9 @@ TextSystemGlobals::TextSystemGlobals()
     : auto_mode_base_time(100),
       auto_mode_char_time(100),
       message_speed(30),
-      font_weight(0),
-      font_shadow(1),
+      font_bold(false),
+      font_shadow(true),
+      font_futidoru(false),
       window_attr{255, 255, 255, 255, 0} {}
 
 // -----------------------------------------------------------------------
@@ -126,8 +133,10 @@ TextSystemGlobals::TextSystemGlobals(Gameexe& gexe,
     : auto_mode_base_time(gexe("MESSAGE_KEY_WAIT_TIME").Int().value_or(1500)),
       auto_mode_char_time(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
       message_speed(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
-      font_weight(0),
-      font_shadow(1),
+      font_name(gexe("CONFIG.FONT.NAME").Str().value_or("")),
+      font_bold(false),
+      font_shadow(true),
+      font_futidoru(false),
       window_attr(mwnd_config.window_attr()) {}
 
 // -----------------------------------------------------------------------
@@ -139,7 +148,6 @@ TextSystem::TextSystem(System& system,
                        std::unique_ptr<ITextSystem> impl,
                        MwndConfig mwnd_config)
     : text_impl_(std::move(impl)),
-      default_font_file_(FindFontFile(system)),
       auto_mode_(false),
       ctrl_key_skip_(true),
       fast_text_mode_(false),
@@ -203,6 +211,7 @@ TextSystem::TextSystem(System& system,
 }
 
 TextSystem::~TextSystem() {
+  resolved_fonts_.clear();
   font_cache_.clear();
   text_impl_->QuitSystem();
 }
@@ -1028,10 +1037,14 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
 
     if (add_char) {
       std::optional<RGBColour> shadow;
-      if (font_shadow() && shadow_colour != nullptr)
+      if ((globals_.font_shadow || globals_.font_futidoru) &&
+          shadow_colour != nullptr)
         shadow = *shadow_colour;
 
-      FontFace font{.font = LoadFont(current_size), .is_italic = false};
+      FontFace font{.font = LoadFont(current_size),
+                    .is_italic = false,
+                    .is_shadow = globals_.font_shadow,
+                    .is_futidoru = globals_.font_futidoru};
       Size s =
           text_impl_->RenderGlyphOnto(character, font, current_colour, shadow,
                                       Point(currentX, currentY), surface);
@@ -1165,9 +1178,171 @@ bool RestoreTextSystemVisibility::operator()(RLMachine& machine) {
   return true;
 }
 
+// ------------------------------------------------------------------------------
+// Resolve an absolute or game-relative filename, then consult indexed assets.
+// Siglus FONT_FILE entries often give only a basename for a file under dat/.
+static std::optional<fs::path> FindFontAsset(System& system,
+                                             const fs::path& file) {
+  if (file.empty())
+    return std::nullopt;
+
+  const fs::path local =
+      fs::path(system.gameexe()("__GAMEPATH").Str().value_or("")) / file;
+  std::error_code error;
+  if (fs::is_regular_file(local, error))
+    return local;
+
+  auto scanner = system.GetAssetScanner();
+  if (!scanner || file.is_absolute() || !file.has_extension())
+    return std::nullopt;
+  std::string extension = file.extension().string().substr(1);
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  auto asset = scanner->FindFile(file.stem().string(), {extension});
+  if (asset && fs::is_regular_file(*asset, error))
+    return *asset;
+  return std::nullopt;
+}
+
+using ResolvedFont = std::pair<fs::path, int>;
+
+// Search one font set. A nonempty name requires an exact family match; an empty
+// name accepts Fontconfig's default, optionally guided by language coverage.
+static std::optional<ResolvedFont> MatchFont(FcConfig* config,
+                                             FcSetName set_name,
+                                             const std::string& name,
+                                             const char* language = nullptr) {
+  FcFontSet* fonts = FcConfigGetFonts(config, set_name);
+  if (!fonts || fonts->nfont == 0)
+    return std::nullopt;
+
+  std::unique_ptr<FcPattern, decltype(&FcPatternDestroy)> pattern(
+      FcPatternCreate(), FcPatternDestroy);
+  if (!pattern)
+    return std::nullopt;
+  if (!name.empty())
+    FcPatternAddString(pattern.get(), FC_FAMILY,
+                       reinterpret_cast<const FcChar8*>(name.c_str()));
+  if (language)
+    FcPatternAddString(pattern.get(), FC_LANG,
+                       reinterpret_cast<const FcChar8*>(language));
+  FcConfigSubstitute(config, pattern.get(), FcMatchPattern);
+  FcDefaultSubstitute(pattern.get());
+  FcResult result;
+  std::unique_ptr<FcPattern, decltype(&FcPatternDestroy)> match(
+      FcFontSetMatch(config, &fonts, 1, pattern.get(), &result),
+      FcPatternDestroy);
+  if (!match)
+    return std::nullopt;
+
+  // Fontconfig substitutes unavailable families. Reject that substitution here
+  // so the caller can try its remaining font sources before choosing a default.
+  if (!name.empty()) {
+    bool exact = false;
+    for (int i = 0;; ++i) {
+      FcChar8* family = nullptr;
+      if (FcPatternGetString(match.get(), FC_FAMILY, i, &family) !=
+          FcResultMatch)
+        break;
+      if (FcStrCmpIgnoreCase(
+              family, reinterpret_cast<const FcChar8*>(name.c_str())) == 0) {
+        exact = true;
+        break;
+      }
+    }
+    if (!exact)
+      return std::nullopt;
+  }
+
+  FcChar8* file = nullptr;
+  int index = 0;
+  if (FcPatternGetString(match.get(), FC_FILE, 0, &file) != FcResultMatch)
+    return std::nullopt;
+  const fs::path path(reinterpret_cast<const char*>(file));
+  std::error_code error;
+  if (!fs::is_regular_file(path, error))
+    return std::nullopt;
+  // A font collection can hold several faces in one file; preserve the selected
+  // face index when opening it through SDL_ttf.
+  FcPatternGetInteger(match.get(), FC_INDEX, 0, &index);
+  return ResolvedFont{path, index};
+}
+
+// Try an explicit file, bundled family, installed family, __GAMEFONT fallback,
+// then a system default. Return an empty path if every source is unavailable.
+static ResolvedFont ResolveFont(System& system, const std::string& name) {
+  Gameexe& gexe = system.gameexe();
+  if (auto file = FindFontAsset(system, name))
+    return {*file, 0};
+
+  std::unique_ptr<FcConfig, decltype(&FcConfigDestroy)> config(
+      FcInitLoadConfigAndFonts(), FcConfigDestroy);
+  if (config) {
+    // Register bundled fonts on this private config, without installing them
+    // globally or changing font matching for other games.
+    for (const char* root : {"FONT_FILE.", "PRIVATE_FONT_FILE."}) {
+      for (auto setting : gexe.Filter(root)) {
+        if (!setting.key().ends_with(".NAME"))
+          continue;
+        if (auto value = setting.Str()) {
+          if (auto file = FindFontAsset(system, *value))
+            FcConfigAppFontAddFile(
+                config.get(),
+                reinterpret_cast<const FcChar8*>(file->string().c_str()));
+        }
+      }
+    }
+    if (!name.empty()) {
+      // Search bundled fonts separately so an installed copy cannot take
+      // precedence over the game's own version of the requested family.
+      for (FcSetName fonts : {FcSetApplication, FcSetSystem})
+        if (auto match = MatchFont(config.get(), fonts, name))
+          return *match;
+    }
+  }
+
+  if (auto gamefont = gexe("__GAMEFONT").Str()) {
+    fs::path pth = fs::path(*gamefont);
+    std::error_code error;
+    if (fs::is_regular_file(pth, error))
+      return {pth, 0};
+  }
+
+  if (config) {
+    // Empty names and unavailable families still need a usable default. Prefer
+    // Japanese coverage unless the game explicitly uses western-font mode.
+    if (auto match = MatchFont(config.get(), FcSetSystem, "",
+                               system.use_western_font() ? "en" : "ja"))
+      return *match;
+  }
+
+  return {};
+}
+
 std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
-  auto [it, ok] = font_cache_.try_emplace(size, nullptr);
-  if (ok)
-    it->second = text_impl_->GetFont(default_font_file_, size);
+  const std::string& name = globals_.font_name;
+
+  // File resolution is independent of pixel size and synthetic bold styling.
+  auto [resolved, inserted] = resolved_fonts_.try_emplace(name);
+  if (inserted)
+    resolved->second = ResolveFont(system_, name);
+  const auto& [file, index] = resolved->second;
+
+  if (!fs::exists(file))
+    throw std::runtime_error("Failed to resolve font: " + name);
+
+  // Family aliases can share a loaded font, but size, bold style and collection
+  // face each require a distinct SDL_ttf instance.
+  auto [it, created] = font_cache_.try_emplace(
+      std::make_tuple(file, size, globals_.font_bold, index));
+  if (created) {
+    try {
+      it->second = text_impl_->GetFont(file, size, globals_.font_bold, index);
+    } catch (...) {
+      // Allow a later attempt to retry instead of returning a cached null font.
+      font_cache_.erase(it);
+      throw;
+    }
+  }
   return it->second;
 }

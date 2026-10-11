@@ -45,6 +45,8 @@ struct IFont {
 struct FontFace {
   std::shared_ptr<IFont> font;
   bool is_italic = false;
+  bool is_shadow = true;
+  bool is_futidoru = false;
 };
 
 class ITextSystem {
@@ -55,7 +57,9 @@ class ITextSystem {
   virtual void QuitSystem() = 0;
 
   virtual std::shared_ptr<IFont> GetFont(const std::filesystem::path& font_file,
-                                         int font_size) = 0;
+                                         int font_size,
+                                         bool bold = false,
+                                         int face_index = 0) = 0;
 
   virtual Size RenderGlyphOnto(const std::string& text,
                                FontFace font,

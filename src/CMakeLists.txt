@@ -62,6 +62,7 @@ target_compile_options(rlvm_src PUBLIC
 )
 
 target_link_libraries(rlvm_src PUBLIC ${RLVM_REQUIRED_LIBRARIES})
+target_link_libraries(rlvm_src PUBLIC PkgConfig::FONTCONFIG)
 target_include_directories(rlvm_src PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
 
 # -------------------------------------------------------------------
