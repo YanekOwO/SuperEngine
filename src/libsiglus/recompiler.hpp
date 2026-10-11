@@ -55,6 +55,15 @@ struct CompileError {
   std::string ToString() const;
 };
 
+struct UserCommandMetadata {
+  std::string name;
+  int source_entry = -1;
+  int bytecode_entry = -1;
+  std::vector<Type> args;
+
+  bool operator==(const UserCommandMetadata&) const = default;
+};
+
 class Recompiler {
  public:
   explicit Recompiler(std::shared_ptr<serilang::GarbageCollector> gc);
@@ -62,6 +71,9 @@ class Recompiler {
 
   inline bool Ok() const { return errors_.empty(); }
   inline std::span<const CompileError> GetErrors() const { return errors_; }
+  inline std::span<const UserCommandMetadata> GetUserCommands() const {
+    return user_commands_;
+  }
   inline void ClearErrors() { errors_.clear(); }
   inline serilang::Code* GetCode() const { return cur_chunk_; }
 
@@ -71,13 +83,6 @@ class Recompiler {
  private:
   void Gen(token::Token_t tok, int lineno = -1);
   void Finish();
-
-  struct SubroutineRecord {
-    std::string name;
-    int source_entry = -1;
-    std::size_t bytecode_entry = 0;
-    std::vector<Type> args;
-  };
 
   struct ZlabelRecord {
     int id = -1;
@@ -93,7 +98,7 @@ class Recompiler {
 
   std::optional<int> scene_id_;
   std::vector<Property> scene_properties_;
-  std::vector<SubroutineRecord> subroutines_;
+  std::vector<UserCommandMetadata> user_commands_;
   std::vector<ZlabelRecord> zlabels_;
   std::unordered_map<int, std::size_t> zlabel_entries_;
 

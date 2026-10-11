@@ -28,6 +28,7 @@
 
 #include "vm/disassembler.hpp"
 #include "vm/function.hpp"
+#include "vm/future.hpp"
 #include "vm/instruction.hpp"
 #include "vm/object.hpp"
 #include "vm/promise.hpp"
@@ -227,13 +228,191 @@ TEST_F(VMTest, CallNative) {
   EXPECT_EQ(out, std::monostate());
 }
 
+TEST_F(VMTest, InlineCallbackCompletesFullPrefixWithoutRunningOtherFibers) {
+  Code* immediate = gc->Allocate<Code>();
+  immediate->const_pool = value_vector(42);
+  for (int i = 0; i < 512; ++i)
+    immediate->Append(Nop{});
+  append_ins(immediate, {Push{0}, Return{}});
+  auto* callback = gc->Allocate<Function>(immediate);
+
+  Code* unrelated = gc->Allocate<Code>();
+  unrelated->const_pool = value_vector(9);
+  append_ins(unrelated, {Push{0}, Return{}});
+  Fiber* second = vm.AddFiber(unrelated);
+  const FiberState previous_state = second->state;
+
+  vm.InvokeUntilBlocked(*callback, {});
+  Fiber* first = vm.fibres_.back();
+  EXPECT_EQ(first->state, FiberState::Dead);
+  ASSERT_TRUE(first->completion_promise->result.has_value());
+  ASSERT_TRUE(first->completion_promise->result->has_value());
+  EXPECT_EQ(first->completion_promise->result->value(), 42);
+  EXPECT_EQ(second->state, previous_state);
+  EXPECT_FALSE(second->completion_promise->HasResult());
+  EXPECT_EQ(vm.Run(), 9);
+}
+
+TEST_F(VMTest, InlineCallbackContinuesThroughAlreadyResolvedAwait) {
+  auto* ready = gc->Allocate<Future>();
+  ready->promise->Resolve(17);
+  Code* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(ready);
+  append_ins(code, {Push{0}, Await{}, Return{}});
+  auto* callback = gc->Allocate<Function>(code);
+
+  vm.InvokeUntilBlocked(*callback, {});
+
+  Fiber* fiber = vm.fibres_.back();
+  EXPECT_EQ(fiber->state, FiberState::Dead);
+  ASSERT_TRUE(fiber->completion_promise->result.has_value());
+  ASSERT_TRUE(fiber->completion_promise->result->has_value());
+  EXPECT_EQ(fiber->completion_promise->result->value(), 17);
+  EXPECT_TRUE(vm.scheduler_.IsIdle());
+}
+
+TEST_F(VMTest, InlineCallbackResumesSuspendedContinuationOnScheduler) {
+  auto* pending = gc->Allocate<Future>();
+  auto gate = pending->promise;
+  Code* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(pending);
+  append_ins(code, {Push{0}, Await{}, Return{}});
+  auto* callback = gc->Allocate<Function>(code);
+
+  vm.InvokeUntilBlocked(*callback, {});
+  EXPECT_EQ(vm.fibres_.back()->state, FiberState::Suspended);
+  EXPECT_FALSE(vm.fibres_.back()->completion_promise->HasResult());
+  EXPECT_TRUE(vm.scheduler_.IsIdle());
+  vm.CollectGarbage();
+
+  gate->Resolve(73);
+  auto completion = vm.fibres_.back()->completion_promise;
+  EXPECT_EQ(vm.Run(), nil);
+  ASSERT_TRUE(completion->result.has_value());
+  ASSERT_TRUE(completion->result->has_value());
+  EXPECT_EQ(completion->result->value(), 73);
+}
+
+TEST_F(VMTest, InlineCallbackRootsArgumentsAndFunctionDuringNativeGc) {
+  auto* collect = gc->Allocate<NativeFunction>(
+      "collect", [](VM& current, Fiber&, uint8_t, uint8_t) -> Value {
+        current.CollectGarbage();
+        return nil;
+      });
+  Code* code = gc->Allocate<Code>();
+  code->fast_locals = {"callee", "argument"};
+  code->const_pool = value_vector(collect);
+  append_ins(code, {Push{0}, Call{0, 0}, Pop{}, LoadFast{1}, Return{}});
+  auto* callback = gc->Allocate<Function>(code);
+  callback->arglist.nparam = 1;
+  auto* argument = gc->Allocate<String>("kept by callback local");
+
+  vm.InvokeUntilBlocked(*callback, {Value(argument)});
+
+  auto completion = vm.fibres_.back()->completion_promise;
+  ASSERT_TRUE(completion->result.has_value());
+  ASSERT_TRUE(completion->result->has_value());
+  EXPECT_EQ(completion->result->value(), "kept by callback local");
+  vm.gc_threshold_ = 1;
+  EXPECT_EQ(vm.Run(), nil);
+  vm.CollectGarbage();
+  EXPECT_TRUE(vm.scheduler_.IsIdle());
+}
+
+TEST_F(VMTest, InlineCallbackPreservesNativeCallersReturnValue) {
+  Code* callback_code = gc->Allocate<Code>();
+  callback_code->const_pool = value_vector(99);
+  append_ins(callback_code, {Push{0}, Return{}});
+  auto* callback = gc->Allocate<Function>(callback_code);
+  Fiber* caller = nullptr;
+  auto* starter = gc->Allocate<NativeFunction>(
+      "starter",
+      [callback, &caller](VM& current, Fiber& fiber, uint8_t,
+                          uint8_t) -> Value {
+        caller = &fiber;
+        current.InvokeUntilBlocked(*callback, {});
+        EXPECT_NE(current.fibres_.back(), caller);
+        return 42;
+      });
+  Code* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(starter, callback);
+  append_ins(code, {Push{0}, Call{0, 0}, Return{}});
+
+  EXPECT_EQ(run_and_get(code), 42);
+}
+
+TEST_F(VMTest, InlineCallbackFailurePropagatesOnce) {
+  Code* code = gc->Allocate<Code>();
+  code->const_pool = value_vector("callback failure");
+  append_ins(code, {Push{0}, Throw{}});
+  auto* callback = gc->Allocate<Function>(code);
+
+  try {
+    vm.InvokeUntilBlocked(*callback, {});
+    FAIL() << "Expected callback failure";
+  } catch (const RuntimeError& error) {
+    EXPECT_EQ(error.message(), "callback failure");
+  }
+  EXPECT_NO_THROW(vm.Run());
+}
+
+TEST_F(VMTest, InlineCallbackArgumentFailurePropagatesOnce) {
+  Code* code = gc->Allocate<Code>();
+  code->fast_locals = {"callee", "argument"};
+  append_ins(code, {LoadFast{1}, Return{}});
+  auto* callback = gc->Allocate<Function>(code);
+  callback->arglist.nparam = 1;
+
+  EXPECT_THROW(vm.InvokeUntilBlocked(*callback, {}), RuntimeError);
+  ASSERT_EQ(vm.fibres_.size(), 1u);
+  EXPECT_EQ(vm.fibres_.back()->state, FiberState::Dead);
+  EXPECT_NO_THROW(vm.Run());
+}
+
+TEST_F(VMTest, InlineCallbackCanCatchNativeStandardException) {
+  auto* throwing = gc->Allocate<NativeFunction>(
+      "throwing", [](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        throw std::runtime_error("native callback failure");
+      });
+  Code* code = gc->Allocate<Code>();
+  code->fast_locals = {"error"};
+  code->const_pool = value_vector(throwing, 0);
+  const size_t try_begin = code->code.size();
+  code->Append(TryBegin{});
+  append_ins(code, {Push{0}, Call{0, 0}, TryEnd{}, Push{1}, Return{}});
+  const size_t handler = code->code.size();
+  append_ins(code, {StoreFast{0}, LoadFast{0}, Return{}});
+  const size_t try_body = try_begin + 1 + sizeof(TryBegin);
+  code->Write<int32_t>(try_begin + 1, static_cast<int32_t>(handler - try_body));
+  auto* callback = gc->Allocate<Function>(code);
+
+  vm.InvokeUntilBlocked(*callback, {});
+  auto completion = vm.fibres_.back()->completion_promise;
+  ASSERT_TRUE(completion->result.has_value());
+  ASSERT_TRUE(completion->result->has_value());
+  EXPECT_EQ(completion->result->value(), "native callback failure");
+  EXPECT_EQ(vm.Run(), nil);
+}
+
+TEST_F(VMTest, SuspendedCallbackFailureRemainsReportable) {
+  auto* pending = gc->Allocate<Future>();
+  auto gate = pending->promise;
+  Code* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(pending, "continuation failure");
+  append_ins(code, {Push{0}, Await{}, Pop{}, Push{1}, Throw{}});
+  auto* callback = gc->Allocate<Function>(code);
+
+  vm.InvokeUntilBlocked(*callback, {});
+  gate->Resolve(nil);
+  EXPECT_THROW(vm.Run(), UnhandledError);
+}
+
 TEST_F(VMTest, RequestStopInterruptsRunningFiber) {
   auto* chunk = gc->Allocate<Code>();
 
   int call_count = 0;
   auto* fn = gc->Allocate<NativeFunction>(
-      "stop",
-      [&call_count](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
+      "stop", [&call_count](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
         ++call_count;
         vm.RequestStop();
         return Value();
@@ -283,6 +462,51 @@ TEST_F(VMTest, RequestStopFromTimerDoesNotWaitForLaterTimers) {
   EXPECT_TRUE(stop_callback_invoked);
   EXPECT_TRUE(vm.IsStopRequested());
   EXPECT_EQ(poller_ptr->wait_calls, 0);
+}
+
+TEST_F(VMTest, TrackedTimerStartsNextSceneAfterLastFiberFinishes) {
+  struct AdvancingPoller : IPoller {
+    explicit AdvancingPoller(MockClock* clock) : clock(clock) {}
+
+    void Wait(std::chrono::milliseconds timeout) override {
+      clock->AdvanceTime(timeout.count() > 0 ? timeout
+                                             : std::chrono::milliseconds(1));
+    }
+
+    MockClock* clock;
+  };
+  auto clock = std::make_unique<MockClock>();
+  auto poller = std::make_unique<AdvancingPoller>(clock.get());
+  vm.scheduler_ = Scheduler(std::move(poller), std::move(clock));
+
+  Code* initial = gc->Allocate<Code>();
+  initial->const_pool = value_vector(1);
+  append_ins(initial, {Push{0}, Return{}});
+  auto initial_completion = vm.AddFiber(initial)->completion_promise;
+
+  Code* menu = gc->Allocate<Code>();
+  menu->const_pool = value_vector(42);
+  append_ins(menu, {Push{0}, Return{}});
+  auto* menu_entry = gc->Allocate<Function>(menu);
+  (*vm.globals_)["menu_entry"] = Value(menu_entry);
+
+  auto pending = std::make_shared<Promise>();
+  vm.TrackPendingPromise(pending);
+  bool timer_fired = false;
+  vm.scheduler_.PushCallbackAfter(
+      [this, pending, initial_completion, menu_entry, &timer_fired] {
+        timer_fired = true;
+        EXPECT_TRUE(initial_completion->HasResult());
+        vm.CollectGarbage();
+        pending->Resolve(nil);
+        vm.AddFiber(menu_entry->chunk);
+      },
+      std::chrono::milliseconds(1));
+
+  EXPECT_EQ(vm.Run(), 42);
+  EXPECT_TRUE(timer_fired);
+  EXPECT_TRUE(pending->HasResult());
+  EXPECT_EQ(vm.CountPendingPromises(), 0u);
 }
 
 TEST_F(VMTest, NativeExceptionsEscapeVM) {

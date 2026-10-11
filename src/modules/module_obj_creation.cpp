@@ -36,6 +36,7 @@
 #include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/object_internal/drawer/text.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "core/stage.hpp"
 #include "machine/properties.hpp"
 #include "machine/rlmachine.hpp"
@@ -61,6 +62,12 @@ namespace fs = std::filesystem;
 // -----------------------------------------------------------------------
 
 namespace {
+
+void InitObjectWith(GraphicsObject& obj,
+                    std::unique_ptr<GraphicsObjectData> drawer) {
+  obj.ResetChildren();
+  obj.SetDrawer(std::move(drawer));
+}
 
 std::vector<char> LoadFile(fs::path file_path) {
   MappedFile file(file_path);
@@ -96,7 +103,7 @@ void SetObjectDataToGan(RLMachine& machine,
   // create graphics object
   auto obj_data = std::make_unique<GanGraphicsObjectData>(
       image, std::move(dec.animation_sets));
-  obj.SetDrawer(std::move(obj_data));
+  InitObjectWith(obj, std::move(obj_data));
 }
 
 typedef std::function<void(RLMachine&, GraphicsObject& obj, const string&)>
@@ -122,7 +129,7 @@ void objOfFileLoader(RLMachine& machine,
   if (file_str.ends_with("g00") || file_str.ends_with("pdt")) {
     auto surface = system.graphics().GetSurfaceNamed(filename);
     auto obj_data = std::make_unique<GraphicsObjectOfFile>(surface);
-    obj.SetDrawer(std::move(obj_data));
+    InitObjectWith(obj, std::move(obj_data));
   } else if (file_str.ends_with("anm")) {
     std::vector<char> file_content = LoadFile(full_path);
     AnmDecoder decoder(std::move(file_content));
@@ -134,7 +141,7 @@ void objOfFileLoader(RLMachine& machine,
 
     auto obj_data =
         std::make_unique<AnmGraphicsObjectData>(surface, std::move(decoder));
-    obj.SetDrawer(std::move(obj_data));
+    InitObjectWith(obj, std::move(obj_data));
   } else {
     std::ostringstream oss;
     oss << "Don't know how to handle object file: \"" << filename << "\"";
@@ -148,24 +155,24 @@ void objOfTextBuilder(RLMachine& machine,
   // The text at this point is still cp932. Convert it.
   std::string utf8str = cp932toUTF8(val, machine.GetTextEncoding());
   obj.Param().SetTextText(utf8str);
-  auto ptr = std::make_unique<GraphicsTextObject>(machine.GetSystem());
-  GraphicsTextObject* text_obj = ptr.get();
-  obj.SetDrawer(std::move(ptr));
+  auto drawer = std::make_unique<GraphicsTextObject>(machine.GetSystem());
+  GraphicsTextObject* text_obj = drawer.get();
+  InitObjectWith(obj, std::move(drawer));
   text_obj->UpdateSurface(obj);
 }
 
 void objOfDriftLoader(RLMachine& machine,
                       GraphicsObject& obj,
                       const std::string& value) {
-  obj.SetDrawer(
-      std::make_unique<DriftGraphicsObject>(machine.GetSystem(), value));
+  InitObjectWith(
+      obj, std::make_unique<DriftGraphicsObject>(machine.GetSystem(), value));
 }
 
 void objOfDigitsLoader(RLMachine& machine,
                        GraphicsObject& obj,
                        const std::string& value) {
-  obj.SetDrawer(
-      std::make_unique<DigitsGraphicsObject>(machine.GetSystem(), value));
+  InitObjectWith(
+      obj, std::make_unique<DigitsGraphicsObject>(machine.GetSystem(), value));
 }
 
 struct objGeneric_0 : public RLOpcode<IntConstant_T, StrConstant_T> {
@@ -349,7 +356,7 @@ void SetObjectDataToRect(RLMachine& machine,
                          int buf,
                          const Rect& r) {
   GraphicsObject& obj = GetGraphicsObject(machine, op, buf);
-  obj.SetDrawer(std::make_unique<ColourFilterObjectData>(r));
+  InitObjectWith(obj, std::make_unique<ColourFilterObjectData>(r));
 }
 
 struct objOfArea_0 : public RLOpcode<IntConstant_T> {

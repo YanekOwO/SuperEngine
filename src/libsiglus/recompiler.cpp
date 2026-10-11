@@ -647,10 +647,10 @@ void Recompiler::Finish() {
   patch(initial_jump_site_, bootstrap_entry);
   emit_store_function_global("%%script", main_entry_, 0);
 
-  for (const auto& record : subroutines_) {
-    const std::string entry_name = GetUsercmdId(record.source_entry);
-    emit_store_function_global(entry_name, record.bytecode_entry,
-                               record.args.size());
+  for (const UserCommandMetadata& metadata : user_commands_) {
+    const std::string entry_name = GetUsercmdId(metadata.source_entry);
+    emit_store_function_global(entry_name, metadata.bytecode_entry,
+                               metadata.args.size());
   }
 
   for (const auto& record : zlabels_) {
@@ -970,10 +970,7 @@ void Recompiler::emit_tok(const token::Subroutine& tk) {
         std::format("redefinition of user command entry {}", tk.source_entry));
   }
 
-  subroutines_.push_back(SubroutineRecord{.name = tk.name,
-                                          .source_entry = tk.source_entry,
-                                          .bytecode_entry = loc,
-                                          .args = tk.args});
+  user_commands_.emplace_back(tk.name, tk.source_entry, loc, tk.args);
 }
 void Recompiler::emit_tok(const token::LocalVar& tk) {
   emit_init_value(tk.type, tk.size);

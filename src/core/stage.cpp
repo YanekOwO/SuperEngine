@@ -78,27 +78,30 @@ void Stage::Wipe(int begin_order,
     const bool bg_exists = static_cast<bool>(background_objects[i]);
 
     const bool front_in_range =
-        fg_exists && InWipeRange(ObjOrd(foreground_objects[i]->Param()));
-    const bool back_participates =
+        fg_exists &&
+        (foreground_objects[i]->HasDrawer() ||
+         foreground_objects[i]->HasChildren()) &&
+        InWipeRange(ObjOrd(foreground_objects[i]->Param()));
+    const bool back_has_content =
         bg_exists && (background_objects[i]->HasDrawer() ||
-                      background_objects[i]->HasChildren() ||
-                      background_objects[i]->Param().wipe_erase != 0);
-    if (!front_in_range && !back_participates)
+                      background_objects[i]->HasChildren());
+    if (!front_in_range && !back_has_content)
       continue;
 
     if (fg_exists)
       objects.Assign(kLayerNext, i, foreground_objects[i]->Clone());
 
     const bool replace_front =
-        back_participates || (front_in_range && fg_exists &&
-                              foreground_objects[i]->Param().wipe_copy == 0);
+        back_has_content ||
+        (bg_exists && background_objects[i]->Param().wipe_erase) ||
+        (front_in_range && foreground_objects[i]->Param().wipe_copy == 0);
     if (!replace_front)
       continue;
 
-    if (back_participates) {
+    if (bg_exists) {
       objects.Move(kLayerFg, i, kLayerBg, i);
     } else {
-      foreground_objects[i]->FreeDataAndInitializeParams();
+      objects.Assign(kLayerFg, i, GraphicsObject());
     }
   }
 

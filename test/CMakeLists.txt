@@ -34,7 +34,7 @@ include(CTest)
 # -------------------------------------------------------------------
 # Build Unittest
 # -------------------------------------------------------------------
-file(GLOB_RECURSE TEST_SRC_FILES "*.cpp")
+file(GLOB_RECURSE TEST_SRC_FILES CONFIGURE_DEPENDS "*.cpp")
 add_executable(unittest ${TEST_SRC_FILES})
 target_include_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(unittest PRIVATE

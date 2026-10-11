@@ -24,11 +24,12 @@
 #include "libsiglus/bindings/loader.hpp"
 
 #include "libsiglus/archive.hpp"
+#include "libsiglus/intern_name.hpp"
 #include "libsiglus/parser.hpp"
 #include "libsiglus/recompiler.hpp"
 #include "libsiglus/scene.hpp"
-#include "libsiglus/token.hpp"
 #include "vm/exception.hpp"
+#include "vm/function.hpp"
 
 #include <format>
 #include <iostream>
@@ -38,15 +39,20 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 
 sr::Module* Loader::Load(int scene) {
+  if (scene < 0 ||
+      static_cast<std::size_t>(scene) >= archive_.GetScenarioCount()) {
+    throw sr::RuntimeError(std::format("scene {} not found", scene));
+  }
+
   const std::string scene_str = std::format("SCENE_{:04}", scene);
   if (auto it = scene_module_cache_.find(scene_str);
       it != scene_module_cache_.cend()) {
     return it->second;
   }
 
-  Scene scn = archive.ParseScene(scene);
+  Scene scn = archive_.ParseScene(scene);
   Parser parser(scn.scene_, scn.str_, scn.label, scn.zlabel, scn.property,
-                archive.prop_, scn.cmd, archive.cmd_, scn.id_, scn.scnname_);
+                archive_.prop_, scn.cmd, archive_.cmd_, scn.id_, scn.scnname_);
   auto parsed = parser.ParseAll();
   if (!parsed.has_value()) {
     throw sr::RuntimeError(std::format("failed to parse scene {} ({}): {}",
@@ -58,9 +64,9 @@ sr::Module* Loader::Load(int scene) {
   for (const auto& warning : warnings)
     std::cerr << warning << std::endl;
 
-  Recompiler compiler(vm.gc_);
+  Recompiler compiler(vm_.gc_);
   compiler.SetSceneProperties(scn.id_, scn.property);
-  compiler.is_debug_ = debug_;
+  compiler.is_debug_ = is_debug_;
   compiler.Compile(tokens);
   tokens.clear();
 
@@ -72,11 +78,11 @@ sr::Module* Loader::Load(int scene) {
   sr::Module* mod = compiler.module_;
 
   std::unordered_map<std::string, sr::Value> bootstrap_builtins;
-  bootstrap_builtins.reserve(vm.globals_->size() + vm.builtins_->size());
-  bootstrap_builtins.insert(vm.globals_->begin(), vm.globals_->end());
-  bootstrap_builtins.insert(vm.builtins_->begin(), vm.builtins_->end());
+  bootstrap_builtins.reserve(vm_.globals_->size() + vm_.builtins_->size());
+  bootstrap_builtins.insert(vm_.globals_->begin(), vm_.globals_->end());
+  bootstrap_builtins.insert(vm_.builtins_->begin(), vm_.builtins_->end());
 
-  sr::VM bootstrap_vm(vm.gc_);
+  sr::VM bootstrap_vm(vm_.gc_);
   bootstrap_vm.gc_threshold_ = 0;
   bootstrap_vm.globals_ = mod->globals;
   bootstrap_vm.builtins_ =
@@ -90,18 +96,75 @@ sr::Module* Loader::Load(int scene) {
                                        scene, scn.scnname_, e.what()));
   }
 
+  SceneCommandTable command_table{.scene_id = scene,
+                                  .scene_name = scn.scnname_};
+  command_table.commands.reserve(compiler.GetUserCommands().size());
+  for (const UserCommandMetadata& metadata : compiler.GetUserCommands()) {
+    const std::string entry_name = GetUsercmdId(metadata.source_entry);
+    auto fn_it = mod->globals->find(entry_name);
+    if (fn_it == mod->globals->end()) {
+      throw sr::RuntimeError(
+          std::format("failed to bootstrap user command '{}' in scene {} ({})",
+                      metadata.name, scene, scn.scnname_));
+    }
+    sr::Function* function = fn_it->second.Get_if<sr::Function>();
+    if (!function) {
+      throw sr::RuntimeError(
+          std::format("user command '{}' in scene {} ({}) is not a function",
+                      metadata.name, scene, scn.scnname_));
+    }
+    const bool inserted =
+        command_table.commands
+            .emplace(metadata.name,
+                     UserCommand{.function = function, .args = metadata.args})
+            .second;
+    if (!inserted) {
+      throw sr::RuntimeError(
+          std::format("duplicate user command '{}' in scene {} ({})",
+                      metadata.name, scene, scn.scnname_));
+    }
+  }
+
   scene_module_cache_[scene_str] = mod;
-  (*vm.builtins_)["%%siglus_module@" + scene_str] = sr::Value(mod);
+  (*vm_.builtins_)["%%siglus_module@" + scene_str] = sr::Value(mod);
+  commands_by_globals_.emplace(mod->globals.get(), std::move(command_table));
 
   return mod;
 }
 
 serilang::Module* Loader::Load(std::string const& scnname) {
-  const auto it = archive.scn_map_.find(scnname);
-  if (it == archive.scn_map_.cend())
+  const auto it = archive_.scn_map_.find(scnname);
+  if (it == archive_.scn_map_.cend())
     throw sr::RuntimeError(std::format("scene '{}' not found", scnname));
   const int scnid = it->second;
   return Load(scnid);
+}
+
+const UserCommand& Loader::ResolveUserCommand(
+    sr::Fiber& fiber,
+    std::string_view command_name) const {
+  for (auto frame_it = fiber.frames.rbegin(); frame_it != fiber.frames.rend();
+       ++frame_it) {
+    if (!frame_it->fn || !frame_it->fn->globals)
+      continue;
+
+    auto scene_it = commands_by_globals_.find(frame_it->fn->globals.get());
+    if (scene_it == commands_by_globals_.end())
+      continue;
+
+    const SceneCommandTable& scene = scene_it->second;
+    auto command_it = scene.commands.find(std::string(command_name));
+    if (command_it == scene.commands.end()) {
+      throw sr::RuntimeError(
+          std::format("user command '{}' not found in scene {} ({})",
+                      command_name, scene.scene_id, scene.scene_name));
+    }
+    return command_it->second;
+  }
+
+  throw sr::RuntimeError(std::format(
+      "cannot resolve user command '{}': caller is not in a loaded scene",
+      command_name));
 }
 
 }  // namespace libsiglus::binding

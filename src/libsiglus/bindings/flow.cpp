@@ -71,10 +71,9 @@ static sr::Function* ResolveEntry(sr::Module& mod, const std::string& entry) {
   return fn;
 }
 
-sr::Code* MakeSceneEntryThunk(sr::VM& vm,
-                              Loader& loader,
-                              std::string scene_name,
-                              const std::string& entry_name) {
+sr::Function* ResolveSceneEntry(Loader& loader,
+                                std::string scene_name,
+                                const std::string& entry_name) {
   if (scene_name.empty())
     throw sr::RuntimeError("scene name is empty");
 
@@ -82,13 +81,7 @@ sr::Code* MakeSceneEntryThunk(sr::VM& vm,
   if (!mod)
     throw sr::RuntimeError("could not load destination scene");
 
-  sr::Function* fn = ResolveEntry(*mod, entry_name);
-  sr::Code* thunk = vm.gc_->Allocate<sr::Code>();
-  thunk->const_pool.emplace_back(fn);
-  thunk->Append(sr::Push{0});
-  thunk->Append(sr::Call{.argcnt = 0, .kwargcnt = 0});
-  thunk->Append(sr::Return{});
-  return thunk;
+  return ResolveEntry(*mod, entry_name);
 }
 
 void BindFlow(SiglusRuntime& rt) {
@@ -136,13 +129,7 @@ void BindFlow(SiglusRuntime& rt) {
           throw sr::RuntimeError("jump could not load destination scene");
 
         sr::Function* fn = ResolveEntry(*mod, GetZlabelId(zlabel));
-        sr::Code* thunk = vm.gc_->Allocate<sr::Code>();
-        thunk->const_pool.emplace_back(fn);
-        thunk->Append(sr::Push{0});
-        thunk->Append(sr::Call{.argcnt = 0, .kwargcnt = 0});
-        thunk->Append(sr::Return{});
-
-        vm.AddFiber(thunk);
+				vm.ScheduleExecute(fn);
         fiber.frames.clear();
       },
       sb::vararg);

@@ -24,9 +24,9 @@
 
 #pragma once
 
-#include "vm/iobject.hpp"
-
 #include "utilities/expected.hpp"
+#include "vm/iobject.hpp"
+#include "vm/value.hpp"
 
 #include <cstdint>
 #include <memory>

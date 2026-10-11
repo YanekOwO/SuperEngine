@@ -25,6 +25,7 @@
 #pragma once
 
 #include "core/asset_scanner.hpp"
+#include "core/counter.hpp"
 #include "core/event_listener.hpp"
 #include "core/gameexe.hpp"
 #include "core/interaction_manager.hpp"
@@ -38,6 +39,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace serilang {
 class VM;
@@ -51,16 +53,19 @@ class StrListFacade;
 class BgmTable;
 class KidokuTable;
 class IPlatformImplementor;
-class Counter;
-class CounterList;
 class MaskList;
 
 namespace libsiglus {
 using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
 using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
 
+namespace binding {
+class FrameActionManager;
+}  // namespace binding
 class Archive;
 class SiglusSceneRenderer;
+
+using SiglusWipeEndHook = std::function<void()>;
 
 struct SiglusRuntime {
   std::filesystem::path base_pth, save_pth;
@@ -79,6 +84,7 @@ struct SiglusRuntime {
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
+  std::shared_ptr<binding::FrameActionManager> frame_action_manager;
   std::shared_ptr<MaskList> mask_list;
 
   std::shared_ptr<SiglusSceneRenderer> renderer;
@@ -86,6 +92,11 @@ struct SiglusRuntime {
   std::shared_ptr<InputListener> input_event_listener;
   std::function<void()> exec_sdl_callback;
   std::vector<std::function<void()>> reset_local_memory;
+  std::shared_ptr<SiglusWipeEndHook> finish_active_wipe =
+      std::make_shared<SiglusWipeEndHook>();
+  std::function<void()> update_wipe_after_frame_actions;
+  std::shared_ptr<bool> no_wipe_animation = std::make_shared<bool>(false);
+  std::shared_ptr<bool> skip_wipe_animation = std::make_shared<bool>(true);
   std::shared_ptr<IPlatformImplementor> platform_implementor;
 
   std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;

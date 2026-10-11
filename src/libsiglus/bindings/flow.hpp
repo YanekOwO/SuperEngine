@@ -4,19 +4,19 @@
 
 #pragma once
 
+#include "vm/value_fwd.hpp"
+
 #include <string>
 
 namespace serilang {
-class Code;
 class VM;
-}  // namespace serilang
+}
 
 namespace libsiglus::binding {
 class Loader;
 
-serilang::Code* MakeSceneEntryThunk(serilang::VM& vm,
-                                    Loader& loader,
-                                    std::string scene_name,
-                                    const std::string& entry_name);
+serilang::Function* ResolveSceneEntry(Loader& loader,
+                                      std::string scene_name,
+                                      const std::string& entry_name);
 
 }  // namespace libsiglus::binding

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2026 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,8 +22,10 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/wipe.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/frame_action.hpp"
 #include "core/frame_counter.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -32,7 +35,6 @@
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
-#include "vm/dict.hpp"
 #include "vm/future.hpp"
 #include "vm/list.hpp"
 #include "vm/promise.hpp"
@@ -42,6 +44,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -51,6 +54,27 @@
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
+
+void WipeCompletion::RequestFinish(int requested_result,
+                                   int minimum_total_boundaries) {
+  if (finish_after_boundary) {
+    // Input interruption takes precedence over natural completion.
+    if (requested_result != 0) {
+      result = requested_result;
+      finish_after_boundary =
+          std::min(*finish_after_boundary, regular_boundaries + 1);
+    }
+    return;
+  }
+  result = requested_result;
+  finish_after_boundary =
+      std::max(std::max(1, minimum_total_boundaries), regular_boundaries + 1);
+}
+
+bool WipeCompletion::AfterFrameActions() {
+  ++regular_boundaries;
+  return finish_after_boundary && regular_boundaries >= *finish_after_boundary;
+}
 
 constexpr int kWipeOptionMax = 8;
 
@@ -163,14 +187,34 @@ struct WipeParams {
 };
 
 struct SiglusWipe {
-  SiglusWipe(System* system, Stage* stage) : system_(system), stage_(stage) {}
-  ~SiglusWipe() { EndCurrent(0); }
+  struct Control {
+    SiglusWipe* owner = nullptr;
+  };
+
+  SiglusWipe(System* system,
+             Stage* stage,
+             std::shared_ptr<bool> no_wipe_animation,
+             std::shared_ptr<bool> skip_wipe_animation,
+             std::shared_ptr<Control> control)
+      : system_(system),
+        stage_(stage),
+        no_wipe_animation_(std::move(no_wipe_animation)),
+        skip_wipe_animation_(std::move(skip_wipe_animation)),
+        control_(std::move(control)) {
+    control_->owner = this;
+  }
+
+  // The VM (and therefore this native object) is destroyed after several
+  // runtime services. Teardown must only invalidate the external control
+  // hook; touching the borrowed System, Stage, or manager pointers here would
+  // use already-destroyed objects.
+  ~SiglusWipe() { control_->owner = nullptr; }
 
   struct ActiveWipe {
     std::shared_ptr<sr::Promise> promise;
     int key_wait_mode = -1;
-    int result = 0;
     bool cancelled = false;
+    WipeCompletion completion;
   };
 
   FrameCounter MakeWipeFrameCounter(const WipeParams& params,
@@ -203,44 +247,65 @@ struct SiglusWipe {
              Stage* stage,
              WipeParams params,
              std::weak_ptr<ActiveWipe> active,
-             FrameCounter progress_counter)
+             FrameCounter progress_counter,
+             std::shared_ptr<bool> skip_wipe_animation,
+             std::function<void(int, int)> finish_stage)
         : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
           system_(system),
           stage_(stage),
           params_(std::move(params)),
           active_(std::move(active)),
           start_ticks_(system ? system->event().GetTicks() : 0),
-          progress_counter_(std::move(progress_counter)) {}
+          progress_counter_(std::move(progress_counter)),
+          skip_wipe_animation_(std::move(skip_wipe_animation)),
+          finish_stage_(std::move(finish_stage)) {}
 
     TaskCoroutine Run() override {
+      // Polling starts after the priming interval. Start handles
+      // already-terminal wipes separately so their exact two regular
+      // frame-action boundaries do not depend on timer phase.
+      const WaitOutcome primed =
+          co_await WaitFor(kPollInterval, ShouldInterruptOnInput());
+      if (primed == WaitOutcome::InterruptedByInput) {
+        FinishStage(1);
+        co_return 1;
+      }
+
       while (true) {
         if (IsCancelled())
           co_return CurrentResult();
 
         if (!system_ || !stage_) {
-          FinishStage();
+          FinishStage(0);
           co_return 0;
         }
 
-        if (system_->ShouldFastForward() ||
-            system_->graphics().should_skip_animations()) {
-          FinishStage();
+        const bool fast_forward = system_->ShouldFastForward();
+        if (fast_forward && params_.wait_flag) {
+          // Legacy's wipe-wait process explicitly ends a skipped wipe before
+          // its next regular traversal. StartPrepared pre-schedules this case
+          // when skipping is already active; this also handles it becoming
+          // active later.
+          FinishStage(0, 1);
           co_return 0;
         }
 
-        const int elapsed = ElapsedTime();
+        // A non-waiting wipe is not force-ended by skipping. Its game-time
+        // clock advances at Siglus' 32x rate instead.
+        const int elapsed = ElapsedTime(fast_forward);
         if (elapsed >= params_.wipe_time) {
-          FinishStage();
+          FinishStage(0, 3);
           co_return 0;
         }
 
-        float progress = progress_counter_.ReadFrame();
+        float progress =
+            fast_forward ? ProgressAt(elapsed) : progress_counter_.ReadFrame();
         stage_->SetTransitionRenderAlpha(progress, 1.0 - progress);
 
         const WaitOutcome outcome =
             co_await WaitFor(kPollInterval, ShouldInterruptOnInput());
         if (outcome == WaitOutcome::InterruptedByInput) {
-          FinishStage();
+          FinishStage(1);
           co_return 1;
         }
       }
@@ -261,7 +326,7 @@ struct SiglusWipe {
 
     int CurrentResult() const {
       if (std::shared_ptr<ActiveWipe> active = active_.lock())
-        return active->result;
+        return active->completion.result;
       return 0;
     }
 
@@ -276,21 +341,37 @@ struct SiglusWipe {
       if (key_wait_mode == 1)
         return true;
 
-      return system_ && system_->graphics().should_skip_animations() != 0;
+      return !skip_wipe_animation_ || *skip_wipe_animation_;
     }
 
-    int ElapsedTime() const {
+    int ElapsedTime(bool fast_forward) const {
       const unsigned int now = system_->event().GetTicks();
-      return params_.start_time + static_cast<int>(now - start_ticks_);
+      const std::uint64_t real_elapsed = now - start_ticks_;
+      const std::uint64_t multiplier = fast_forward ? 32 : 1;
+      const std::uint64_t scaled = std::min<std::uint64_t>(
+          real_elapsed * multiplier,
+          static_cast<std::uint64_t>(std::numeric_limits<int>::max()));
+      return params_.start_time + static_cast<int>(scaled);
     }
 
-    void FinishStage() {
-      if (!stage_)
-        return;
+    float ProgressAt(int elapsed) const {
+      if (params_.wipe_time <= 0)
+        return 1.0f;
+      InterpolationMode mode = InterpolationMode::Linear;
+      if (params_.speed_mode == 1)
+        mode = InterpolationMode::Accelerate;
+      else if (params_.speed_mode == 2)
+        mode = InterpolationMode::Decelerate;
+      const double normalized = std::clamp(
+          static_cast<double>(elapsed) / params_.wipe_time, 0.0, 1.0);
+      return static_cast<float>(
+          Interpolation(Range(0, 1), InterpolationType::OneShot, mode)
+              .ValueAt(normalized));
+    }
 
-      stage_->ClearTransitionRenderState();
-      for (auto& object : stage_->objects[kLayerNext])
-        object.reset();
+    void FinishStage(int result, int regular_boundaries = 1) {
+      if (finish_stage_)
+        finish_stage_(result, regular_boundaries);
     }
 
     System* system_ = nullptr;
@@ -299,86 +380,124 @@ struct SiglusWipe {
     std::weak_ptr<ActiveWipe> active_;
     unsigned int start_ticks_ = 0;
     FrameCounter progress_counter_;
+    std::shared_ptr<bool> skip_wipe_animation_;
+    std::function<void(int, int)> finish_stage_;
   };
+
+  static void CancelObjectActions(
+      const std::shared_ptr<GraphicsObject>& object) {
+    if (!object)
+      return;
+    object->frame_action_.Reset();
+    object->frame_action_list_.clear();
+    for (const auto& child : object->GetChildren())
+      CancelObjectActions(child);
+  }
+
+  void ClearWipeState() {
+    if (!stage_)
+      return;
+    for (auto& group : stage_->groups[kLayerNext])
+      group.reset();
+    for (auto& object : stage_->objects[kLayerNext]) {
+      CancelObjectActions(object);
+      object.reset();
+    }
+    for (auto& effect : stage_->effects[kLayerNext])
+      effect.reset();
+    stage_->ClearTransitionRenderState();
+  }
+
+  void UpdateAfterFrameActions() {
+    if (active_ && active_->completion.AfterFrameActions())
+      EndCurrent(active_->completion.result);
+  }
+
+  void ScheduleFinishActive(const std::shared_ptr<ActiveWipe>& active,
+                            int result,
+                            int regular_boundaries = 1) {
+    if (!active || active_ != active || active->cancelled)
+      return;
+    active->completion.RequestFinish(result, regular_boundaries);
+  }
 
   sr::Value Start(sr::VM& vm, WipeParams params) {
     EndCurrent(0);
-
     if (!stage_)
       return MakeResolvedFuture(*vm.gc_);
 
+    // Wipe clones old foreground actions into Next. Cancel only allocations
+    // displaced by the swap, after their transition copies have been made.
+    auto previous_foreground = stage_->objects[kLayerFg];
     stage_->Wipe(params.begin_order, params.end_order, params.begin_layer,
                  params.end_layer);
-
-    if (!system_) {
-      ClearWipeState();
-      return MakeResolvedFuture(*vm.gc_);
+    for (std::size_t i = 0; i < previous_foreground.size(); ++i) {
+      if (i >= stage_->objects[kLayerFg].size() ||
+          previous_foreground[i] != stage_->objects[kLayerFg][i]) {
+        CancelObjectActions(previous_foreground[i]);
+      }
     }
 
-    if (ShouldCompleteImmediately(params)) {
+    if (!system_ || (no_wipe_animation_ && *no_wipe_animation_)) {
       ClearWipeState();
       return MakeResolvedFuture(*vm.gc_);
     }
 
     auto active = std::make_shared<ActiveWipe>();
+    active->promise = std::make_shared<sr::Promise>();
     active->key_wait_mode = params.wait_flag ? params.key_wait_mode : -1;
     active_ = active;
 
+    const bool wait_flag = params.wait_flag;
+    const bool initially_terminal =
+        params.wipe_time <= 0 || params.start_time >= params.wipe_time;
     auto progress_counter =
         MakeWipeFrameCounter(params, system_->event().GetClock());
-    const double initial_progress = progress_counter.ReadFrame();
+    const double initial_progress =
+        initially_terminal ? 0.0 : progress_counter.ReadFrame();
     stage_->SetTransitionRenderAlpha(initial_progress, 1.0 - initial_progress);
 
-    const bool wait_flag = params.wait_flag;
-    auto task =
-        std::make_unique<WipeTask>(vm, system_, stage_, std::move(params),
-                                   active, std::move(progress_counter));
+    if (initially_terminal) {
+      // Keep Next through the command's priming frame and the next traversal.
+      ScheduleFinishActive(active, 0, 2);
+    } else if (system_->ShouldFastForward() && wait_flag) {
+      ScheduleFinishActive(active, 0, 1);
+    }
+
+    std::weak_ptr<ActiveWipe> weak_active = active;
+    auto task = std::make_unique<WipeTask>(
+        vm, system_, stage_, std::move(params), active,
+        std::move(progress_counter), skip_wipe_animation_,
+        [control = control_, weak_active](int result, int regular_boundaries) {
+          if (control->owner) {
+            control->owner->ScheduleFinishActive(weak_active.lock(), result,
+                                                 regular_boundaries);
+          }
+        });
     FutureBackedCoroutineTask pending(std::move(task));
-    pending.Start();  // eager start is required
+    pending.Start();
     sr::Future* future = pending_.MakeFuture(*vm.gc_, std::move(pending));
-    active->promise = future->promise;
     vm.TrackPendingPromise(future->promise);
 
-    if (!wait_flag)
-      return MakeResolvedFuture(*vm.gc_);
-
-    return sr::Value(future);
+    return wait_flag ? MakeFutureForActive(vm) : MakeResolvedFuture(*vm.gc_);
   }
 
   sr::Value Wait(sr::VM& vm, int key_wait_mode) {
     if (!IsActive())
       return MakeResolvedFuture(*vm.gc_);
-
-    if (active_)
-      active_->key_wait_mode = key_wait_mode;
-
+    active_->key_wait_mode = key_wait_mode;
     return MakeFutureForActive(vm);
   }
 
   void EndCurrent(int result) {
-    if (!active_)
-      return;
-
-    active_->result = result;
-    active_->cancelled = true;
-    if (active_->promise)
-      active_->promise->Resolve(sr::Value(result));
-    active_ = nullptr;
-    ClearWipeState();
-  }
-
-  void ClearWipeState() {
-    if (stage_) {
-      stage_->ClearTransitionRenderState();
-      for (auto& object : stage_->objects[kLayerNext])
-        object.reset();
+    auto previous = std::exchange(active_, {});
+    if (previous) {
+      previous->completion.result = result;
+      previous->cancelled = true;
     }
-  }
-
-  bool ShouldCompleteImmediately(const WipeParams& params) const {
-    return params.wipe_time <= 0 || params.start_time >= params.wipe_time ||
-           system_->graphics().should_skip_animations() ||
-           system_->ShouldFastForward();
+    ClearWipeState();
+    if (previous && previous->promise)
+      previous->promise->Resolve(sr::Value(result));
   }
 
   bool IsActive() const {
@@ -393,6 +512,9 @@ struct SiglusWipe {
 
   System* system_ = nullptr;
   Stage* stage_ = nullptr;
+  std::shared_ptr<bool> no_wipe_animation_;
+  std::shared_ptr<bool> skip_wipe_animation_;
+  std::shared_ptr<Control> control_;
   std::shared_ptr<ActiveWipe> active_;
   PendingCoroutineTasks pending_;
 };
@@ -401,7 +523,21 @@ void BindWipe(SiglusRuntime& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusWipe> wipe_cls(m, "Wipe", false);
-  auto wipe = wipe_cls.inst("wipe", runtime.system.get(), runtime.stage.get());
+  auto control = std::make_shared<SiglusWipe::Control>();
+  auto wipe = wipe_cls.inst("wipe", runtime.system.get(), runtime.stage.get(),
+                            runtime.no_wipe_animation,
+                            runtime.skip_wipe_animation, control);
+
+  if (!runtime.finish_active_wipe)
+    runtime.finish_active_wipe = std::make_shared<SiglusWipeEndHook>();
+  *runtime.finish_active_wipe = [control] {
+    if (control->owner)
+      control->owner->EndCurrent(0);
+  };
+  runtime.update_wipe_after_frame_actions = [control] {
+    if (control->owner)
+      control->owner->UpdateAfterFrameActions();
+  };
 
   wipe.def(
       "wipe",

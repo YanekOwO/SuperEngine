@@ -24,6 +24,7 @@
 
 #include "core/object.hpp"
 
+#include "core/frame_action.hpp"
 #include "core/object_internal/animator.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
@@ -65,9 +66,7 @@ GraphicsObject GraphicsObject::Clone() const {
   GraphicsObject result;
   result.param_ = param_;
   result.file_path_ = file_path_;
-  if (object_data_) {
-    result.object_data_ = object_data_->Clone();
-  }
+  result.object_data_ = object_data_ ? object_data_->Clone() : nullptr;
 
   result.object_mutators_.reserve(object_mutators_.size());
   for (const auto& it : object_mutators_)
@@ -79,11 +78,16 @@ GraphicsObject GraphicsObject::Clone() const {
       result.child_[i] = std::make_shared<GraphicsObject>(child_[i]->Clone());
   }
 
+  result.frame_action_ = frame_action_;
+  result.frame_action_list_ = frame_action_list_;
+
   return result;
 }
 
 GraphicsObject::GraphicsObject(GraphicsObject&& rhs)
-    : param_(rhs.param_),
+    : frame_action_(std::move(rhs.frame_action_)),
+      frame_action_list_(std::move(rhs.frame_action_list_)),
+      param_(rhs.param_),
       object_data_(nullptr),
       file_path_(std::move(rhs.file_path_)),
       object_mutators_(),
@@ -95,9 +99,12 @@ GraphicsObject::GraphicsObject(GraphicsObject&& rhs)
 
   rhs.param_ = ObjectParameter();
   rhs.file_path_.clear();
+  rhs.frame_action_list_.clear();
 }
 
 GraphicsObject& GraphicsObject::operator=(GraphicsObject&& rhs) {
+  if (this == &rhs)
+    return *this;
   param_ = rhs.param_;
   file_path_ = std::move(rhs.file_path_);
   if (rhs.object_data_) {
@@ -107,10 +114,13 @@ GraphicsObject& GraphicsObject::operator=(GraphicsObject&& rhs) {
   }
 
   object_mutators_ = std::move(rhs.object_mutators_);
+  frame_action_ = std::move(rhs.frame_action_);
+  frame_action_list_ = std::move(rhs.frame_action_list_);
   child_ = std::move(rhs.child_);
 
   rhs.param_ = ObjectParameter();
   rhs.file_path_.clear();
+  rhs.frame_action_list_.clear();
 
   return *this;
 }
@@ -147,26 +157,8 @@ const GraphicsObjectData& GraphicsObject::GetDrawer() const {
   }
 }
 
-const std::string& GraphicsObject::FilePath() const { return file_path_; }
-
-void GraphicsObject::SetFilePath(std::string path) {
-  file_path_ = std::move(path);
-}
-
-void GraphicsObject::ClearFilePath() { file_path_.clear(); }
-
 void GraphicsObject::SetDrawer(std::unique_ptr<GraphicsObjectData> obj) {
-  child_.clear();
   object_data_ = std::move(obj);
-}
-
-std::vector<std::shared_ptr<GraphicsObject>>& GraphicsObject::GetChildren() {
-  return child_;
-}
-
-const std::vector<std::shared_ptr<GraphicsObject>>&
-GraphicsObject::GetChildren() const {
-  return child_;
 }
 
 GraphicsObject* GraphicsObject::GetChild(std::size_t idx) {
@@ -237,10 +229,14 @@ void GraphicsObject::EndObjectMutatorMatching(int repno,
 }
 
 void GraphicsObject::FreeObjectData() {
-  object_data_.reset();
-  file_path_.clear();
+  FreeOwnObjectData();
   object_mutators_.clear();
   child_.clear();
+}
+
+void GraphicsObject::FreeOwnObjectData() {
+  object_data_.reset();
+  file_path_.clear();
 }
 
 void GraphicsObject::InitializeParams() {
@@ -248,7 +244,9 @@ void GraphicsObject::InitializeParams() {
   object_mutators_.clear();
 }
 
-void GraphicsObject::FreeDataAndInitializeParams() {
+void GraphicsObject::Reset() {
+  frame_action_.Reset();
+  frame_action_list_.clear();
   object_data_.reset();
   file_path_.clear();
   param_ = ObjectParameter();

@@ -61,6 +61,14 @@ inline static auto b(Type type, Node::var_t node) {
   });
 }
 
+static Builder b_value_getter(std::string_view member, Type type) {
+  return Builder([member, type](Builder::Ctx& ctx) {
+    ctx.chain.nodes.emplace_back(Type::Callable, Member{member});
+    ctx.chain.nodes.emplace_back(type, Call{});
+    ctx.elmcode = ctx.elmcode.subspan(1);
+  });
+}
+
 struct CallableTarget {
   std::optional<int> overload_id;
   std::string_view name;
@@ -426,7 +434,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
       static const auto mp = make_flatmap<Builder>(
           {id[1] | b_callable("start"), id[3] | b_callable("start_real"),
            id[2] | b_callable("end", Type::None),
-           id[0] | b(Type::Counter, Member("counter")),
+           id[0] | b_value_getter("counter", Type::Counter),
            id[4] | b_callable("is_end_action", Type::Int)});
       return &mp;
     }

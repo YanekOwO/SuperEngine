@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -227,6 +228,58 @@ Fiber* VM::AddFiber(Code* chunk) {
   return fiber;
 }
 
+Fiber* VM::ScheduleExecute(Function* fn) {
+  if (!fn)
+    throw std::runtime_error("failed to execute a nullptr function");
+  Code* thunk = gc_->Allocate<Code>();
+  thunk->const_pool.emplace_back(Value(fn));
+  thunk->Append(Push{0});
+  thunk->Append(Call{.argcnt = 0, .kwargcnt = 0});
+  thunk->Append(::serilang::Return{});
+  return AddFiber(thunk);
+}
+
+void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
+  if (arguments.size() > std::numeric_limits<uint8_t>::max())
+    throw RuntimeError("callback supports at most 255 positional arguments");
+
+  Fiber* fiber = gc_->Allocate<Fiber>();
+  fiber->discard_result = true;
+  fibres_.push_back(fiber);
+  push(fiber->op_stack, Value(&callback));
+  for (Value& argument : arguments)
+    push(fiber->op_stack, std::move(argument));
+  try {
+    callback.Call(*this, *fiber, static_cast<uint8_t>(arguments.size()), 0);
+    if (fiber->state == FiberState::New)
+      fiber->state = FiberState::Running;
+    while (!stop_requested_ && fiber->IsRunning())
+      ExecuteFiber(fiber);
+  } catch (const RuntimeError& error) {
+    if (fiber->state == FiberState::Dead)
+      throw;
+    fiber->Kill(unexpected(error.message()));
+  } catch (const std::exception& error) {
+    if (fiber->state == FiberState::Dead)
+      throw;
+    fiber->Kill(unexpected(std::string(error.what())));
+  } catch (...) {
+    if (fiber->state == FiberState::Dead)
+      throw;
+    fiber->Kill(unexpected(
+        std::string("callback failed with a non-standard exception")));
+  }
+
+  // The caller handles an inline error. The promise's observation count keeps
+  // the later dead-fiber sweep from reporting that same failure a second time.
+  auto completion = fiber->completion_promise;
+  if (fiber->state == FiberState::Dead && completion->result.has_value() &&
+      !completion->result->has_value()) {
+    completion->AddWaker([](const auto&) {});
+    throw RuntimeError(completion->result->error());
+  }
+}
+
 void VM::CollectGarbage() {
   gc_->UnmarkAll();
   GCVisitor collector(*gc_);
@@ -265,7 +318,8 @@ Value VM::Run() {
         try {
           ExecuteFiber(next);
         } catch (const RuntimeError& e) {
-          // Uncaught exception terminates fiber
+          if (next->state == FiberState::Dead)
+            throw;
           next->Kill(unexpected(e.message()));
         }
 
@@ -746,6 +800,27 @@ void VM::ExecuteFiber(Fiber* fib) {
           Value awaiter(fib);
           Value awaited = pop(fib->op_stack);
 
+          std::shared_ptr<Promise> ready = get_promise(awaited);
+          if (!ready) {
+            Error(*fib, "object is not awaitable: " + awaited.Desc());
+            return;
+          }
+          if (ready->HasResult()) {
+            ready->AddWaker([](const auto&) {});
+            if (ready->result->has_value())
+              push(fib->op_stack, ready->result->value());
+            else {
+              Error(*fib, ready->result->error());
+              return;
+            }
+            if (Fiber* awaited_fiber = awaited.Get_if<Fiber>();
+                awaited_fiber &&
+                awaited_fiber->state == FiberState::Suspended) {
+              scheduler_.PushTask(awaited_fiber);
+            }
+            break;
+          }
+
           fib->state = FiberState::Suspended;
           auto cb = [vm = this, fib, awaited_fib = awaited.Get_if<Fiber>()](
                         const expected<Value, std::string>& result) {
@@ -884,9 +959,10 @@ void VM::SweepDeadFibres() {
     if (has_pending_result) {
       if (!promise->result.has_value()) [[unlikely]]
         last_ = nil;  // unreachable
-      else if (promise->result->has_value())
-        last_ = promise->result->value();  // success case
-      else
+      else if (promise->result->has_value()) {
+        if (!f->discard_result)
+          last_ = promise->result->value();  // success case
+      } else
         throw UnhandledError(promise->result->error());  // error case
     }
     return true;

@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "core/frame_action.hpp"
 #include "core/object_internal/object_parameter.hpp"
 #include "core/render_geometry.hpp"
 
@@ -75,9 +76,9 @@ class GraphicsObject {
 
   int PixelWidth() const;
   int PixelHeight() const;
-  const std::string& FilePath() const;
-  void SetFilePath(std::string path);
-  void ClearFilePath();
+  inline const std::string& FilePath() const { return file_path_; }
+  inline void SetFilePath(std::string path) { file_path_.swap(path); }
+  inline void ClearFilePath() { file_path_.clear(); }
 
   // Drawer (aka. graphics object data)
   inline bool HasDrawer() const { return object_data_.operator bool(); }
@@ -101,25 +102,34 @@ class GraphicsObject {
 
   // Children objects
   inline bool HasChildren() const { return !child_.empty(); }
-  std::vector<std::shared_ptr<GraphicsObject>>& GetChildren();
-  const std::vector<std::shared_ptr<GraphicsObject>>& GetChildren() const;
+  inline std::vector<std::shared_ptr<GraphicsObject>>& GetChildren() {
+    return child_;
+  }
+  inline const std::vector<std::shared_ptr<GraphicsObject>>& GetChildren()
+      const {
+    return child_;
+  }
   GraphicsObject* GetChild(std::size_t idx);
   const GraphicsObject* GetChild(std::size_t idx) const;
   GraphicsObject& TouchChild(std::size_t idx);
   void SetChild(std::size_t idx, GraphicsObject&& obj);
-  void ResetChildren(std::size_t count);
+  void ResetChildren(std::size_t count = 0);
   void EnsureChildCapacity(std::size_t count);
 
   // Frees the object data. Corresponds to objFree, but is also invoked by
   // other commands.
   void FreeObjectData();
 
+  // Frees only this object's drawable/type data. Siglus Object.free keeps
+  // child objects and frame-action state intact.
+  void FreeOwnObjectData();
+
   // Resets/reinitializes all the object parameters without deleting the
   // loaded graphics object data.
   void InitializeParams();
 
   // Both frees the object data and initializes parameters.
-  void FreeDataAndInitializeParams();
+  void Reset();
 
   // Called each pass through the gameloop to see if this object needs
   // to force a redraw, or something.
@@ -142,6 +152,9 @@ class GraphicsObject {
 
   void EndAllMutators();
   std::size_t CountMutators() const;
+
+  FrameAction frame_action_;
+  FrameActionList frame_action_list_;
 
  private:
   // Class to manage the actual implementation data

@@ -23,12 +23,13 @@
 
 #include <gtest/gtest.h>
 
+#include "core/frame_action.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/object_mutator.hpp"
 #include "mock_clock.hpp"
 #include "mock_graphics_object_data.hpp"
+#include "vm/function.hpp"
 
-#include <chrono>
 #include <memory>
 
 using std::chrono_literals::operator""ms;
@@ -112,6 +113,73 @@ TEST_F(GraphicsObjectTest, MoveTransfersFilePath) {
   EXPECT_TRUE(other.FilePath().empty());
 }
 
+TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
+  EXPECT_FALSE(obj.frame_action_.IsActive());
+  EXPECT_EQ(obj.frame_action_.counter, nullptr);
+  EXPECT_EQ(obj.frame_action_list_.size(), 0u);
+  serilang::Function callback(nullptr);
+  auto& action = obj.frame_action_;
+  action.function = &callback;
+  action.arguments = {12, std::string("original")};
+  action.end_time = 100;
+  action.end_action = true;
+  action.GetCounter()->Start(false);
+  action.counter->Advance(37, 37);
+  obj.frame_action_list_.resize(2);
+  auto& channel = obj.frame_action_list_[0];
+  channel.function = &callback;
+  channel.end_action = true;
+  channel.GetCounter()->Set(7);
+  std::weak_ptr<Counter> counter = action.counter;
+  std::weak_ptr<Counter> channel_counter = channel.counter;
+
+  GraphicsObject clone = obj.Clone();
+  auto& copied = clone.frame_action_;
+  EXPECT_NE(copied.counter, action.counter);
+  EXPECT_EQ(copied.function, &callback);
+  EXPECT_EQ(copied.arguments, action.arguments);
+  EXPECT_EQ(copied.end_time, 100);
+  EXPECT_FALSE(copied.end_action);
+  ASSERT_EQ(clone.frame_action_list_.size(), 2u);
+  EXPECT_NE(clone.frame_action_list_[0].counter, channel.counter);
+  EXPECT_EQ(clone.frame_action_list_[0].function, &callback);
+  EXPECT_EQ(clone.frame_action_list_[0].counter->Get(), 7);
+  EXPECT_FALSE(clone.frame_action_list_[0].end_action);
+  EXPECT_FALSE(clone.frame_action_list_[1].IsActive());
+  EXPECT_EQ(clone.frame_action_list_[1].counter, nullptr);
+
+  copied.counter->Advance(3, 3);
+  copied.arguments[1] = std::string("copy");
+  EXPECT_EQ(copied.counter->Get(), 40);
+  EXPECT_EQ(action.counter->Get(), 37);
+  EXPECT_EQ(std::get<std::string>(action.arguments[1]), "original");
+
+  GraphicsObject moved = std::move(obj);
+  EXPECT_EQ(moved.frame_action_.function, &callback);
+  EXPECT_EQ(moved.frame_action_.counter, counter.lock());
+  EXPECT_EQ(moved.frame_action_.counter->Get(), 37);
+  EXPECT_TRUE(moved.frame_action_.end_action);
+  ASSERT_EQ(moved.frame_action_list_.size(), 2u);
+  EXPECT_EQ(moved.frame_action_list_[0].counter, channel_counter.lock());
+  EXPECT_FALSE(obj.frame_action_.IsActive());
+  EXPECT_EQ(obj.frame_action_.counter, nullptr);
+  EXPECT_EQ(obj.frame_action_list_.size(), 0u);
+  EXPECT_EQ(obj.frame_action_.GetCounter()->Get(), 0);
+  obj.frame_action_.counter->Set(9);
+  GraphicsObject assigned;
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.frame_action_.function, &callback);
+  EXPECT_EQ(assigned.frame_action_.counter, counter.lock());
+  EXPECT_EQ(assigned.frame_action_.end_time, 100);
+  ASSERT_EQ(assigned.frame_action_list_.size(), 2u);
+  EXPECT_EQ(assigned.frame_action_list_[0].counter, channel_counter.lock());
+  EXPECT_FALSE(moved.frame_action_.IsActive());
+  EXPECT_EQ(moved.frame_action_.counter, nullptr);
+  EXPECT_EQ(moved.frame_action_list_.size(), 0u);
+  EXPECT_EQ(moved.frame_action_.GetCounter()->Get(), 0);
+  EXPECT_EQ(assigned.frame_action_.counter->Get(), 37);
+}
+
 TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {
   obj.ResetChildren(2);
   GraphicsObject& child = obj.TouchChild(1);
@@ -162,14 +230,15 @@ TEST_F(GraphicsObjectTest, ClonedChildrenHaveIndependentWeakHandles) {
   EXPECT_TRUE(copied.expired());
 }
 
-TEST_F(GraphicsObjectTest, SetObjectDataClearsChildren) {
+TEST_F(GraphicsObjectTest, SetObjectDataShouldNotClearChildren) {
   obj.ResetChildren(1);
   obj.TouchChild(0).Param().SetX(42);
 
   SetDummyData(obj);
 
   EXPECT_TRUE(obj.HasDrawer());
-  EXPECT_FALSE(obj.HasChildren());
+  EXPECT_TRUE(obj.HasChildren())
+      << "Setting object drawer should not reset children objects";
 }
 
 TEST_F(GraphicsObjectTest, ResetChildrenClearsFilePath) {
@@ -211,7 +280,7 @@ TEST_F(GraphicsObjectTest, FreeDataAndInitializeParamsClearsChildren) {
   obj.Param().SetX(42);
   obj.SetFilePath("bg47");
 
-  obj.FreeDataAndInitializeParams();
+  obj.Reset();
 
   EXPECT_FALSE(obj.HasChildren());
   EXPECT_EQ(obj.Param().position_x, 0);

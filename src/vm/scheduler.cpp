@@ -24,7 +24,6 @@
 
 #include "vm/scheduler.hpp"
 
-#include "log/domain_logger.hpp"
 #include "vm/object.hpp"
 
 #include <thread>
@@ -57,14 +56,8 @@ void Scheduler::DrainExpiredTimers() {
     TimerEntry t = timers_.top();
     timers_.pop();
 
-    if (t.callback) {
-      try {
-        t.callback();
-      } catch (std::exception& e) {
-        static thread_local DomainLogger logger("Scheduler");
-        logger(Severity::Error) << "timer callback threw: " << e.what();
-      }
-    }
+    if (t.callback)
+      t.callback();
 
     if (t.fib && t.fib->state != FiberState::Dead)
       PushTask(t.fib);

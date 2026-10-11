@@ -148,6 +148,28 @@ TEST_F(SchedulerTest, DrainExpiredTimersRunsCallbacks) {
   EXPECT_EQ(scheduler.NextTask(), nullptr);
 }
 
+TEST_F(SchedulerTest, TimerFailurePropagatesWithoutReplayingTheCallback) {
+  int failed_calls = 0;
+  int later_calls = 0;
+  const auto base = clock->GetTime();
+  scheduler.PushCallbackAt(
+      [&] {
+        ++failed_calls;
+        throw std::runtime_error("frame callback failed");
+      },
+      base + 5ms);
+  scheduler.PushCallbackAt([&] { ++later_calls; }, base + 6ms);
+
+  clock->AdvanceTime(10ms);
+  EXPECT_THROW(scheduler.DrainExpiredTimers(), std::runtime_error);
+  EXPECT_EQ(failed_calls, 1);
+  EXPECT_EQ(later_calls, 0);
+
+  EXPECT_NO_THROW(scheduler.DrainExpiredTimers());
+  EXPECT_EQ(failed_calls, 1);
+  EXPECT_EQ(later_calls, 1);
+}
+
 TEST_F(SchedulerTest, WaitPoller) {
   Fiber fiber;
   fiber.state = FiberState::Suspended;

@@ -380,6 +380,24 @@ TEST_F(StageTest, WipeRangeIgnoresEmptyAllocatedBackSlots) {
   EXPECT_EQ(stage.objects.Get(kLayerBg, 0).Param().position_x, 99);
 }
 
+TEST_F(StageTest, WipeEraseAloneDoesNotExpandTheSelectedRange) {
+  Stage stage(1);
+  SetDummyData(stage.objects.Get(kLayerFg, 0));
+  stage.objects.Get(kLayerFg, 0).Param().z_order = 5;
+  stage.objects.Get(kLayerFg, 0).Param().SetX(10);
+  stage.objects.Get(kLayerBg, 0).Param().SetWipeErase(1);
+
+  stage.Wipe(0, 0, std::numeric_limits<int>::min(),
+             std::numeric_limits<int>::max());
+
+  EXPECT_FALSE(stage.objects.Exists(kLayerNext, 0));
+  ASSERT_TRUE(stage.objects.Exists(kLayerFg, 0));
+  EXPECT_TRUE(stage.objects.Get(kLayerFg, 0).HasDrawer());
+  EXPECT_EQ(stage.objects.Get(kLayerFg, 0).Param().position_x, 10);
+  ASSERT_TRUE(stage.objects.Exists(kLayerBg, 0));
+  EXPECT_EQ(stage.objects.Get(kLayerBg, 0).Param().wipe_erase, 1);
+}
+
 TEST_F(StageTest, BackWipeEraseClearsFrontAndConsumesBack) {
   Stage stage(3);
   SetDummyData(stage.objects.Get(kLayerFg, 0));
@@ -395,6 +413,20 @@ TEST_F(StageTest, BackWipeEraseClearsFrontAndConsumesBack) {
   EXPECT_FALSE(stage.objects.Get(kLayerFg, 0).HasDrawer());
   EXPECT_EQ(stage.objects.Get(kLayerFg, 0).Param().wipe_erase, 1);
   EXPECT_EQ(stage.objects.Get(kLayerNext, 0).Param().position_x, 10);
+}
+
+TEST_F(StageTest, WipePromotesAllocatedEmptyBackground) {
+  Stage stage(1);
+  SetDummyData(stage.objects.Get(kLayerFg, 0));
+  auto foreground = stage.objects.GetHandle(kLayerFg, 0);
+  auto background = stage.objects.GetHandle(kLayerBg, 0);
+
+  stage.Wipe();
+
+  EXPECT_TRUE(foreground.expired());
+  EXPECT_FALSE(background.expired());
+  EXPECT_EQ(background.lock().get(), stage.objects[kLayerFg][0].get());
+  EXPECT_FALSE(stage.objects.Exists(kLayerBg, 0));
 }
 
 TEST_F(StageTest, WipePromotesGroupsInRangeAndClearsTransientState) {

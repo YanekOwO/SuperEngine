@@ -35,6 +35,7 @@
 #include "core/stage.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
@@ -57,11 +58,13 @@
 #include <algorithm>
 #include <boost/algorithm/string/predicate.hpp>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -160,18 +163,24 @@ SiglusRuntime SGVMFactory::Create() {
   rt.global_config = std::make_shared<Gameexe>();
   rt.kidoku_table = std::make_shared<KidokuTable>();
 
+  int frame_action_count = gexe("FRAME_ACTION_CH.CNT").Int().value_or(4);
+  frame_action_count = std::clamp(frame_action_count, 0, 256);
+  rt.frame_action_manager = std::make_shared<binding::FrameActionManager>(
+      vm, *rt.stage, rt.local_config,
+      static_cast<std::size_t>(frame_action_count));
+
   rt.system->text().SetMwndCallHandler(
       [loader = rt.loader.get(), &vm](const MwndConfig::CallTarget& target) {
-        sr::Code* thunk = nullptr;
+        sr::Function* entry;
         if (target.command) {
-          thunk = binding::MakeSceneEntryThunk(vm, *loader, target.scene,
-                                               *target.command);
+          entry = binding::ResolveSceneEntry(*loader, target.scene,
+                                             *target.command);
         } else {
-          thunk = binding::MakeSceneEntryThunk(
-              vm, *loader, target.scene,
+          entry = binding::ResolveSceneEntry(
+              *loader, target.scene,
               GetZlabelId(target.entrypoint.value_or(0)));
         }
-        vm.AddFiber(thunk);
+        vm.ScheduleExecute(entry);
       });
 
   rt.system->text().SetMwndActionHandler(
@@ -292,14 +301,50 @@ SiglusRuntime SGVMFactory::Create() {
 
   // abuse the vm scheduler to refresh sdl regularly
   auto cb_holder = std::make_shared<std::function<void()>>();
+  auto frame_clock = rt.system->event().GetClock();
+  auto last_frame_tick =
+      std::make_shared<Clock::duration_t>(frame_clock->GetTicks());
   *cb_holder = [cb_holder, vm = rt.vm.get(), system = rt.system.get(), input,
-                interaction_manager = rt.interaction_manager.get()]() {
+                interaction_manager = rt.interaction_manager.get(),
+                counter_list = rt.counter_list,
+                frame_actions = rt.frame_action_manager,
+                update_wipe = rt.update_wipe_after_frame_actions,
+                local_config = rt.local_config, frame_clock,
+                last_frame_tick]() {
     constexpr auto period =
         chr::duration_cast<chr::steady_clock::duration>(chr::seconds(1)) / 60;
     auto next = chr::steady_clock::now() + period;
 
     input->ResetState();
-    system->Run([interaction_manager] { interaction_manager->Update(); });
+    system->Run([interaction_manager, counter_list, frame_actions, update_wipe,
+                 local_config, frame_clock, last_frame_tick, system] {
+      interaction_manager->Update();
+
+      const Clock::duration_t now = frame_clock->GetTicks();
+      Clock::duration_t real_delta = now - *last_frame_tick;
+      *last_frame_tick = now;
+      if (real_delta < Clock::duration_t::zero())
+        real_delta = Clock::duration_t::zero();
+
+      const auto flag = [local_config](std::string_view name) {
+        return local_config && (*local_config)(name).Int().value_or(0) != 0;
+      };
+      if (!flag("time_stop") && !flag("counter_time_stop")) {
+        const std::int64_t real_ms = real_delta.count();
+        const bool fast_forward = system->ShouldFastForward();
+        const std::int64_t game_ms =
+            fast_forward
+                ? (real_ms > std::numeric_limits<std::int64_t>::max() / 32
+                       ? std::numeric_limits<std::int64_t>::max()
+                       : real_ms * 32)
+                : real_ms;
+        counter_list->Advance(game_ms, real_ms);
+      }
+      frame_actions->AdvanceAndDispatch(real_delta,
+                                        system->ShouldFastForward());
+      if (update_wipe)
+        update_wipe();
+    });
     if (system->IsQuitRequested()) {
       vm->RequestStop();
       return;

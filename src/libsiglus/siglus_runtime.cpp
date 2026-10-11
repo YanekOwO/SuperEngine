@@ -24,6 +24,8 @@
 
 #include "libsiglus/siglus_runtime.hpp"
 
+#include "libsiglus/bindings/frame_action.hpp"
+
 namespace libsiglus {
 
 SiglusRuntime::~SiglusRuntime() = default;

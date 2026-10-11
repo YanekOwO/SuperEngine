@@ -108,6 +108,11 @@ void BindCounter(SiglusRuntime& runtime) {
     return h->Get()->IsActive() ? 1 : 0;
   });
 
+  runtime.make_counter =
+      [counter_class](std::weak_ptr<Counter> counter) mutable -> sr::Value {
+    return sr::Value(counter_class.make_inst(std::move(counter)));
+  };
+
   // ------------------------------------------------------------------------------
   // CounterList
   struct CounterListHandle {

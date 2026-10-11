@@ -226,4 +226,25 @@ M[1] = K[0];
   EXPECT_EQ(runtime.memory->Read(StrBank::M, 1), "");
 }
 
+TEST_F(SiglusMemoryBindingTest, RuntimeResetClearsScriptTimeStopFlags) {
+  const auto* bind_script = SiglusBindingRegistry::Find("3_script");
+  ASSERT_NE(bind_script, nullptr);
+  (*bind_script)(runtime);
+
+  ASSERT_TRUE(runtime.local_config);
+  for (const char* flag : {"time_stop", "counter_time_stop",
+                           "frame_action_time_stop", "stage_time_stop"}) {
+    runtime.local_config->SetIntAt(flag, 1);
+  }
+
+  ASSERT_FALSE(runtime.reset_local_memory.empty());
+  for (auto& cb : runtime.reset_local_memory)
+    cb();
+
+  for (const char* flag : {"time_stop", "counter_time_stop",
+                           "frame_action_time_stop", "stage_time_stop"}) {
+    EXPECT_EQ((*runtime.local_config)(flag).Int().value_or(-1), 0);
+  }
+}
+
 }  // namespace libsiglus::binding

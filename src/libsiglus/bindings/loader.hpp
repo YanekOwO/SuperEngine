@@ -23,28 +23,49 @@
 
 #pragma once
 
+#include "libsiglus/types.hpp"
 #include "vm/object.hpp"
 #include "vm/vm.hpp"
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace libsiglus {
 class Archive;
 namespace binding {
 
-class Loader {
-  Archive& archive;
-  serilang::VM& vm;
-  bool debug_;
-  std::unordered_map<std::string, serilang::Module*> scene_module_cache_;
+struct UserCommand {
+  serilang::Function* function = nullptr;
+  std::vector<Type> args;
+};
 
+class Loader {
  public:
   explicit Loader(Archive& ar, serilang::VM& v, bool debug = true)
-      : archive(ar), vm(v), debug_(debug) {}
+      : archive_(ar), vm_(v), is_debug_(debug) {}
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);
+
+  const UserCommand& ResolveUserCommand(serilang::Fiber& fiber,
+                                        std::string_view command_name) const;
+
+ private:
+  struct SceneCommandTable {
+    int scene_id = -1;
+    std::string scene_name;
+    std::unordered_map<std::string, UserCommand> commands;
+  };
+
+  using Globals = std::unordered_map<std::string, serilang::Value>;
+
+  Archive& archive_;
+  serilang::VM& vm_;
+  bool is_debug_;
+  std::unordered_map<std::string, serilang::Module*> scene_module_cache_;
+  std::unordered_map<const Globals*, SceneCommandTable> commands_by_globals_;
 };
 
 }  // namespace binding

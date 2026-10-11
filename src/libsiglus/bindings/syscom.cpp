@@ -28,6 +28,7 @@
 #include "core/mask.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
 #include "platforms/implementor.hpp"
@@ -37,7 +38,9 @@
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "vm/exception.hpp"
+#include "vm/function.hpp"
 #include "vm/object.hpp"
+#include "vm/promise.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
@@ -102,6 +105,16 @@ void BindSyscom(SiglusRuntime& runtime) {
   auto mask_list = runtime.mask_list;
   auto platform = runtime.platform_implementor;
   auto reset_local_memory = runtime.reset_local_memory;
+  auto frame_actions = runtime.frame_action_manager;
+  auto finish_active_wipe = runtime.finish_active_wipe;
+  auto no_wipe_animation = runtime.no_wipe_animation;
+  auto skip_wipe_animation = runtime.skip_wipe_animation;
+  const bool default_no_wipe_animation =
+      gameexe && (*gameexe)("SYSTEM.NO_WIPE_ANIME").Int().value_or(0) != 0;
+  const bool default_skip_wipe_animation =
+      !gameexe || (*gameexe)("SYSTEM.SKIP_WIPE_ANIME").Int().value_or(1) != 0;
+  *no_wipe_animation = default_no_wipe_animation;
+  *skip_wipe_animation = default_skip_wipe_animation;
 
   VM& vm = *runtime.vm;
   sb::module_ m(vm, "syscom");
@@ -111,7 +124,8 @@ void BindSyscom(SiglusRuntime& runtime) {
   m.def(
       "return_to_menu",
       [sys, stage, loader, gameexe, input, mask_list, platform,
-       reset_local_memory](VM& vm, Fiber& fiber, std::vector<Value> args) {
+       reset_local_memory, frame_actions,
+       finish_active_wipe](VM& vm, Fiber& fiber, std::vector<Value> args) {
         ReturnMenuParams params = ReturnMenuParams::Parse(std::move(args));
         if (!gameexe || !loader)
           throw RuntimeError("return_to_menu requires game configuration");
@@ -127,14 +141,23 @@ void BindSyscom(SiglusRuntime& runtime) {
         }
 
         auto [scene_name, zlabel] = ReadMenuScene(*gameexe);
-        Code* thunk = MakeSceneEntryThunk(vm, *loader, std::move(scene_name),
-                                          GetZlabelId(zlabel));
+        serilang::Function* entry = ResolveSceneEntry(
+            *loader, std::move(scene_name), GetZlabelId(zlabel));
 
         if (params.se_play && sys)
           sys->sound().PlaySe(6);
 
-        auto restart = [sys, stage, input, mask_list, reset_local_memory, &vm,
-                        thunk, preserve = params.preserve_backlog] {
+        if (finish_active_wipe && *finish_active_wipe)
+          (*finish_active_wipe)();
+
+        auto restart = [&vm, sys, stage, input, mask_list, reset_local_memory,
+                        frame_actions, finish_active_wipe, entry,
+                        preserve = params.preserve_backlog]() mutable {
+          // Cancel timers before resetting the stage they refer to.
+          if (finish_active_wipe && *finish_active_wipe)
+            (*finish_active_wipe)();
+          if (frame_actions)
+            frame_actions->CancelGlobals();
           for (auto& cb : reset_local_memory)
             if (cb)
               cb();
@@ -153,7 +176,7 @@ void BindSyscom(SiglusRuntime& runtime) {
           }
           if (input)
             input->ResetState();
-          vm.AddFiber(thunk);
+          vm.ScheduleExecute(entry);
         };
 
         fiber.frames.clear();
@@ -162,8 +185,14 @@ void BindSyscom(SiglusRuntime& runtime) {
               std::max(0, (*gameexe)("LOAD.WIPE").IntAt(1).value_or(0));
           if (duration > 0) {
             sys->sound().BgmFadeOut(duration);
+            auto faded = std::make_shared<Promise>();
+            vm.TrackPendingPromise(faded);
             vm.scheduler_.PushCallbackAfter(
-                std::move(restart), std::chrono::milliseconds(duration));
+                [faded, restart = std::move(restart)]() mutable {
+                  faded->Resolve(nil);
+                  restart();
+                },
+                std::chrono::milliseconds(duration));
             return;
           }
         }
@@ -183,10 +212,23 @@ void BindSyscom(SiglusRuntime& runtime) {
   m.def("set_enable_hidemwnd", [](bool) {
     // TODO
   });
-  m.def("get_no_wipe_anime_onoff", [] {
-    // TODO
-    return 0;
+  m.def("set_no_wipe_anime_onoff",
+        [no_wipe_animation](int value) { *no_wipe_animation = value != 0; });
+  m.def("set_no_wipe_anime_onoff_default",
+        [no_wipe_animation, default_no_wipe_animation] {
+          *no_wipe_animation = default_no_wipe_animation;
+        });
+  m.def("get_no_wipe_anime_onoff",
+        [no_wipe_animation] { return *no_wipe_animation ? 1 : 0; });
+  m.def("set_skip_wipe_anime_onoff", [skip_wipe_animation](int value) {
+    *skip_wipe_animation = value != 0;
   });
+  m.def("set_skip_wipe_anime_onoff_default",
+        [skip_wipe_animation, default_skip_wipe_animation] {
+          *skip_wipe_animation = default_skip_wipe_animation;
+        });
+  m.def("get_skip_wipe_anime_onoff",
+        [skip_wipe_animation] { return *skip_wipe_animation ? 1 : 0; });
   m.def("set_automode", [sys](int val) -> void {
     if (!sys)
       return;

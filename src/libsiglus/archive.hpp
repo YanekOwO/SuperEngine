@@ -21,10 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-// Archive.hpp
 #pragma once
-
-#include "lru_cache.hpp"
 
 #include "libsiglus/property.hpp"
 #include "libsiglus/scene.hpp"
@@ -105,9 +102,6 @@ class Archive {
 
   std::vector<Command> cmd_;
   std::map<std::string, int> cmd_map_;
-
- private:
-  mutable LRUCache<int, Scene, ThreadingModel::MultiThreaded> cache;
 };
 
 }  // namespace libsiglus

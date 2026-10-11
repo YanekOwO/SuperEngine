@@ -210,10 +210,13 @@ class class_ {
     return *this;
   }
 
+  inline serilang::NativeClass* native_class() const { return cls_; }
+
   template <class Child>
   class_& add_gc_root(class_<Child>& child_class) {
     if (child_class.gc_ != gc_)
-      throw type_error("gc root class belongs to a different garbage collector");
+      throw type_error(
+          "gc root class belongs to a different garbage collector");
 
     serilang::NativeClass* child_cls = child_class.cls_;
     if (std::ranges::find(cls_->gc_roots, child_cls) == cls_->gc_roots.cend())
@@ -337,6 +340,24 @@ class class_ {
           self->fields[field_name] = Value(child);
         });
 
+    return *this;
+  }
+
+  // Register an already-created VM value as a per-instance subobject.  This
+  // is useful when several bindings share a native class factory but the
+  // foreign parent/child types are otherwise unrelated.
+  template <class F>
+  class_& subinst(std::string field_name, F&& factory) {
+    using factory_t = std::decay_t<F>;
+    static_assert(std::is_invocable_r_v<serilang::Value, factory_t&, T*>,
+                  "Subinstance factory must return serilang::Value");
+
+    subinst_initializers_->emplace_back(
+        [field_name = std::move(field_name),
+         factory = factory_t(std::forward<F>(factory))](
+            T* parent, serilang::NativeInstance* self) mutable {
+          self->fields[field_name] = std::invoke(factory, parent);
+        });
     return *this;
   }
 

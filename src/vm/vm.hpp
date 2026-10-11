@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "vm/function.hpp"
 #include "vm/gc.hpp"
 #include "vm/object.hpp"
 #include "vm/scheduler.hpp"
@@ -64,6 +65,12 @@ class VM {
               std::unordered_map<std::string, Value> builtins);
 
   Fiber* AddFiber(Code* entry);
+  Fiber* ScheduleExecute(Function* fn);
+
+  // Invoke a script callback on a VM-owned isolated fiber through its first
+  // suspension or completion. Suspended continuations use the normal scheduler.
+  // Inline failures propagate to the caller; return values are discarded.
+  void InvokeUntilBlocked(Function& callback, std::vector<Value> arguments);
 
   // Run the event loop until no runnable work and no timers remain.
   // Returns the last dead fiber's result if any.

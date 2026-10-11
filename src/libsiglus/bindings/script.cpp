@@ -28,6 +28,8 @@
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
+#include <array>
+#include <functional>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -203,8 +205,16 @@ void BindScript(SiglusRuntime& rt) {
   });
   m.def("set_font_name_default",
         [cfg = lcfg.get()] { cfg->SetStringAt("font_name", ""); });
+
+  rt.reset_local_memory.emplace_back([lcfg] {
+    constexpr std::array<std::string_view, 4> kTimeStopFlags{
+        "time_stop", "counter_time_stop", "frame_action_time_stop",
+        "stage_time_stop"};
+    for (std::string_view flag : kTimeStopFlags)
+      lcfg->SetIntAt(flag, 0);
+  });
 }
 
-RLVM_REGISTER(SiglusBindingRegistry, "script", BindScript);
+RLVM_REGISTER(SiglusBindingRegistry, "3_script", BindScript);
 
 }  // namespace libsiglus::binding

@@ -23,6 +23,7 @@
 
 #include "core/avdec/gan.hpp"
 #include "core/colour.hpp"
+#include "core/frame_action.hpp"
 #include "core/frame_counter.hpp"
 #include "core/memory_internal/facade.hpp"
 #include "core/object_internal/drawer/colour_filter.hpp"
@@ -36,6 +37,7 @@
 
 #include "core/object.hpp"
 #include "core/stage.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/bindings/wait_helpers.hpp"
 #include "srbind/module.hpp"
@@ -207,7 +209,7 @@ class SiglusObject {
       throw std::runtime_error("Object.create filename is empty");
 
     GraphicsObject& obj = object();
-    obj.FreeDataAndInitializeParams();
+    obj.Reset();
     replace_file_drawer(std::move(filename));
   }
 
@@ -278,6 +280,7 @@ class SiglusObject {
         event_ ? event_->GetClock() : std::make_shared<Clock>());
     if (data->HasSet(0))
       data->PrimeSet(0);
+    object().ResetChildren();
     object().SetDrawer(std::move(data));
   }
 
@@ -376,7 +379,7 @@ class SiglusObject {
     }
 
     GraphicsObject& obj = object();
-    obj.FreeDataAndInitializeParams();
+    obj.Reset();
     obj.SetDrawer(std::make_unique<ObjectMovieData>(
         movie_path.value(), params.loop, params.auto_free, params.real_time,
         params.ready_only, graphics_->GetBackend(),
@@ -414,8 +417,9 @@ class SiglusObject {
   }
 
   sr::Value wait_movie_impl(sr::VM& vm, bool key_skip) {
-    auto done = [this] {
-      const ObjectMovieData* data = movie_data();
+    auto done = [ref = ref_] {
+      const ObjectMovieData* data =
+          ResolveObject(ref).GetDrawer<const ObjectMovieData>();
       return !data || !data->CheckMovie();
     };
     return MakePollingWaitFuture(vm, std::move(done), key_skip, event_.get());
@@ -482,6 +486,7 @@ class SiglusObject {
                    int alpha,
                    int display) {
     auto rect = Rect::GRP(left, top, right, down);
+    object().Reset();
     param().blend_colour = RGBAColour(r, g, b, alpha);
     object().SetDrawer(std::make_unique<ColourFilterObjectData>(rect));
     object().ClearFilePath();
@@ -748,7 +753,7 @@ class ObjectChild {
       throw sr::RuntimeError("object.child size is negative: " +
                              std::to_string(size));
     }
-    ResolveObject(parent_).ResetChildren(static_cast<std::size_t>(size));
+    ResolveObject(parent_).GetChildren().resize(static_cast<std::size_t>(size));
   }
 
   int size() {
@@ -1162,6 +1167,17 @@ void BindObject(SiglusRuntime& runtime) {
                                                     make_child_object);
              });
 
+  if (!runtime.frame_action_manager)
+    throw std::runtime_error("Object binding requires frame-action state");
+  FrameActionManager* frame_actions = runtime.frame_action_manager.get();
+  frame_actions->SetObjectFactory(make_child_object);
+  obj.subinst("frame_action", [frame_actions](SiglusObject* parent) {
+    return frame_actions->MakeActionValue(ActionLocation{parent->ref_, {}});
+  });
+  obj.subinst("frame_action_ch", [frame_actions](SiglusObject* parent) {
+    return frame_actions->MakeListValue(parent->ref_);
+  });
+
   auto ilist_param = [&](const char* name, auto&& F) {
     obj.subcls(
         name, *runtime.ilist_cls,
@@ -1242,12 +1258,14 @@ void BindObject(SiglusRuntime& runtime) {
                         CreateGetter<&ObjectParameter::adjustment_alphas>(),
                         CreateSetter<&ObjectParameter::adjustment_alphas>());
 
-  obj.def("init", [](SiglusObject* obj) {
-    obj->object().FreeDataAndInitializeParams();
+  obj.def("init", [](SiglusObject* obj) { obj->object().Reset(); });
+  obj.def("init_param", [](SiglusObject* obj) {
+    auto& object = obj->object();
+    object.frame_action_.Reset();
+    object.frame_action_list_.clear();
+    object.InitializeParams();
   });
-  obj.def("init_param",
-          [](SiglusObject* obj) { obj->object().InitializeParams(); });
-  obj.def("free", [](SiglusObject* obj) { obj->object().FreeObjectData(); });
+  obj.def("free", [](SiglusObject* obj) { obj->object().FreeOwnObjectData(); });
   obj.def(
       "create",
       [](SiglusObject* obj, std::vector<sr::Value> args) -> void {
@@ -1422,14 +1440,13 @@ void BindObject(SiglusRuntime& runtime) {
           throw sr::RuntimeError("copy_from requires an object");
         };
         auto* inst = src_value.Get_if<sr::NativeInstance>();
-        if (!inst)
+        if (!inst || !inst->klass || inst->klass->name != "Object")
           die();
         auto* src = inst->GetForeign<SiglusObject>();
         if (!src)
           die();
 
-        GraphicsObject &dsto = dst->object(), &srco = src->object();
-        dsto = srco.Clone();
+				dst->object() = src->object().Clone();
       },
       sb::arg("src"));
 

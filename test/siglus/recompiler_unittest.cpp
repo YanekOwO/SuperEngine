@@ -238,4 +238,28 @@ TEST(ResolveFastSlotsTest, AssignmentTargetReadsSubscriptIndexAndSource) {
   EXPECT_EQ(plan->total_fast_locals, 3);
 }
 
+TEST(RecompilerTest, ExposesUserCommandMetadataAfterCompilation) {
+  auto gc = std::make_shared<serilang::GarbageCollector>();
+  Recompiler compiler(gc);
+  const std::vector<Parser::ParsedToken> tokens = {
+      Tok(token::Subroutine{
+          .name = "$frame_action",
+          .source_entry = 42,
+          .args = {Type::FrameAction, Type::Object, Type::Int, Type::String}}),
+      Tok(token::Return{}),
+      Tok(token::Eof{}),
+  };
+
+  compiler.Compile(tokens);
+
+  ASSERT_TRUE(compiler.Ok());
+  ASSERT_EQ(compiler.GetUserCommands().size(), 1);
+  auto expected = UserCommandMetadata{
+      .name = "$frame_action",
+      .source_entry = 42,
+      .bytecode_entry = 5,
+      .args = {Type::FrameAction, Type::Object, Type::Int, Type::String}};
+  EXPECT_EQ(compiler.GetUserCommands().front(), expected);
+}
+
 }  // namespace siglus_test

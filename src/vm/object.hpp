@@ -227,6 +227,9 @@ struct Fiber : public IObject {
   // Internal promise that represents this fiber's completion.
   std::shared_ptr<Promise> completion_promise;
 
+  // Native callback return values must not replace the VM's last script result.
+  bool discard_result = false;
+
   std::any usrdata;
 
   std::vector<std::shared_ptr<Upvalue>> open_upvalues;

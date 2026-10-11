@@ -224,9 +224,81 @@ TEST_F(ElementParserTest, FrameAction) {
   {
     ElementCode elm{53, -1, 8, 1};
     elm.ForceBind({0, {v(-1), v("$$command_name")}});
-    EXPECT_EQ(chain(elm),
+    ChainCtx parsed = chain(elm);
+    EXPECT_EQ(parsed,
               "frame_action_ch[int:8].start(int:-1,str:$$command_name)");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_FALSE(call->await_result);
   }
+  {
+    ElementCode elm{79, 3};
+    elm.ForceBind({0, {v(-1), v("$$command_name")}});
+    ChainCtx parsed = chain(elm);
+    EXPECT_EQ(parsed, "frame_action.start_real(int:-1,str:$$command_name)");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_FALSE(call->await_result);
+  }
+  {
+    ElementCode elm{79, 1};
+    elm.ForceBind({0,
+                   {Value(Variable(Type::Int, 456)),
+                    Value(Variable(Type::String, 123))}});
+    ChainCtx parsed = chain(elm);
+    EXPECT_EQ(parsed, "frame_action.start(t456,t123)");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_FALSE(call->await_result);
+  }
+  {
+    ElementCode elm{79, 2};
+    elm.ForceBind({0, {}});
+    ChainCtx parsed = chain(elm);
+    EXPECT_EQ(parsed, "frame_action.end()");
+    const Call* call = last_call(parsed);
+    ASSERT_NE(call, nullptr);
+    EXPECT_FALSE(call->await_result);
+  }
+}
+
+TEST_F(ElementParserTest, FrameActionCounterGetterReturnsCounter) {
+  auto parsed = chain(79, 0);
+
+  EXPECT_EQ(parsed, "frame_action.counter()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Counter);
+  const Call* call = last_call(parsed);
+  ASSERT_NE(call, nullptr);
+  EXPECT_TRUE(call->args.empty());
+  EXPECT_TRUE(call->is_simple);
+  EXPECT_FALSE(call->overload_id);
+  EXPECT_FALSE(call->await_result);
+}
+
+TEST_F(ElementParserTest,
+       FrameActionCounterGetterContinuesIntoCounterCommands) {
+  EXPECT_EQ(chain(79, 0, 1), "frame_action.counter().get()");
+  EXPECT_EQ(chain(38, 2, -1, 0, 52, 0, 1),
+            "stage.front.object[int:0].frame_action.counter().get()");
+
+  ElementCode elm{53, -1, 8, 0, 0};
+  elm.ForceBind({0, {v(17)}});
+  auto parsed = chain(elm);
+  EXPECT_EQ(parsed, "frame_action_ch[int:8].counter().set(int:17)");
+  ASSERT_EQ(parsed.chain.nodes.size(), 6u);
+  const auto* getter = std::get_if<Call>(&parsed.chain.nodes[3].var);
+  ASSERT_NE(getter, nullptr);
+  EXPECT_TRUE(getter->args.empty());
+  EXPECT_EQ(parsed.chain.nodes[3].type, Type::Counter);
+}
+
+TEST_F(ElementParserTest, FrameActionCallbackCounterGetter) {
+  curcall_args = {Type::FrameAction};
+  const int flag = 0x7d << 24;
+
+  auto parsed = chain(ElementCode{83, flag, 0, 1});
+  EXPECT_EQ(parsed, "arg_0.counter().get()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
 }
 
 TEST_F(ElementParserTest, CurcallArgStr) {
@@ -255,8 +327,7 @@ TEST_F(ElementParserTest, Movie) {
     ElementCode elm{20, 3};
     elm.ForceBind({1, {v("mov2"), v(0), v(0), v(420), v(420)}});
     auto parsed = chain(elm);
-    EXPECT_EQ(parsed,
-              "mov.play_waitkey(str:mov2,int:0,int:0,int:420,int:420)");
+    EXPECT_EQ(parsed, "mov.play_waitkey(str:mov2,int:0,int:0,int:420,int:420)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
     const Call* call = last_call(parsed);
     ASSERT_NE(call, nullptr);
@@ -472,7 +543,8 @@ TEST_F(ElementParserTest, ObjectRepnoAlphaLists) {
     ElementCode elm{38, 2, -1, 0, 140, -1, 0, 0};
     elm.ForceBind({0, {v(128), v(1000), v(0), v(0)}});
     EXPECT_EQ(chain(elm),
-              "stage.front.object[int:0].tr_rep_eve[int:0].set(int:128,int:1000,int:0,int:0)");
+              "stage.front.object[int:0].tr_rep_eve[int:0].set(int:128,int:"
+              "1000,int:0,int:0)");
   }
 }
 

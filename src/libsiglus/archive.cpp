@@ -33,9 +33,6 @@
 #include <string>
 
 namespace libsiglus {
-namespace {
-constexpr unsigned long kSceneCacheSize = 64;
-}
 
 Archive Archive::Create(std::string_view raw_data) {
   for (auto it = ExekeyRegistry::cbegin(); it != ExekeyRegistry::cend(); ++it) {
@@ -52,7 +49,7 @@ Archive Archive::Create(std::string_view raw_data) {
 }
 
 Archive::Archive(std::string_view data, const xorkey_t& key)
-    : data_(data), key_(key), cache(kSceneCacheSize) {
+    : data_(data), key_(key) {
   hdr_ = reinterpret_cast<Pack_hdr const*>(data_.data());
   ParseScndata();
   CreateScnMap();
@@ -77,15 +74,12 @@ Archive::Archive(Archive&& other) noexcept
       prop_(std::move(other.prop_)),
       prop_map_(std::move(other.prop_map_)),
       cmd_(std::move(other.cmd_)),
-      cmd_map_(std::move(other.cmd_map_)),
-      cache(kSceneCacheSize) {
+      cmd_map_(std::move(other.cmd_map_)) {
   hdr_ = reinterpret_cast<Pack_hdr const*>(data_.data());
 }
 
 Scene Archive::ParseScene(int id) const {
-  return cache.fetch_or_else(id, [&, id]() {
-    return Scene(raw_scene_data_[id], id, scene_names_[id]);
-  });
+  return Scene(raw_scene_data_[id], id, scene_names_[id]);
 }
 
 void Archive::ParseScndata() {

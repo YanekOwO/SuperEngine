@@ -164,10 +164,10 @@ void addObjManagementFunctions(RLModule& m, const std::string& base) {
                   &GraphicsObject::InitializeParams)));
   m.AddOpcode(11, 0, base + "FreeInit",
               std::make_shared<Obj_CallFunction>(
-                  &GraphicsObject::FreeDataAndInitializeParams));
+                  &GraphicsObject::Reset));
   m.AddOpcode(11, 1, base + "FreeInit",
               RangeMappingFun(std::make_shared<Obj_CallFunction>(
-                  &GraphicsObject::FreeDataAndInitializeParams)));
+                  &GraphicsObject::Reset)));
 
   m.AddOpcode(100, 0, base + "FreeAll", std::make_shared<objFreeAll>());
   m.AddOpcode(110, 0, base + "InitAll", std::make_shared<objInitAll>());

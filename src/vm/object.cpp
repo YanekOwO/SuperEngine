@@ -406,9 +406,17 @@ std::string NativeFunction::Desc() const {
 void NativeFunction::MarkRoots(GCVisitor& visitor) {}
 
 void NativeFunction::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
-  TempValue retval = std::invoke(fn_, vm, f, nargs, nkwargs);
-
-  f.op_stack.back() = vm.AddTrack(std::move(retval));  // (fn) <- (retval)
+  TempValue retval;
+  try {
+    retval = std::invoke(fn_, vm, f, nargs, nkwargs);
+  } catch (const RuntimeError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw RuntimeError(error.what());
+  } catch (...) {
+    throw RuntimeError("native function failed with a non-standard exception");
+  }
+  f.op_stack.back() = vm.AddTrack(std::move(retval));
 }
 
 // -----------------------------------------------------------------------
