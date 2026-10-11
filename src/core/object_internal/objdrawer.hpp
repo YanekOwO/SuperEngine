@@ -113,6 +113,14 @@ class GraphicsObjectData {
       const GraphicsObject& go,
       std::optional<RenderState> parent_state) const;
 
+ protected:
+  // Tests a point after HitTest() has mapped it into this drawer's source
+  // coordinate system. Drawers with custom rendering geometry can override
+  // this without duplicating clipping, scaling, and rotation handling.
+  virtual bool HitTestAtSource(const GraphicsObject& go,
+                               const Point& source_point,
+                               bool alpha_test) const;
+
  private:
   // boost::serialization support
   friend class boost::serialization::access;

@@ -192,7 +192,7 @@ GraphicsSystem::GraphicsSystem(System& system,
       impl_(backend),
       asset_scanner_(system.GetAssetScanner()),
       preloaded_g00_(256),
-      image_cache_(10) {
+      image_cache_(64) {
   Size screen_size = GetScreenSize(gameexe);
   bool is_fullscreen = screen_mode() == 0;
   impl_->InitSystem(screen_size, is_fullscreen);

@@ -123,11 +123,14 @@ class VM {
   std::unordered_map<std::string, Value>* GetNamespace(Fiber& f);
 
   void SweepDeadFibres();
+  void MaybeSweepDeadFibres();
 
   //----------------------------------------------------------------
   // Core interpreter loop for one fiber
   void ExecuteFiber(Fiber* fib);
 
+  std::size_t dead_fibre_count_ = 0;
+  bool failed_fibre_pending_ = false;
   bool stop_requested_ = false;
 };
 

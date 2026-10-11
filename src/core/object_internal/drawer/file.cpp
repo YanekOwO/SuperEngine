@@ -72,39 +72,6 @@ Rect ComputeCompositeBounds(
   return bounds;
 }
 
-std::shared_ptr<SDLSurface> BuildCompositeHitSurface(
-    const std::vector<CompositeGraphicsObjectLayer>& layers,
-    const Rect& bounds) {
-  auto surface = std::make_shared<SDLSurface>(bounds.size());
-  std::vector<char> bgra(
-      static_cast<std::size_t>(bounds.width()) * bounds.height() * 4, 0);
-
-  for (const auto& layer : layers) {
-    const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
-    const Rect local_rect = LayerLocalRect(layer);
-    const Point dst_origin(local_rect.x() - bounds.x(),
-                           local_rect.y() - bounds.y());
-    for (int y = 0; y < pattern.rect.height(); ++y) {
-      for (int x = 0; x < pattern.rect.width(); ++x) {
-        const RGBAColour src = layer.surface->GetPixelAt(
-            Point(pattern.rect.x() + x, pattern.rect.y() + y));
-        const std::size_t dst_idx =
-            (static_cast<std::size_t>(dst_origin.y() + y) * bounds.width() +
-             dst_origin.x() + x) *
-            4;
-        bgra[dst_idx + 0] = static_cast<char>(255);
-        bgra[dst_idx + 1] = static_cast<char>(255);
-        bgra[dst_idx + 2] = static_cast<char>(255);
-        bgra[dst_idx + 3] = static_cast<char>(std::max<int>(
-            static_cast<unsigned char>(bgra[dst_idx + 3]), src.a()));
-      }
-    }
-  }
-
-  surface->UpdateBGRA(bgra, true);
-  return surface;
-}
-
 glm::mat4 BuildCompositeModelMatrix(const RenderGeometry& geometry,
                                     const Rect& dst) {
   glm::mat4 model(1.0f);
@@ -251,9 +218,7 @@ Animator* GraphicsObjectOfFile::GetAnimator() {
 // class CompositeGraphicsObject
 CompositeGraphicsObject::CompositeGraphicsObject(
     std::vector<CompositeGraphicsObjectLayer> layers)
-    : layers_(std::move(layers)),
-      bounds_(ComputeCompositeBounds(layers_)),
-      hit_surface_(BuildCompositeHitSurface(layers_, bounds_)) {}
+    : layers_(std::move(layers)), bounds_(ComputeCompositeBounds(layers_)) {}
 
 CompositeGraphicsObject::~CompositeGraphicsObject() = default;
 
@@ -314,9 +279,35 @@ std::unique_ptr<GraphicsObjectData> CompositeGraphicsObject::Clone() const {
   return std::make_unique<CompositeGraphicsObject>(*this);
 }
 
+bool CompositeGraphicsObject::HitTestAtSource(const GraphicsObject& go,
+                                              const Point& source_point,
+                                              bool alpha_test) const {
+  if (!alpha_test)
+    return !layers_.empty();
+
+  const Point composite_point(bounds_.x() + source_point.x(),
+                              bounds_.y() + source_point.y());
+  for (const auto& layer : layers_) {
+    const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
+    const Rect local_rect = LayerLocalRect(layer);
+    if (!local_rect.Contains(composite_point))
+      continue;
+
+    const Point layer_point(
+        pattern.rect.x() + composite_point.x() - local_rect.x(),
+        pattern.rect.y() + composite_point.y() - local_rect.y());
+    if (pattern.rect.Contains(layer_point) &&
+        layer.surface->GetRect().Contains(layer_point) &&
+        layer.surface->GetPixelAt(layer_point).a() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::shared_ptr<const SDLSurface> CompositeGraphicsObject::CurrentSurface(
     const GraphicsObject& go) const {
-  return hit_surface_;
+  return {};
 }
 
 Rect CompositeGraphicsObject::SrcRect(const GraphicsObject& go) const {

@@ -113,6 +113,9 @@ class CompositeGraphicsObject : public GraphicsObjectData {
   virtual std::unique_ptr<GraphicsObjectData> Clone() const override;
 
  protected:
+  virtual bool HitTestAtSource(const GraphicsObject& go,
+                               const Point& source_point,
+                               bool alpha_test) const override;
   virtual std::shared_ptr<const SDLSurface> CurrentSurface(
       const GraphicsObject& go) const override;
   virtual Rect SrcRect(const GraphicsObject& go) const override;
@@ -121,5 +124,4 @@ class CompositeGraphicsObject : public GraphicsObjectData {
  private:
   std::vector<CompositeGraphicsObjectLayer> layers_;
   Rect bounds_;
-  std::shared_ptr<SDLSurface> hit_surface_;
 };

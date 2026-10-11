@@ -464,7 +464,7 @@ class GraphicsSystem : public EventListener {
   typedef LazyArray<G00ArrayItem> G00ScriptList;
   G00ScriptList preloaded_g00_;
 
-  // LRU cache filled with the last fifteen accessed images.
+  // LRU cache filled with recently accessed images.
   //
   // This cache's contents are assumed to be immutable.
   LRUCache<std::string, std::shared_ptr<SDLSurface>> image_cache_;

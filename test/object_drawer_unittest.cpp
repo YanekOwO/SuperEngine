@@ -359,6 +359,72 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestUsesComposedAlpha) {
   EXPECT_TRUE(ref.HitTest(object, Point(11, 2)));
 }
 
+TEST(ObjectDrawerTest, CompositeObjectHitTestSamplesOnlyCoveredLayers) {
+  auto transparent = std::make_shared<SDLSurface>(Size(4, 4));
+  transparent->Fill(RGBAColour(255, 255, 255, 0));
+  auto spotted = std::make_shared<SDLSurface>(Size(4, 4));
+  spotted->Fill(RGBAColour(255, 255, 255, 0));
+  spotted->Fill(RGBAColour(255, 255, 255, 255), Rect::REC(2, 1, 1, 1));
+
+  std::vector<CompositeGraphicsObjectLayer> layers = {
+      {.surface = transparent,
+       .offset = Point(0, 0),
+       .cut_no = 0,
+       .blend_type = 0},
+      {.surface = spotted, .offset = Point(2, 0), .cut_no = 0, .blend_type = 0},
+  };
+
+  GraphicsObject object;
+  auto data = std::make_unique<CompositeGraphicsObject>(std::move(layers));
+  auto& ref = *data;
+  object.SetDrawer(std::move(data));
+
+  EXPECT_FALSE(ref.HitTest(object, Point(1, 1)));
+  EXPECT_FALSE(ref.HitTest(object, Point(3, 1)));
+  EXPECT_TRUE(ref.HitTest(object, Point(4, 1)));
+}
+
+TEST(ObjectDrawerTest, CompositeObjectHitTestHonoursCutOriginAndOffset) {
+  auto surface = PatternedSurface();
+  surface->Fill(RGBAColour(255, 255, 255, 0));
+  surface->Fill(RGBAColour(255, 255, 255, 255), Rect::REC(18, 3, 1, 1));
+
+  std::vector<CompositeGraphicsObjectLayer> layers = {
+      {.surface = surface,
+       .offset = Point(-3, 7),
+       .cut_no = 1,
+       .blend_type = 0},
+  };
+
+  GraphicsObject object;
+  auto data = std::make_unique<CompositeGraphicsObject>(std::move(layers));
+  auto& ref = *data;
+  object.SetDrawer(std::move(data));
+
+  EXPECT_TRUE(ref.HitTest(object, Point(-5, 5)));
+  EXPECT_FALSE(ref.HitTest(object, Point(-4, 5)));
+}
+
+TEST(ObjectDrawerTest, CompositeObjectHitTestCanIgnoreAlpha) {
+  auto transparent = std::make_shared<SDLSurface>(Size(4, 4));
+  transparent->Fill(RGBAColour(255, 255, 255, 0));
+  std::vector<CompositeGraphicsObjectLayer> layers = {
+      {.surface = transparent,
+       .offset = Point(0, 0),
+       .cut_no = 0,
+       .blend_type = 0},
+  };
+
+  GraphicsObject object;
+  auto data = std::make_unique<CompositeGraphicsObject>(std::move(layers));
+  auto& ref = *data;
+  object.SetDrawer(std::move(data));
+  object.Param().SetAlphaTest(0);
+
+  EXPECT_TRUE(ref.HitTest(object, Point(2, 2)));
+  EXPECT_FALSE(ref.HitTest(object, Point(5, 2)));
+}
+
 TEST(ObjectDrawerTest, CompositeObjectClonePreservesLayerData) {
   std::vector<CompositeGraphicsObjectLayer> layers = {
       {.surface = OpaqueSurface(Size(3, 3)),

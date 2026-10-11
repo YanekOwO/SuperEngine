@@ -407,6 +407,59 @@ TEST_F(VMTest, SuspendedCallbackFailureRemainsReportable) {
   EXPECT_THROW(vm.Run(), UnhandledError);
 }
 
+TEST_F(VMTest, RejectedCallbackReportsBeforeDeadFiberBatchThreshold) {
+  struct AdvancingPoller : IPoller {
+    explicit AdvancingPoller(MockClock* clock) : clock(clock) {}
+
+    void Wait(std::chrono::milliseconds timeout) override {
+      clock->AdvanceTime(timeout.count() > 0 ? timeout
+                                             : std::chrono::milliseconds(1));
+    }
+
+    MockClock* clock;
+  };
+  auto clock = std::make_unique<MockClock>();
+  auto poller = std::make_unique<AdvancingPoller>(clock.get());
+  vm.scheduler_ = Scheduler(std::move(poller), std::move(clock));
+
+  auto* waiting = gc->Allocate<Future>();
+  Code* waiting_code = gc->Allocate<Code>();
+  waiting_code->const_pool = value_vector(waiting);
+  append_ins(waiting_code, {Push{0}, Await{}, Return{}});
+  auto* waiting_callback = gc->Allocate<Function>(waiting_code);
+  for (int i = 0; i < 8; ++i)
+    vm.InvokeUntilBlocked(*waiting_callback, {});
+
+  auto* rejected = gc->Allocate<Future>();
+  auto gate = rejected->promise;
+  Code* rejected_code = gc->Allocate<Code>();
+  rejected_code->const_pool = value_vector(rejected);
+  append_ins(rejected_code, {Push{0}, Await{}, Return{}});
+  auto* rejected_callback = gc->Allocate<Function>(rejected_code);
+  vm.InvokeUntilBlocked(*rejected_callback, {});
+  ASSERT_EQ(vm.fibres_.size(), 9u);
+
+  vm.scheduler_.PushCallbackAfter(
+      [gate] { gate->Reject("callback timer failure"); },
+      std::chrono::milliseconds(1));
+  bool fallback_fired = false;
+  vm.scheduler_.PushCallbackAfter(
+      [this, &fallback_fired] {
+        fallback_fired = true;
+        vm.RequestStop();
+      },
+      std::chrono::milliseconds(2));
+
+  try {
+    vm.Run();
+    FAIL() << "Expected rejected callback failure";
+  } catch (const UnhandledError& error) {
+    EXPECT_STREQ(error.what(), "callback timer failure");
+  }
+  EXPECT_FALSE(fallback_fired);
+  EXPECT_FALSE(vm.IsStopRequested());
+}
+
 TEST_F(VMTest, RequestStopInterruptsRunningFiber) {
   auto* chunk = gc->Allocate<Code>();
 

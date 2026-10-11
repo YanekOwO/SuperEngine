@@ -170,8 +170,7 @@ Rect GraphicsObjectData::DstRect(const GraphicsObject& go,
 bool GraphicsObjectData::HitTest(const GraphicsObject& go,
                                  const Point& point,
                                  std::optional<ParentObjState> parent) {
-  std::shared_ptr<const SDLSurface> surface = CurrentSurface(go);
-  if (!surface)
+  if (!HitTestAtSource(go, Point(), false))
     return false;
 
   RenderGeometry geometry = BuildRenderGeometry(
@@ -214,7 +213,17 @@ bool GraphicsObjectData::HitTest(const GraphicsObject& go,
   source_x = std::clamp(source_x, geometry.src.x(), geometry.src.x2() - 1);
   source_y = std::clamp(source_y, geometry.src.y(), geometry.src.y2() - 1);
 
-  const Point source_point(source_x, source_y);
+  return HitTestAtSource(go, Point(source_x, source_y), true);
+}
+
+bool GraphicsObjectData::HitTestAtSource(const GraphicsObject& go,
+                                         const Point& source_point,
+                                         bool alpha_test) const {
+  std::shared_ptr<const SDLSurface> surface = CurrentSurface(go);
+  if (!surface)
+    return false;
+  if (!alpha_test)
+    return true;
   if (!surface->GetRect().Contains(source_point))
     return false;
 

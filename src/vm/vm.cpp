@@ -270,6 +270,9 @@ void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
         std::string("callback failed with a non-standard exception")));
   }
 
+  if (fiber->state == FiberState::Dead)
+    ++dead_fibre_count_;
+
   // The caller handles an inline error. The promise's observation count keeps
   // the later dead-fiber sweep from reporting that same failure a second time.
   auto completion = fiber->completion_promise;
@@ -320,6 +323,7 @@ Value VM::Run() {
         } catch (const RuntimeError& e) {
           if (next->state == FiberState::Dead)
             throw;
+          failed_fibre_pending_ = true;
           next->Kill(unexpected(e.message()));
         }
 
@@ -327,6 +331,8 @@ Value VM::Run() {
         if (!stop_requested_ && next->state == FiberState::Running &&
             !next->frames.empty())
           scheduler_.PushTask(next);
+        if (next->state == FiberState::Dead)
+          ++dead_fibre_count_;
       }
     } else {
       scheduler_.WaitForNext();
@@ -339,7 +345,7 @@ Value VM::Run() {
     }
 
     // Remove dead fibers and record last result
-    SweepDeadFibres();
+    MaybeSweepDeadFibres();
   }
 
   // Final sweep of dead fibers to update last_
@@ -364,6 +370,7 @@ void VM::Error(Fiber& f) {
   Value exc = pop(f.op_stack);
   while (true) {
     if (f.frames.empty()) {
+      failed_fibre_pending_ = true;
       f.Kill(unexpected(exc.Str()));
       return;
     }
@@ -967,6 +974,13 @@ void VM::SweepDeadFibres() {
     }
     return true;
   });
+  dead_fibre_count_ = 0;
+  failed_fibre_pending_ = false;
+}
+
+void VM::MaybeSweepDeadFibres() {
+  if (failed_fibre_pending_ || dead_fibre_count_ >= (fibres_.size() + 1) / 2)
+    SweepDeadFibres();
 }
 
 std::size_t VM::CountPendingPromises() {
