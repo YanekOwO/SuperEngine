@@ -239,8 +239,5 @@ INSTANTIATE_TEST_SUITE_P(NwaDecoderDataTest,
                          NwaDecoderTest,
                          ValuesIn(GetTestNwaFiles()),
                          ([](const auto& info) {
-                           std::string name = info.param;
-                           size_t begin = name.rfind('/') + 1,
-                                  end = name.rfind('.');
-                           return name.substr(begin, end - begin);
+                           return info.param.stem().string();
                          }));

@@ -260,8 +260,5 @@ INSTANTIATE_TEST_SUITE_P(WavDecoderDataTest,
                          WavCodecTest,
                          ValuesIn(GetTestWavFiles()),
                          ([](const auto& info) {
-                           std::string name = info.param;
-                           size_t begin = name.rfind('/') + 1,
-                                  end = name.rfind('.');
-                           return name.substr(begin, end - begin);
+                           return fs::path(info.param).stem().string();
                          }));

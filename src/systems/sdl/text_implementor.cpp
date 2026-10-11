@@ -82,8 +82,9 @@ void SDLTextImpl::QuitSystem() { TTF_Quit(); }
 std::shared_ptr<IFont> SDLTextImpl::GetFont(
     const std::filesystem::path& font_file,
     int font_size) {
-  TTF_Font* f =
-      TTF_OpenFont(font_file.native().c_str(), static_cast<float>(font_size));
+  const auto utf8_path = font_file.u8string();
+  TTF_Font* f = TTF_OpenFont(reinterpret_cast<const char*>(utf8_path.c_str()),
+                           static_cast<float>(font_size));
   if (f == nullptr)
     throw std::runtime_error("Error loading font: "s + SDL_GetError());
 

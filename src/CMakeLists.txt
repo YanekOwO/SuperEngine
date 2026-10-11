@@ -11,7 +11,7 @@ set(RLVM_REQUIRED_LIBRARIES
     ${ZLIB_LIBRARIES}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
-    ${GLEW_LIBRARIES}
+    GLEW::GLEW
     PkgConfig::THEORADEC
     PkgConfig::FFMPEG
     VorbisFile::VorbisFile

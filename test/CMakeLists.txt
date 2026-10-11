@@ -43,7 +43,7 @@ target_link_libraries(unittest PRIVATE
 
   PkgConfig::SDL3
   ${OPENGL_LIBRARIES}
-  ${GLEW_LIBRARIES}
+  GLEW::GLEW
 )
 
 add_test(
