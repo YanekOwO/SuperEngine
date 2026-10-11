@@ -225,7 +225,8 @@ class MwndWaitTask : public CoroutineTask {
       if (!text_)
         return;
 
-      text_->GetCurrentWindow()->HideWaitIcon();
+      if (text_->HasCurrentWindow())
+        text_->GetCurrentWindow()->HideWaitIcon();
       text_->set_in_pause_state(false);
       text_ = nullptr;
     }

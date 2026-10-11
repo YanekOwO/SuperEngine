@@ -153,6 +153,7 @@ class TextSystem final : public EventListener {
   std::shared_ptr<TextWindow> GetTextWindow(
       int num,
       std::function<std::shared_ptr<TextWindow>()> orelse);
+  bool HasCurrentWindow() const;
   std::shared_ptr<TextWindow> GetCurrentWindow();
   const MwndConfig& mwnd_config() const { return mwnd_config_; }
   using MwndCallHandler =

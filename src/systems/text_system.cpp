@@ -357,6 +357,10 @@ std::shared_ptr<TextWindow> TextSystem::GetTextWindow(int window_id) {
   });
 }
 
+bool TextSystem::HasCurrentWindow() const {
+  return text_window_.contains(active_window_);
+}
+
 std::shared_ptr<TextWindow> TextSystem::GetCurrentWindow() {
   return GetTextWindow(active_window_);
 }

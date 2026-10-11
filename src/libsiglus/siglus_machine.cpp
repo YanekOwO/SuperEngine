@@ -26,7 +26,12 @@
 
 namespace libsiglus {
 
-SiglusMachine::~SiglusMachine() = default;
+SiglusMachine::~SiglusMachine() {
+  // Native VM instances and pending coroutine frames keep non-owning pointers
+  // to runtime services. Finalize them before member destruction tears those
+  // services down.
+  vm.reset();
+}
 
 void SiglusMachine::Run() {}
 
