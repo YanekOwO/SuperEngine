@@ -125,17 +125,14 @@ TextSystemGlobals::TextSystemGlobals()
 
 // -----------------------------------------------------------------------
 
-TextSystemGlobals::TextSystemGlobals(Gameexe& gexe)
+TextSystemGlobals::TextSystemGlobals(Gameexe& gexe,
+                                     const MwndConfig& mwnd_config)
     : auto_mode_base_time(gexe("MESSAGE_KEY_WAIT_TIME").Int().value_or(1500)),
       auto_mode_char_time(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
       message_speed(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
       font_weight(0),
       font_shadow(1),
-      window_attr{255, 255, 255, 255, 0} {
-  if (auto in_window_attr = gexe("WINDOW_ATTR").IntVec();
-      in_window_attr && in_window_attr->size() >= 5)
-    window_attr = std::move(*in_window_attr);
-}
+      window_attr(mwnd_config.window_attr()) {}
 
 // -----------------------------------------------------------------------
 // TextSystem
@@ -165,7 +162,7 @@ TextSystem::TextSystem(System& system,
       msgbkleft_use_(false),
       msgbkright_use_(false),
       exbtn_use_(false),
-      globals_(gexe),
+      globals_(gexe, mwnd_config_),
       system_visible_(true),
       skip_mode_(false),
       kidoku_read_(false),

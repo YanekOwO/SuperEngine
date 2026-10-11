@@ -70,7 +70,7 @@ std::optional<KoeReplayConfig> ReadKoeReplayConfig(Gameexe& gexe);
 // Global variables written to disk.
 struct TextSystemGlobals {
   TextSystemGlobals();
-  explicit TextSystemGlobals(Gameexe& gexe);
+  TextSystemGlobals(Gameexe& gexe, const MwndConfig& mwnd_config);
 
   int auto_mode_base_time;
   int auto_mode_char_time;

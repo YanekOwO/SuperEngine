@@ -71,6 +71,10 @@ class TextWakuType4 : public TextWaku {
                  bool use_config_colour,
                  bool use_config_opacity);
   void SetOverlay(std::unique_ptr<TextWakuNormal> overlay);
+  void SetFilterRendering(MwndConfig::FilterRendering rendering) {
+    filter_rendering_ = rendering;
+    cached_backing_.reset();
+  }
 
  private:
   // Returns |cached_backing_|, shrinking or enlarging it to |size|.
@@ -88,6 +92,8 @@ class TextWakuType4 : public TextWaku {
   RGBAColour filter_colour_ = RGBAColour(0, 0, 0, 128);
   bool use_config_colour_ = false;
   bool use_config_opacity_ = false;
+  MwndConfig::FilterRendering filter_rendering_ =
+      MwndConfig::FilterRendering::ColorMask;
   std::unique_ptr<TextWakuNormal> overlay_;
 
   // G00 regions in |waku_main_|.

@@ -412,6 +412,26 @@ void SDLSurface::RenderToScreenAsColorMask(const Rect& src,
 
 // -----------------------------------------------------------------------
 
+void SDLSurface::RenderToScreenWithColourAddition(const Rect& src,
+                                                  const Rect& dst,
+                                                  const RGBColour& colour,
+                                                  int alpha) const {
+  uploadTextureIfNeeded();
+
+  RenderingConfig config;
+  config.mask_color = RGBAColour(colour);
+  config.alpha = std::clamp(alpha, 0, 255) / 255.0f;
+  for (const auto& it : textures_) {
+    auto src_rect = src, dst_rect = dst;
+    LocalRect coordinate_system(it.x_, it.y_, it.w_, it.h_);
+    if (coordinate_system.intersectAndTransform(src_rect, dst_rect))
+      glRenderer().Render({it.gltexture, src_rect}, config,
+                          {screen_, dst_rect});
+  }
+}
+
+// -----------------------------------------------------------------------
+
 void SDLSurface::RenderToScreen(const Rect& src_rect,
                                 const Rect& dst_rect,
                                 const int opacity[4]) const {

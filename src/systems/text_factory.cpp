@@ -90,6 +90,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
     const MwndConfig::Waku& config) {
   using namespace std::chrono_literals;
   auto result = std::make_unique<TextWakuNormal>();
+  result->SetFilterRendering(config.filter_rendering);
   GraphicsSystem& graphics = system.graphics();
   TextSystem& text = system.text();
 
@@ -183,6 +184,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuType4(
     TextWindow& window,
     const MwndConfig::Waku& config) {
   auto result = std::make_unique<TextWakuType4>();
+  result->SetFilterRendering(config.filter_rendering);
   if (!config.main_file.empty())
     result->SetMainWaku(system.graphics().GetSurfaceNamed(config.main_file));
   result->SetArea(config.filter_margin.y(), config.filter_margin.y2(),

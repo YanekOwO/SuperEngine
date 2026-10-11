@@ -102,6 +102,7 @@ class MwndConfig {
   };
 
   enum class WakuStyle { Fixed, Stretch };
+  enum class FilterRendering { ColorMask, AlphaBlend };
   enum class ButtonAction {
     None,
     HideWindow,
@@ -168,6 +169,7 @@ class MwndConfig {
 
   struct Waku {
     WakuStyle style = WakuStyle::Fixed;
+    FilterRendering filter_rendering = FilterRendering::ColorMask;
     std::string main_file;
     std::string filter_file;
     Rect filter_margin;

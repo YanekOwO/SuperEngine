@@ -14,6 +14,46 @@
 
 namespace {
 
+TEST(TextSystemGlobalsTest, SiglusUsesConfiguredFilterOpacity) {
+  Gameexe gexe;
+  gexe.parseLine("CONFIG.FILTER_COLOR = 11,22,33,76");
+  gexe.parseLine("WINDOW_ATTR = 255,255,255,255,1");
+  const auto config = MwndConfig::ParseSiglus(gexe);
+
+  const TextSystemGlobals globals(gexe, config);
+
+  EXPECT_EQ(globals.window_attr, (std::vector<int>{11, 22, 33, 76, 0}));
+}
+
+TEST(TextSystemGlobalsTest, SiglusUsesDefaultFilterOpacity) {
+  Gameexe gexe;
+  const auto config = MwndConfig::ParseSiglus(gexe);
+
+  const TextSystemGlobals globals(gexe, config);
+
+  EXPECT_EQ(globals.window_attr, (std::vector<int>{0, 0, 0, 128, 0}));
+}
+
+TEST(TextSystemGlobalsTest, RealliveRetainsWindowAttributes) {
+  Gameexe gexe;
+  gexe.parseLine("WINDOW_ATTR = 1,2,3,4,1,7");
+  const auto config = MwndConfig::ParseReallive(gexe);
+
+  const TextSystemGlobals globals(gexe, config);
+
+  EXPECT_EQ(globals.window_attr, (std::vector<int>{1, 2, 3, 4, 1, 7}));
+}
+
+TEST(TextSystemGlobalsTest, RealliveRetainsDefaultForMalformedAttributes) {
+  Gameexe gexe;
+  gexe.parseLine("WINDOW_ATTR = 1,2,3,4");
+  const auto config = MwndConfig::ParseReallive(gexe);
+
+  const TextSystemGlobals globals(gexe, config);
+
+  EXPECT_EQ(globals.window_attr, (std::vector<int>{255, 255, 255, 255, 0}));
+}
+
 TEST(TextSystemKoeReplayConfigTest, MissingBlockIsOptional) {
   Gameexe gexe;
 

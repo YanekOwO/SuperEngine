@@ -75,17 +75,21 @@ void TextWakuType4::Render(Point box_location,
     std::shared_ptr<SDLSurface> backing = filter_surface_;
     if (!backing)
       backing = GetWakuBackingOfSize(backing_size);
-    RGBAColour filter_colour = filter_colour_;
-    if (use_config_colour_) {
-      filter_colour.set_red(colour.r());
-      filter_colour.set_green(colour.g());
-      filter_colour.set_blue(colour.b());
+    const Rect destination(backing_point, backing_size);
+    if (filter_rendering_ == MwndConfig::FilterRendering::AlphaBlend) {
+      backing->RenderToScreenWithColourAddition(
+          backing->GetRect(), destination,
+          use_config_colour_ ? colour.rgb() : RGBColour(0, 0, 0),
+          use_config_opacity_ ? colour.a() : 255);
+    } else {
+      RGBAColour filter_colour = filter_colour_;
+      if (use_config_colour_)
+        filter_colour = RGBAColour(colour.rgb(), filter_colour.a());
+      if (use_config_opacity_)
+        filter_colour.set_alpha(colour.a());
+      backing->RenderToScreenAsColorMask(backing->GetRect(), destination,
+                                         filter_colour, is_filter);
     }
-    if (use_config_opacity_)
-      filter_colour.set_alpha(colour.a());
-    backing->RenderToScreenAsColorMask(backing->GetRect(),
-                                       Rect(backing_point, backing_size),
-                                       filter_colour, is_filter);
 
     // Calculate the total size of the waku decoration. We need this to get the
     // size of the non-corners correct.
@@ -157,7 +161,10 @@ const std::shared_ptr<SDLSurface>& TextWakuType4::GetWakuBackingOfSize(
     Size size) {
   if (!cached_backing_ || cached_backing_->GetSize() != size) {
     cached_backing_ = std::make_shared<SDLSurface>(size);
-    cached_backing_->Fill(RGBAColour::Black());
+    cached_backing_->Fill(filter_rendering_ ==
+                                  MwndConfig::FilterRendering::AlphaBlend
+                              ? filter_colour_
+                              : RGBAColour::Black());
   }
 
   return cached_backing_;
@@ -204,6 +211,8 @@ void TextWakuType4::SetFilter(std::shared_ptr<const SDLSurface> surface,
   filter_surface_ = surface ? surface->Clone() : nullptr;
   if (filter_surface_)
     filter_surface_->SetIsMask(true);
+  if (filter_colour_ != colour)
+    cached_backing_.reset();
   filter_colour_ = colour;
   use_config_colour_ = use_config_colour;
   use_config_opacity_ = use_config_opacity;

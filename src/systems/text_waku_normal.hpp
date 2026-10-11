@@ -95,6 +95,10 @@ class TextWakuNormal : public TextWaku {
   void SetWaitIcon(bool page, const Point& position) override;
   void HideWaitIcon() override;
   void SetRenderFilter(bool render) { render_filter_ = render; }
+  void SetFilterRendering(MwndConfig::FilterRendering rendering) {
+    filter_rendering_ = rendering;
+    generated_backing_.reset();
+  }
 
  private:
   std::shared_ptr<const SDLSurface> main_surface_;
@@ -105,6 +109,8 @@ class TextWakuNormal : public TextWaku {
   bool use_config_colour_ = false;
   bool use_config_opacity_ = false;
   bool render_filter_ = true;
+  MwndConfig::FilterRendering filter_rendering_ =
+      MwndConfig::FilterRendering::ColorMask;
   std::shared_ptr<SDLSurface> key_icon_surface_, page_icon_surface_;
   MwndConfig::Icon key_icon_, page_icon_;
   int icon_position_type_ = 0;

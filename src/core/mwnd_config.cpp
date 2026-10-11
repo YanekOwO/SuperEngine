@@ -395,6 +395,14 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
 MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   MwndConfig result;
   result.button_actions_ = ButtonActionTable::ParseSiglus(gexe);
+  const RGBAColour configured_filter_colour =
+      ParseRGBA(gexe("CONFIG.FILTER_COLOR")
+                    .IntVec()
+                    .value_or(std::vector<int>{0, 0, 0, 128}),
+                RGBAColour(0, 0, 0, 128));
+  result.window_attr_ = {
+      configured_filter_colour.r(), configured_filter_colour.g(),
+      configured_filter_colour.b(), configured_filter_colour.a(), 0};
   const int sound_count = std::clamp(gexe("BUTTON.SE.CNT").Int().value_or(16),
                                      0, kMaximumConfigEntries);
   result.button_sounds_.resize(sound_count);
@@ -463,6 +471,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
 
     Window window;
     window.screen_size = ReadScreenSize(gexe);
+    window.colour = configured_filter_colour;
     window.default_font_size = font_size;
     window.layout =
         MakeLayout(font_size, count_x, count_y, space_x, space_y, ruby_size);
@@ -522,6 +531,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   for (int id = 0; id < waku_count; ++id) {
     auto source = gexe("WAKU", id);
     Waku waku;
+    waku.filter_rendering = FilterRendering::AlphaBlend;
     waku.style = source("EXTEND_TYPE").Int().value_or(0) == 1
                      ? WakuStyle::Stretch
                      : WakuStyle::Fixed;
@@ -533,8 +543,8 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     waku.filter_margin = Rect::GRP(margin[0], margin[1], margin[2], margin[3]);
     const auto colour = source("FILTER_COLOR")
                             .IntVec()
-                            .value_or(std::vector<int>{0, 0, 0, 128});
-    waku.filter_colour = ParseRGBA(colour, RGBAColour(0, 0, 0, 128));
+                            .value_or(std::vector<int>{0, 0, 255, 128});
+    waku.filter_colour = ParseRGBA(colour, RGBAColour(0, 0, 255, 128));
     waku.use_config_colour =
         source("FILTER_CONFIG_COLOR").Int().value_or(1) != 0;
     waku.use_config_opacity = source("FILTER_CONFIG_TR").Int().value_or(1) != 0;
@@ -595,7 +605,11 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     result.wakus_[{id, 0}] = std::move(waku);
   }
 
-  if (result.wakus_.empty())
-    result.wakus_[{0, 0}] = Waku{};
+  if (result.wakus_.empty()) {
+    Waku waku;
+    waku.filter_rendering = FilterRendering::AlphaBlend;
+    waku.filter_colour = RGBAColour(0, 0, 255, 128);
+    result.wakus_[{0, 0}] = std::move(waku);
+  }
   return result;
 }

@@ -97,6 +97,12 @@ class SDLSurface {
                                  const RGBAColour& rgba,
                                  bool filter) const;
 
+  // Preserve the source RGB/alpha, add colour, and apply additional opacity.
+  void RenderToScreenWithColourAddition(const Rect& src,
+                                        const Rect& dst,
+                                        const RGBColour& colour,
+                                        int alpha = 255) const;
+
   void RenderToScreen(const Rect& src,
                       const Rect& dst,
                       const int opacity[4]) const;

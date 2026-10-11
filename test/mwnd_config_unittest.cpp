@@ -116,6 +116,74 @@ TEST(MwndConfigTest, SiglusButtonSoundsUseLegacyDefaults) {
   EXPECT_EQ(config.GetButtonSound(2), nullptr);
 }
 
+TEST(MwndConfigTest, SiglusFilterUsesConfiguredColourAndOpacity) {
+  Gameexe gameexe;
+  gameexe.parseLine("CONFIG.FILTER_COLOR = 11,22,33,76");
+  gameexe.parseLine("WINDOW_ATTR = 255,255,255,255,1");
+  gameexe.parseLine("WAKU.CNT = 1");
+  gameexe.parseLine("WAKU.000.FILTER_FILE = mw_fil");
+  gameexe.parseLine("WAKU.000.FILTER_COLOR = 44,55,66,128");
+  gameexe.parseLine("WAKU.000.FILTER_CONFIG_COLOR = 0");
+  gameexe.parseLine("WAKU.000.FILTER_CONFIG_TR = 1");
+
+  const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
+
+  EXPECT_EQ(config.window_attr(), (std::vector<int>{11, 22, 33, 76, 0}));
+  EXPECT_EQ(config.GetWindow(0).colour, RGBAColour(11, 22, 33, 76));
+  EXPECT_EQ(config.GetWindow(1).colour, RGBAColour(11, 22, 33, 76));
+  EXPECT_FALSE(config.GetWindow(0).is_filter);
+  const auto& waku = config.GetWaku(0);
+  EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::AlphaBlend);
+  EXPECT_EQ(waku.filter_colour, RGBAColour(44, 55, 66, 128));
+  EXPECT_FALSE(waku.use_config_colour);
+  EXPECT_TRUE(waku.use_config_opacity);
+}
+
+TEST(MwndConfigTest, SiglusFiltersUseLegacyDefaults) {
+  Gameexe gameexe;
+  gameexe.parseLine("WAKU.CNT = 1");
+
+  const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
+
+  EXPECT_EQ(config.window_attr(), (std::vector<int>{0, 0, 0, 128, 0}));
+  EXPECT_EQ(config.GetWindow(0).colour, RGBAColour(0, 0, 0, 128));
+  const auto& waku = config.GetWaku(0);
+  EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::AlphaBlend);
+  EXPECT_EQ(waku.filter_colour, RGBAColour(0, 0, 255, 128));
+  EXPECT_TRUE(waku.use_config_colour);
+  EXPECT_TRUE(waku.use_config_opacity);
+}
+
+TEST(MwndConfigTest, SiglusFilterColourIsValidated) {
+  Gameexe gameexe;
+  gameexe.SetAt("CONFIG.FILTER_COLOR", {-1, 256, 33, -4, 1});
+
+  const MwndConfig clamped = MwndConfig::ParseSiglus(gameexe);
+
+  EXPECT_EQ(clamped.window_attr(), (std::vector<int>{0, 255, 33, 0, 0}));
+  EXPECT_EQ(clamped.GetWindow(0).colour, RGBAColour(0, 255, 33, 0));
+
+  gameexe.SetAt("CONFIG.FILTER_COLOR", {11, 22, 33});
+  const MwndConfig malformed = MwndConfig::ParseSiglus(gameexe);
+
+  EXPECT_EQ(malformed.window_attr(), (std::vector<int>{0, 0, 0, 128, 0}));
+  EXPECT_EQ(malformed.GetWindow(0).colour, RGBAColour(0, 0, 0, 128));
+  EXPECT_EQ(malformed.GetWaku(0).filter_rendering,
+            MwndConfig::FilterRendering::AlphaBlend);
+}
+
+TEST(MwndConfigTest, SiglusFilterConfigurationFlagsAreIndependent) {
+  Gameexe gameexe;
+  gameexe.parseLine("WAKU.CNT = 1");
+  gameexe.parseLine("WAKU.000.FILTER_CONFIG_COLOR = 1");
+  gameexe.parseLine("WAKU.000.FILTER_CONFIG_TR = 0");
+
+  const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
+
+  EXPECT_TRUE(config.GetWaku(0).use_config_colour);
+  EXPECT_FALSE(config.GetWaku(0).use_config_opacity);
+}
+
 TEST(MwndConfigTest, ParsesRealliveWindowWakuAndFarcall) {
   Gameexe gameexe;
   gameexe.parseLine("WINDOW_ATTR = 1,2,3,4,1");
@@ -137,13 +205,17 @@ TEST(MwndConfigTest, ParsesRealliveWindowWakuAndFarcall) {
 
   const MwndConfig config = MwndConfig::ParseReallive(gameexe);
 
+  EXPECT_EQ(config.window_attr(), (std::vector<int>{1, 2, 3, 4, 1}));
   const auto& window = config.GetWindow(0);
+  EXPECT_EQ(window.colour, RGBAColour(1, 2, 3, 4));
+  EXPECT_TRUE(window.is_filter);
   EXPECT_EQ(window.layout.GetNormalSize(), Size(105, 50));
   EXPECT_EQ(window.default_colour, RGBColour(9, 8, 7));
   EXPECT_EQ(window.waku_set, 2);
   EXPECT_EQ(window.keycursor_pos, Point(12, 13));
 
   const auto& waku = config.GetWaku(2);
+  EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::ColorMask);
   EXPECT_EQ(waku.main_file, "main");
   EXPECT_EQ(waku.filter_file, "back");
   ASSERT_EQ(waku.buttons.size(), 1);

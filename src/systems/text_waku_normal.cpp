@@ -59,15 +59,6 @@ void TextWakuNormal::Render(Point box_location,
                             Size namebox_size,
                             RGBAColour colour,
                             bool is_filter) {
-  RGBAColour filter_colour = filter_colour_;
-  if (use_config_colour_) {
-    filter_colour.set_red(colour.r());
-    filter_colour.set_green(colour.g());
-    filter_colour.set_blue(colour.b());
-  }
-  if (use_config_opacity_)
-    filter_colour.set_alpha(colour.a());
-
   std::shared_ptr<SDLSurface> backing =
       render_filter_ ? backing_surface_ : nullptr;
   Size backing_size;
@@ -81,16 +72,34 @@ void TextWakuNormal::Render(Point box_location,
         (!generated_backing_ ||
          generated_backing_->GetSize() != backing_size)) {
       generated_backing_ = std::make_shared<SDLSurface>(backing_size);
-      generated_backing_->Fill(RGBAColour::Black());
+      generated_backing_->Fill(filter_rendering_ ==
+                                       MwndConfig::FilterRendering::AlphaBlend
+                                   ? filter_colour_
+                                   : RGBAColour::Black());
     }
     backing = generated_backing_;
   }
   if (render_filter_ && backing && !backing_size.is_empty()) {
     const Point filter_position =
         box_location + Size(filter_margin_.x(), filter_margin_.y());
-    backing->RenderToScreenAsColorMask(Rect(Point(0, 0), backing_size),
-                                       Rect(filter_position, backing_size),
-                                       filter_colour, is_filter);
+    const Rect source(Point(0, 0), backing_size);
+    const Rect destination(filter_position, backing_size);
+    if (filter_rendering_ == MwndConfig::FilterRendering::AlphaBlend) {
+      // Siglus retains the texture's colour and alpha. Configuration adds RGB
+      // and multiplies opacity, independently of the solid fallback colour.
+      backing->RenderToScreenWithColourAddition(
+          source, destination,
+          use_config_colour_ ? colour.rgb() : RGBColour(0, 0, 0),
+          use_config_opacity_ ? colour.a() : 255);
+    } else {
+      RGBAColour filter_colour = filter_colour_;
+      if (use_config_colour_)
+        filter_colour = RGBAColour(colour.rgb(), filter_colour.a());
+      if (use_config_opacity_)
+        filter_colour.set_alpha(colour.a());
+      backing->RenderToScreenAsColorMask(source, destination, filter_colour,
+                                         is_filter);
+    }
   }
 
   if (main_surface_) {
@@ -244,6 +253,8 @@ void TextWakuNormal::SetFilterConfig(Rect margin,
                                      bool use_config_colour,
                                      bool use_config_opacity) {
   filter_margin_ = margin;
+  if (filter_colour_ != colour)
+    generated_backing_.reset();
   filter_colour_ = colour;
   use_config_colour_ = use_config_colour;
   use_config_opacity_ = use_config_opacity;
