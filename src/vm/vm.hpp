@@ -30,8 +30,10 @@
 #include "vm/scheduler.hpp"
 #include "vm/value.hpp"
 
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -72,9 +74,13 @@ class VM {
   // Inline failures propagate to the caller; return values are discarded.
   void InvokeUntilBlocked(Function& callback, std::vector<Value> arguments);
 
-  // Run the event loop until no runnable work and no timers remain.
+  // Run the event loop until no runnable work or pending promises remain.
   // Returns the last dead fiber's result if any.
   Value Run();
+  // Run for at most this cooperative time budget, preserving unfinished work.
+  // Native calls and an execution quantum may overrun the budget.
+  Value Run(std::chrono::steady_clock::duration budget);
+  bool HasPendingWork();
   inline void RequestStop() noexcept { stop_requested_ = true; }
   inline bool IsStopRequested() const noexcept { return stop_requested_; }
 
@@ -119,6 +125,7 @@ class VM {
  private:
   //----------------------------------------------------------------
   // Execution helpers
+  Value RunUntil(std::optional<Clock::timepoint_t> deadline);
   void Return(Fiber& f);
   std::unordered_map<std::string, Value>* GetNamespace(Fiber& f);
 

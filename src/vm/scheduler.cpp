@@ -26,6 +26,7 @@
 
 #include "vm/object.hpp"
 
+#include <algorithm>
 #include <thread>
 
 namespace serilang {
@@ -50,9 +51,17 @@ bool Scheduler::IsIdle() const noexcept {
   return microq_.empty() && runq_.empty();
 }
 
+Clock::timepoint_t Scheduler::GetTime() const { return clock_->GetTime(); }
+
 void Scheduler::DrainExpiredTimers() {
-  auto now = clock_->GetTime();
+  DrainExpiredTimers(Clock::timepoint_t::max());
+}
+
+void Scheduler::DrainExpiredTimers(Clock::timepoint_t deadline) {
+  const auto now = GetTime();
   while (!timers_.empty() && timers_.top().when <= now) {
+    if (deadline != Clock::timepoint_t::max() && GetTime() >= deadline)
+      break;
     TimerEntry t = timers_.top();
     timers_.pop();
 
@@ -81,10 +90,15 @@ void Scheduler::WaitForNext() {
   if (timers_.empty())
     return;
 
-  auto deltaTime = timers_.top().when - clock_->GetTime();
-  if (deltaTime < chr::steady_clock::duration::zero())
-    deltaTime = chr::steady_clock::duration::zero();
-  poller_->Wait(chr::duration_cast<chr::milliseconds>(deltaTime));
+  WaitForNext(timers_.top().when);
+}
+
+void Scheduler::WaitForNext(Clock::timepoint_t deadline) {
+  const auto wake_at =
+      timers_.empty() ? deadline : std::min(deadline, timers_.top().when);
+  const auto remaining =
+      std::max(wake_at - GetTime(), chr::steady_clock::duration::zero());
+  poller_->Wait(chr::duration_cast<chr::milliseconds>(remaining));
 }
 
 void Scheduler::PushTask(Fiber* f) {

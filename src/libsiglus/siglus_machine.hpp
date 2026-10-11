@@ -93,7 +93,6 @@ struct SiglusMachine {
   std::shared_ptr<EventListener> system_event_listener;
   std::shared_ptr<EventListener> mwnd_button_event_listener;
   std::shared_ptr<InputListener> input_event_listener;
-  std::function<void()> exec_sdl_callback;
   std::vector<std::function<void()>> reset_local_memory;
   std::shared_ptr<SiglusWipeEndHook> finish_active_wipe =
       std::make_shared<SiglusWipeEndHook>();

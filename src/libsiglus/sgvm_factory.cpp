@@ -57,14 +57,11 @@
 
 #include <algorithm>
 #include <boost/algorithm/string/predicate.hpp>
-#include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <initializer_list>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -74,7 +71,6 @@
 #include <vector>
 
 namespace libsiglus {
-namespace chr = std::chrono;
 namespace fs = std::filesystem;
 namespace sr = serilang;
 namespace sb = srbind;
@@ -415,77 +411,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   m.def("capture", [] {
     // TODO: create capture thumb image
   });
-
-  // abuse the vm scheduler to refresh sdl regularly
-  auto cb_holder = std::make_shared<std::function<void()>>();
-  auto frame_clock = rt.system->event().GetClock();
-  auto last_frame_tick =
-      std::make_shared<Clock::duration_t>(frame_clock->GetTicks());
-  *cb_holder = [cb_holder, vm = rt.vm.get(), system = rt.system.get(), input,
-                interaction_manager = rt.interaction_manager.get(),
-                counter_list = rt.counter_list,
-                screen_quakes = rt.screen_quakes, stage = rt.stage.get(),
-                frame_actions = rt.frame_action_manager,
-                update_wipe = rt.update_wipe_after_frame_actions,
-                local_config = rt.local_config, frame_clock,
-                last_frame_tick]() {
-    constexpr auto period =
-        chr::duration_cast<chr::steady_clock::duration>(chr::seconds(1)) / 60;
-    auto next = chr::steady_clock::now() + period;
-
-    input->ResetState();
-    system->Run([interaction_manager, counter_list, screen_quakes, stage,
-                 frame_actions, update_wipe, local_config, frame_clock,
-                 last_frame_tick, system] {
-      interaction_manager->Update();
-
-      const Clock::duration_t now = frame_clock->GetTicks();
-      Clock::duration_t real_delta = now - *last_frame_tick;
-      *last_frame_tick = now;
-      if (real_delta < Clock::duration_t::zero())
-        real_delta = Clock::duration_t::zero();
-
-      const auto flag = [local_config](std::string_view name) {
-        return local_config && (*local_config)(name).Int().value_or(0) != 0;
-      };
-      const std::int64_t real_ms = real_delta.count();
-      const bool fast_forward = system->ShouldFastForward();
-      const std::int64_t game_ms =
-          fast_forward
-              ? (real_ms > std::numeric_limits<std::int64_t>::max() / 32
-                     ? std::numeric_limits<std::int64_t>::max()
-                     : real_ms * 32)
-              : real_ms;
-      if (!flag("time_stop") && !flag("counter_time_stop")) {
-        counter_list->Advance(game_ms, real_ms);
-      }
-      const bool time_stopped = flag("time_stop");
-      const bool quakes_were_active =
-          (screen_quakes && screen_quakes->IsActive()) ||
-          (stage && stage->HasActiveQuakes());
-      if (!time_stopped && screen_quakes)
-        screen_quakes->Advance(game_ms);
-      if (!time_stopped && !flag("stage_time_stop") && stage)
-        stage->AdvanceQuakes(game_ms);
-      const bool quakes_are_active =
-          (screen_quakes && screen_quakes->IsActive()) ||
-          (stage && stage->HasActiveQuakes());
-      if (quakes_were_active || quakes_are_active)
-        system->graphics().ForceRefresh();
-      frame_actions->AdvanceAndDispatch(real_delta, fast_forward);
-      if (update_wipe)
-        update_wipe();
-    });
-    if (system->IsQuitRequested()) {
-      vm->RequestStop();
-      return;
-    }
-
-    vm->scheduler_.PushCallbackAt(*cb_holder, next);
-  };
-  rt.exec_sdl_callback = [cb_holder]() { (*cb_holder)(); };
-  rt.vm->scheduler_.PushCallbackAfter(rt.exec_sdl_callback,
-                                      chr::milliseconds(2));
 
   return ret;
 }

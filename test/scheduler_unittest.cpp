@@ -197,6 +197,51 @@ TEST_F(SchedulerTest, WaitForNextDoesNothingWithoutTimers) {
   EXPECT_EQ(poller->wait_calls, 0);
 }
 
+TEST_F(SchedulerTest, DeadlineCapsWaitForLaterTimer) {
+  const auto now = clock->GetTime();
+  scheduler.PushCallbackAt([] {}, now + 20ms);
+
+  scheduler.WaitForNext(now + 5ms);
+  EXPECT_EQ(poller->last_timeout, 5ms);
+
+  clock->AdvanceTime(5ms);
+  scheduler.WaitForNext(now + 5ms);
+  EXPECT_EQ(poller->last_timeout, 0ms);
+}
+
+TEST_F(SchedulerTest, EarlierTimerTakesPrecedenceOverDeadline) {
+  const auto now = clock->GetTime();
+  scheduler.PushCallbackAt([] {}, now + 2ms);
+
+  scheduler.WaitForNext(now + 10ms);
+  EXPECT_EQ(poller->last_timeout, 2ms);
+}
+
+TEST_F(SchedulerTest, DeadlineWaitsEvenWithoutTimers) {
+  scheduler.WaitForNext(clock->GetTime() + 7ms);
+
+  EXPECT_EQ(poller->wait_calls, 1);
+  EXPECT_EQ(poller->last_timeout, 7ms);
+}
+
+TEST_F(SchedulerTest, DeadlinePausesSelfReschedulingTimer) {
+  const auto now = clock->GetTime();
+  int calls = 0;
+  std::function<void()> callback = [&] {
+    ++calls;
+    clock->AdvanceTime(1ms);
+    scheduler.PushCallbackAt(callback, now);
+  };
+  scheduler.PushCallbackAt(callback, now);
+
+  scheduler.DrainExpiredTimers(now + 3ms);
+  EXPECT_EQ(calls, 3);
+  EXPECT_EQ(scheduler.GetTime(), now + 3ms);
+
+  scheduler.DrainExpiredTimers(now + 5ms);
+  EXPECT_EQ(calls, 5);
+}
+
 TEST_F(SchedulerTest, ScheduleAtOffsets) {
   Fiber fiber;
   fiber.state = FiberState::Suspended;

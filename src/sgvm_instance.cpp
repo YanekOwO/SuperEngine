@@ -67,7 +67,7 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
     }
 
     vm.ScheduleExecute(script);
-    vm.Run();
+    machine->Run();
 
     return 0;
 

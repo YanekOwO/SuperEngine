@@ -56,10 +56,13 @@ class Scheduler {
             std::unique_ptr<Clock> clock = std::make_unique<Clock>());
 
   bool IsIdle() const noexcept;
+  Clock::timepoint_t GetTime() const;
 
   void DrainExpiredTimers();
+  void DrainExpiredTimers(Clock::timepoint_t deadline);
   Fiber* NextTask();
   void WaitForNext();
+  void WaitForNext(Clock::timepoint_t deadline);
 
   void PushTask(Fiber* f);
   void PushMicroTask(Fiber* f);

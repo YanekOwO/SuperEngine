@@ -301,17 +301,39 @@ void VM::CollectGarbage() {
 
 Value VM::AddTrack(TempValue&& t) { return gc_->TrackValue(std::move(t)); }
 
-Value VM::Run() {
+Value VM::Run() { return RunUntil(std::nullopt); }
+
+Value VM::Run(std::chrono::steady_clock::duration budget) {
+  const auto now = scheduler_.GetTime();
+  budget = std::max(budget, std::chrono::steady_clock::duration::zero());
+  const auto remaining = Clock::timepoint_t::max() - now;
+  return RunUntil(now + std::min(budget, remaining));
+}
+
+bool VM::HasPendingWork() {
+  return !scheduler_.IsIdle() || CountPendingPromises() > 0 ||
+         std::ranges::any_of(fibres_, [](const Fiber* fiber) {
+           return fiber->state == FiberState::New;
+         });
+}
+
+Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
   // Seed: enqueue any New fibers so they can be processed.
   for (auto* f : fibres_)
     if (f->state == FiberState::New)
       scheduler_.PushTask(f);
 
-  while (!scheduler_.IsIdle() || CountPendingPromises() > 0) {
-    if (stop_requested_)
+  const auto should_pause = [this, deadline] {
+    return stop_requested_ || (deadline && scheduler_.GetTime() >= *deadline);
+  };
+  while (HasPendingWork()) {
+    if (should_pause())
       break;
-    scheduler_.DrainExpiredTimers();
-    if (stop_requested_)
+    if (deadline)
+      scheduler_.DrainExpiredTimers(*deadline);
+    else
+      scheduler_.DrainExpiredTimers();
+    if (should_pause() || !HasPendingWork())
       break;
 
     if (Fiber* next = scheduler_.NextTask()) {
@@ -335,7 +357,10 @@ Value VM::Run() {
           ++dead_fibre_count_;
       }
     } else {
-      scheduler_.WaitForNext();
+      if (deadline)
+        scheduler_.WaitForNext(*deadline);
+      else
+        scheduler_.WaitForNext();
     }
 
     // run garbage collector periodically

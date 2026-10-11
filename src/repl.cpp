@@ -32,6 +32,7 @@
 
 #include <boost/program_options.hpp>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 
@@ -72,7 +73,7 @@ static std::shared_ptr<SourceBuffer> LoadSource(std::string file_name) {
   return nullptr;
 }
 
-static void run_repl(VM& vm) {
+static void run_repl(VM& vm, const std::function<void(Code*)>& execute) {
   CompilerPipeline pipeline(vm.gc_, /*repl_mode=*/true);
 
   std::string line, line_trimmed;
@@ -137,7 +138,9 @@ static void run_repl(VM& vm) {
       std::unique_ptr<ScopedCurrentPath> scoped_path;
       if (!run_cwd.empty())
         scoped_path = std::make_unique<ScopedCurrentPath>(run_cwd);
-      std::ignore = vm.Evaluate(chunk);
+      execute(chunk);
+      if (vm.IsStopRequested())
+        break;
     } catch (const std::exception& ex) {
       std::cerr << "runtime: " << ex.what() << '\n';
     }
@@ -181,10 +184,13 @@ int main(int argc, char* argv[]) {
     if (!siglus_path.empty()) {
       std::unique_ptr<libsiglus::SiglusMachine> env =
           libsiglus::SGVMFactory(std::move(siglus_path)).Create();
-      run_repl(*env->vm);
+      run_repl(*env->vm, [&env](Code* chunk) {
+        env->vm->AddFiber(chunk);
+        env->Run();
+      });
     } else {
       auto vm = m6::VMFactory::Create();
-      run_repl(vm);
+      run_repl(vm, [&vm](Code* chunk) { std::ignore = vm.Evaluate(chunk); });
     }
   } catch (std::exception const& ex) {
     std::cerr << "fatal: " << ex.what() << '\n';
