@@ -30,7 +30,7 @@
 #include "effects/effect.hpp"
 
 // Base class for implementing \#SEL transition style \#10, Blind.
-class BlindEffect : public Effect {
+class BlindEffect : public EffectLongOperation {
  public:
   BlindEffect(RLMachine& machine,
               std::shared_ptr<SDLSurface> src,

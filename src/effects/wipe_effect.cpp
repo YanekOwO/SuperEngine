@@ -44,7 +44,7 @@ WipeEffect::WipeEffect(RLMachine& machine,
                        const Size& screen_size,
                        int time,
                        int interpolation)
-    : Effect(machine, src, dst, screen_size, time),
+    : EffectLongOperation(machine, src, dst, screen_size, time),
       interpolation_(interpolation),
       interpolation_in_pixels_(0) {
   if (interpolation_)

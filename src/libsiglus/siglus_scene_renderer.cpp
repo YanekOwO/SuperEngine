@@ -44,7 +44,7 @@ class ScopedRenderParameters {
  public:
   ScopedRenderParameters(GraphicsObject& object,
                          double multiplier,
-                         const StageElement<StageEffect>::layer_type& effects)
+                         const StageElement<Effect>::layer_type& effects)
       : object_(object), original_(object.Param()) {
     const int order = original_.z_order;
     const int layer = original_.z_layer;

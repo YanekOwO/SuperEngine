@@ -48,26 +48,29 @@ namespace {
 
 // Callbacks leave the object tree and channel lists intact during traversal.
 template <typename Visitor>
-void VisitActions(FrameAction& global_action,
+void VisitActions(const std::shared_ptr<FrameAction>& global_action,
                   FrameActionList& global_channels,
                   Stage& stage,
                   Visitor visitor) {
+  auto visit_action = [&](std::shared_ptr<FrameAction> action,
+                          ActionOwner owner, bool background) {
+    if (action)
+      visitor(ActionReference{std::move(action), std::move(owner)}, background);
+  };
   auto visit_object = [&](auto&& self, std::shared_ptr<GraphicsObject> object,
                           bool background) -> void {
     if (!object)
       return;
-    visitor(object->frame_action_, ActionLocation{ObjectHandle(object), {}},
-            background);
-    for (std::size_t i = 0; i < object->frame_action_list_.size(); ++i)
-      visitor(object->frame_action_list_[i],
-              ActionLocation{ObjectHandle(object), i}, background);
+    visit_action(object->frame_action_, object, background);
+    for (const auto& action : object->frame_action_list_)
+      visit_action(action, object, background);
     for (const auto& child : object->GetChildren())
       self(self, child, background);
   };
 
-  visitor(global_action, ActionLocation{}, false);
-  for (std::size_t i = 0; i < global_channels.size(); ++i)
-    visitor(global_channels[i], ActionLocation{{}, i}, false);
+  visit_action(global_action, {}, false);
+  for (const auto& action : global_channels)
+    visit_action(action, {}, false);
 
   for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
     for (const auto& object : stage.objects[layer])
@@ -75,48 +78,24 @@ void VisitActions(FrameAction& global_action,
   }
 }
 
-std::shared_ptr<GraphicsObject> ResolveOwner(const ActionOwner& owner) {
-  if (!owner)
-    return {};
-  auto object = owner->lock();
-  if (!object)
-    throw sr::RuntimeError("frame-action owner has been deallocated");
-  return object;
-}
-
-struct ResolvedAction {
-  std::shared_ptr<GraphicsObject> owner;
-  FrameAction& action;
-};
-
-ResolvedAction ResolveAction(const ActionLocation& location,
-                             FrameActionManager& manager) {
-  auto owner = ResolveOwner(location.owner);
-  if (!location.channel) {
-    auto& action = owner ? owner->frame_action_ : manager.global_action();
-    return {std::move(owner), action};
-  }
-  auto& channels =
-      owner ? owner->frame_action_list_ : manager.global_channels();
-  if (*location.channel >= channels.size())
-    throw sr::RuntimeError(
-        std::format("frame-action index out of range: {}", *location.channel));
-  auto& action = channels[*location.channel];
-  return {std::move(owner), action};
+FrameAction& ResolveAction(const ActionReference& reference) {
+  if (!reference.action)
+    throw sr::RuntimeError("frame-action handle is null");
+  return *reference.action;
 }
 
 class FrameActionHandle {
  public:
-  FrameActionHandle(ActionLocation location, FrameActionManager* manager)
-      : location_(std::move(location)), manager_(manager) {}
+  FrameActionHandle(ActionReference reference, FrameActionManager* manager)
+      : reference_(std::move(reference)), manager_(manager) {}
 
-  ResolvedAction Resolve() const { return ResolveAction(location_, *manager_); }
+  FrameAction& Resolve() const { return ResolveAction(reference_); }
 
   void Start(Loader& loader,
              sr::Fiber& fiber,
              std::vector<sr::Value> args,
              bool real_time) {
-    auto action = Resolve();
+    (void)Resolve();
     if (args.size() < 2)
       throw sr::RuntimeError("frame_action.start expects duration and command");
     const int* duration = args[0].Get_if<int>();
@@ -128,15 +107,15 @@ class FrameActionHandle {
 
     const UserCommand& resolved =
         loader.ResolveUserCommand(fiber, command->str_);
-    const std::size_t prefix = action.owner ? 2 : 1;
+    const std::size_t prefix = reference_.owner ? 2 : 1;
     if (resolved.args.size() != prefix + args.size() - 2 ||
         resolved.args.empty() || resolved.args[0] != Type::FrameAction ||
-        (action.owner && resolved.args[1] != Type::Object)) {
+        (reference_.owner && resolved.args[1] != Type::Object)) {
       throw sr::RuntimeError(std::format(
           "frame-action command '{}' has incompatible signature: expected {} "
           "arguments beginning with {}",
           command->str_, prefix + args.size() - 2,
-          action.owner ? "FrameAction, Object" : "FrameAction"));
+          reference_.owner ? "FrameAction, Object" : "FrameAction"));
     }
 
     std::vector<FrameActionArgument> arguments;
@@ -154,15 +133,15 @@ class FrameActionHandle {
             i - 1, command->str_));
       }
     }
-    manager_->Start(location_, *duration, real_time, *resolved.function,
+    manager_->Start(reference_, *duration, real_time, *resolved.function,
                     std::move(arguments));
   }
 
-  void End() { manager_->End(location_); }
-  int IsEndAction() const { return Resolve().action.end_action ? 1 : 0; }
+  void End() { manager_->End(reference_); }
+  int IsEndAction() const { return Resolve().end_action ? 1 : 0; }
 
  private:
-  ActionLocation location_;
+  ActionReference reference_;
   FrameActionManager* manager_;
 };
 
@@ -172,17 +151,16 @@ class FrameActionListHandle {
       : owner_(std::move(owner)), manager_(manager) {}
 
   sr::Value Get(int index) {
-    auto resolved = Resolve();
-    if (index < 0 || static_cast<std::size_t>(index) >= resolved.actions.size())
+    auto& actions = Resolve();
+    if (index < 0 || static_cast<std::size_t>(index) >= actions.size())
       throw sr::RuntimeError(
           std::format("frame-action index out of range: {}", index));
-    return manager_->MakeActionValue(
-        ActionLocation{owner_, static_cast<std::size_t>(index)});
+    return manager_->MakeActionValue(ActionReference{
+        TouchFrameAction(actions[static_cast<std::size_t>(index)]), owner_});
   }
 
   int Size() const {
-    auto resolved = Resolve();
-    const auto size = resolved.actions.size();
+    const auto size = Resolve().size();
     if (size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
       throw sr::RuntimeError("frame-action list is too large");
     return static_cast<int>(size);
@@ -193,21 +171,12 @@ class FrameActionListHandle {
       throw sr::RuntimeError("global frame-action channel list is fixed-size");
     if (size < 0)
       throw sr::RuntimeError("frame-action list size cannot be negative");
-    auto resolved = Resolve();
-    resolved.actions.resize(static_cast<std::size_t>(size));
+    Resolve().resize(static_cast<std::size_t>(size));
   }
 
  private:
-  struct ResolvedList {
-    std::shared_ptr<GraphicsObject> owner;
-    FrameActionList& actions;
-  };
-
-  ResolvedList Resolve() const {
-    auto owner = ResolveOwner(owner_);
-    auto& actions =
-        owner ? owner->frame_action_list_ : manager_->global_channels();
-    return {std::move(owner), actions};
+  FrameActionList& Resolve() const {
+    return owner_ ? owner_->frame_action_list_ : manager_->global_channels();
   }
 
   ActionOwner owner_;
@@ -235,9 +204,10 @@ void FrameActionManager::SetObjectFactory(ObjectFactory object_factory) {
   object_factory_ = std::move(object_factory);
 }
 
-sr::Value FrameActionManager::MakeActionValue(ActionLocation location) {
+sr::Value FrameActionManager::MakeActionValue(ActionReference reference) {
+  (void)ResolveAction(reference);
   auto* instance = vm_.gc_->Allocate<sr::NativeInstance>(action_class_);
-  instance->SetForeign(new FrameActionHandle(std::move(location), this));
+  instance->SetForeign(new FrameActionHandle(std::move(reference), this));
   return instance;
 }
 
@@ -249,12 +219,12 @@ sr::Value FrameActionManager::MakeListValue(ActionOwner owner) {
 
 std::vector<sr::Value> FrameActionManager::MakeCallbackArguments(
     const FrameAction& action,
-    const ActionLocation& location) {
+    const ActionReference& reference) {
   std::vector<sr::Value> result;
-  result.reserve(1 + (location.owner ? 1 : 0) + action.arguments.size());
-  result.emplace_back(MakeActionValue(location));
-  if (location.owner)
-    result.emplace_back(object_factory_(*location.owner));
+  result.reserve(1 + (reference.owner ? 1 : 0) + action.arguments.size());
+  result.emplace_back(MakeActionValue(reference));
+  if (reference.owner)
+    result.emplace_back(object_factory_(reference.owner));
   for (const FrameActionArgument& argument : action.arguments) {
     if (const int* value = std::get_if<int>(&argument))
       result.emplace_back(*value);
@@ -265,10 +235,10 @@ std::vector<sr::Value> FrameActionManager::MakeCallbackArguments(
   return result;
 }
 
-void FrameActionManager::RunFinal(FrameAction& action,
-                                  const ActionLocation& location) {
+void FrameActionManager::RunFinal(const ActionReference& reference) {
+  auto& action = ResolveAction(reference);
   sr::Function* callback = action.function;
-  auto arguments = MakeCallbackArguments(action, location);
+  auto arguments = MakeCallbackArguments(action, reference);
   action.function = nullptr;
   action.end_action = true;
   action.GetCounter()->Set(std::max(0, action.end_time));
@@ -282,25 +252,23 @@ void FrameActionManager::RunFinal(FrameAction& action,
   action.Reset();
 }
 
-void FrameActionManager::Start(ActionLocation location,
+void FrameActionManager::Start(ActionReference reference,
                                int duration,
                                bool real_time,
                                sr::Function& callback,
                                std::vector<FrameActionArgument> arguments) {
-  auto resolved = ResolveAction(location, *this);
-  End(location);
-  auto& action = resolved.action;
+  auto& action = ResolveAction(reference);
+  End(reference);
   action.function = &callback;
   action.arguments = std::move(arguments);
   action.end_time = duration;
   action.GetCounter()->Start(real_time);
 }
 
-void FrameActionManager::End(ActionLocation location) {
-  auto resolved = ResolveAction(location, *this);
-  auto& action = resolved.action;
+void FrameActionManager::End(ActionReference reference) {
+  auto& action = ResolveAction(reference);
   if (action.IsActive())
-    RunFinal(action, location);
+    RunFinal(reference);
   else
     action.Reset();
 }
@@ -323,31 +291,35 @@ void FrameActionManager::AdvanceAndDispatch(
   const bool objects_stopped =
       ConfigFlag("time_stop") || ConfigFlag("stage_time_stop");
   VisitActions(global_action_, global_channels_, stage_,
-               [&](FrameAction& action, const ActionLocation& location, bool) {
+               [&](const ActionReference& reference, bool) {
+                 auto& action = *reference.action;
                  if (action.counter &&
-                     !(location.owner ? objects_stopped : globals_stopped))
+                     !(reference.owner ? objects_stopped : globals_stopped))
                    action.counter->Advance(game_ms, real_ms);
                });
   VisitActions(global_action_, global_channels_, stage_,
-               [&](FrameAction& action, const ActionLocation& location, bool) {
+               [&](const ActionReference& reference, bool) {
+                 auto& action = *reference.action;
                  if (action.IsActive())
                    vm_.InvokeUntilBlocked(
                        *action.function,
-                       MakeCallbackArguments(action, location));
+                       MakeCallbackArguments(action, reference));
                });
   VisitActions(global_action_, global_channels_, stage_,
-               [&](FrameAction& action, const ActionLocation& location,
-                   bool background) {
+               [&](const ActionReference& reference, bool background) {
+                 auto& action = *reference.action;
                  if (!background && action.IsActive() && action.end_time >= 0 &&
                      action.counter && action.counter->Get() >= action.end_time)
-                   RunFinal(action, location);
+                   RunFinal(reference);
                });
 }
 
 void FrameActionManager::CancelGlobals() {
-  global_action_.Reset();
+  if (global_action_)
+    global_action_->Reset();
   for (auto& action : global_channels_)
-    action.Reset();
+    if (action)
+      action->Reset();
 }
 
 void BindFrameActions(SiglusMachine& runtime) {
@@ -384,8 +356,7 @@ void BindFrameActions(SiglusMachine& runtime) {
   action_class.def("is_end_action", &FrameActionHandle::IsEndAction);
   action_class.def("counter", [make_counter = runtime.make_counter](
                                   FrameActionHandle* action) {
-    auto resolved = action->Resolve();
-    return make_counter(resolved.action.GetCounter());
+    return make_counter(action->Resolve().GetCounter());
   });
   list_class.def("__getitem__", &FrameActionListHandle::Get, sb::arg("index"));
   list_class.def("size", &FrameActionListHandle::Size);
@@ -396,7 +367,8 @@ void BindFrameActions(SiglusMachine& runtime) {
   (*vm.builtins_)["%%siglus_frame_action_class"] = action_class.native_class();
   (*vm.builtins_)["%%siglus_frame_action_list_class"] =
       list_class.native_class();
-  (*vm.globals_)["frame_action"] = manager->MakeActionValue();
+  (*vm.globals_)["frame_action"] =
+      manager->MakeActionValue(ActionReference{manager->global_action(), {}});
   (*vm.globals_)["frame_action_ch"] = manager->MakeListValue();
   runtime.reset_local_memory.emplace_back(
       [manager] { manager->CancelGlobals(); });

@@ -50,11 +50,13 @@ struct FrameAction {
   // Borrowed from a scene module kept alive by the VM.
   serilang::Function* function = nullptr;
   std::vector<FrameActionArgument> arguments;
-  // Created on first use; moves transfer the allocation without replacing
-  // counters referenced by scripts when a channel vector grows.
+  // Created on first use; retained Counter handles own this allocation.
   std::shared_ptr<Counter> counter;
   int end_time = 0;
   bool end_action = false;
 };
 
-using FrameActionList = std::vector<FrameAction>;
+using FrameActionList = std::vector<std::shared_ptr<FrameAction>>;
+
+std::shared_ptr<FrameAction> TouchFrameAction(
+    std::shared_ptr<FrameAction>& action);

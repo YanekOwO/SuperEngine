@@ -31,7 +31,7 @@
 
 class RLMachine;
 class SDLSurface;
-class Effect;
+class EffectLongOperation;
 struct selRecord;
 
 // Factory that creates all Effects. This factory is called with
@@ -39,19 +39,19 @@ struct selRecord;
 // equivalent parameters.
 class EffectFactory {
  public:
-  // Builds an Effect based off the \#SEL.selnum line in the
+  // Builds an EffectLongOperation based off the \#SEL.selnum line in the
   // Gameexe.ini file. The coordinates, which are in grp* format (x1,
   // y1, x2, y2), are converted to rec* format and then based to the
   // build() method.
-  static Effect* BuildFromSEL(RLMachine& machine,
-                              std::shared_ptr<SDLSurface> src,
-                              std::shared_ptr<SDLSurface> dst,
-                              int selnum);
+  static EffectLongOperation* BuildFromSEL(RLMachine& machine,
+                                           std::shared_ptr<SDLSurface> src,
+                                           std::shared_ptr<SDLSurface> dst,
+                                           int selnum);
 
   // Returns a constructed LongOperation with the following properties
   // to perform a transition.
-  static Effect* Build(RLMachine& machine,
-                       std::shared_ptr<SDLSurface> src,
-                       std::shared_ptr<SDLSurface> dst,
-                       selRecord record);
+  static EffectLongOperation* Build(RLMachine& machine,
+                                    std::shared_ptr<SDLSurface> src,
+                                    std::shared_ptr<SDLSurface> dst,
+                                    selRecord record);
 };

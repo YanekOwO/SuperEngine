@@ -21,21 +21,21 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include "core/stage_effect.hpp"
+#include "core/effect.hpp"
 
 #include "core/object_internal/object_parameter.hpp"
 
 #include <algorithm>
 #include <utility>
 
-void StageEffect::Reset() { *this = StageEffect(); }
+void Effect::Reset() { *this = Effect(); }
 
-bool StageEffect::Contains(int order, int layer) const {
+bool Effect::Contains(int order, int layer) const {
   return std::pair(begin_order, begin_layer) <= std::pair(order, layer) &&
          std::pair(order, layer) <= std::pair(end_order, end_layer);
 }
 
-void StageEffect::ApplyTo(ObjectParameter& param) const {
+void Effect::ApplyTo(ObjectParameter& param) const {
   param.position_x += x;
   param.position_y += y;
   param.z_depth += z;
@@ -65,7 +65,7 @@ void StageEffect::ApplyTo(ObjectParameter& param) const {
   param.SetTintBlue(std::clamp(param.tint_blue() + color_add_b, 0, 255));
 }
 
-int StageEffect::Get(int idx) const {
+int Effect::Get(int idx) const {
   switch (idx) {
     case 0:
       return x;
@@ -113,7 +113,7 @@ int StageEffect::Get(int idx) const {
   }
 }
 
-void StageEffect::Set(int idx, int value) {
+void Effect::Set(int idx, int value) {
   const int level = std::clamp(value, 0, 255);
   switch (idx) {
     case 0:
@@ -182,7 +182,7 @@ void StageEffect::Set(int idx, int value) {
   }
 }
 
-std::string_view StageEffect::GetPropertyName(int idx) {
+std::string_view Effect::GetPropertyName(int idx) {
   switch (idx) {
     case 0:
       return "x";

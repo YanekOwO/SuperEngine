@@ -100,7 +100,7 @@ class QuakeList {
   explicit QuakeList(std::size_t size = 0);
 
   inline std::size_t size() const { return elements_.size(); }
-  std::weak_ptr<QuakeState> GetHandle(int index) const;
+  std::shared_ptr<QuakeState> GetHandle(int index) const;
   void Advance(std::int64_t elapsed_ms);
   void Reset();
   bool IsActive() const;

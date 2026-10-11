@@ -23,71 +23,84 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/effect.hpp"
 #include "core/stage.hpp"
-#include "core/stage_effect.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "srbind/srbind.hpp"
+#include "vm/exception.hpp"
 
+#include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace libsiglus::binding {
 namespace sb = srbind;
+namespace sr = serilang;
 
-using EffectHandle = StageElement<StageEffect>::Handle;
-static StageEffect& ResolveEffect(const EffectHandle& handle) {
-  return StageElement<StageEffect>::Resolve(handle);
-}
+struct EffectHandle {
+  std::shared_ptr<Effect> effect;
+};
 
 void BindEffect(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage_state = runtime.stage.get();
-
+  if (!stage_state)
+    throw std::runtime_error("Effect requires a stage");
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  m.def("__stage_effect_size", [stage_state](int layer) {
-    return static_cast<int>(stage_state->EffectsForLayer(layer).size());
-  });
-  m.def("__stage_effect_resize", [stage_state](int layer, int size) {
-    stage_state->ResizeEffects(layer, size);
-  });
 
   sb::class_<EffectHandle> effect(m, "Effect");
-  effect.def(sb::init([stage_state](int layer, int index) -> EffectHandle* {
-               if (!stage_state)
-                 throw std::runtime_error("Effect requires a stage");
-               if (index < 0)
-                 throw std::out_of_range("Negative stage effect index");
-               return new EffectHandle(stage_state->effects.GetHandle(
-                   layer, static_cast<std::size_t>(index)));
-             }),
-             sb::arg("layer") = static_cast<int>(kLayerFg),
-             sb::arg("index") = 0);
-  effect.def("init",
-             [](EffectHandle* handle) { ResolveEffect(*handle).Reset(); });
+  effect.def(
+      sb::init([stage_state](int layer, int index) {
+        if (index < 0)
+          throw std::out_of_range("Negative stage effect index");
+        std::shared_ptr<Effect> e = stage_state->effects.Get(layer, index);
+        return std::make_unique<EffectHandle>(e);
+      }),
+      sb::arg("layer") = static_cast<int>(kLayerFg), sb::arg("index") = 0);
+  effect.def("init", [](EffectHandle* h) { h->effect->Reset(); });
   for (int i = 0; i <= 34; ++i) {
     try {
-      const std::string name(StageEffect::GetPropertyName(i));
+      const std::string name(Effect::GetPropertyName(i));
       const std::string setter_name = "set_" + name;
-      effect.def(name.c_str(), [i](EffectHandle* handle) {
-        return ResolveEffect(*handle).Get(i);
-      });
-      effect.def(setter_name.c_str(), [i](EffectHandle* handle, int value) {
-        ResolveEffect(*handle).Set(i, value);
-      });
+      effect.def(name.c_str(),
+                 [i](EffectHandle* h) { return h->effect->Get(i); });
+      effect.def(setter_name.c_str(),
+                 [i](EffectHandle* h, int value) { h->effect->Set(i, value); });
     } catch (const std::runtime_error&) {
     }
   }
 
-  std::string src = R"(
-class EffectArray {
-  fn __init__(self, layer) { self.layer = layer; }
-  fn __getitem__(self, idx) { return Effect(self.layer, idx); }
-  fn size(self) { return __stage_effect_size(self.layer); }
-  fn resize(self, size) { __stage_effect_resize(self.layer, size); }
-}
-)";
-
-  Execute(vm, std::move(src));
+  struct EffectListHandle {
+    int layer;
+  };
+  sb::class_<EffectListHandle> effect_array(m, "EffectArray");
+  effect_array.add_gc_root(effect);
+  effect_array.def(
+      sb::init([](int layer) {
+        if (layer != kLayerFg && layer != kLayerBg && layer != kLayerNext)
+          throw sr::RuntimeError("invalid effect layer: " +
+                                 std::to_string(layer));
+        return std::make_unique<EffectListHandle>(layer);
+      }),
+      sb::arg("layer"));
+  effect_array.def(
+      "__getitem__",
+      [stage_state, effect](EffectListHandle* h, int index) mutable {
+        std::shared_ptr<Effect> e = stage_state->effects.Get(h->layer, index);
+        sr::NativeInstance* inst = effect.make_inst(e);
+        return sr::Value(inst);
+      },
+      sb::arg("index"));
+  effect_array.def("size", [stage_state](EffectListHandle* h) -> int {
+    return stage_state->effects[h->layer].size();
+  });
+  effect_array.def(
+      "resize",
+      [stage_state](EffectListHandle* h, int size) {
+        return stage_state->effects[h->layer].resize(size);
+      },
+      sb::arg("size"));
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_effect", BindEffect);

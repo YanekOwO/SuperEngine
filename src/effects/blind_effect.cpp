@@ -41,7 +41,8 @@ BlindEffect::BlindEffect(RLMachine& machine,
                          const Size& screen_size,
                          int time,
                          int blindSize)
-    : Effect(machine, src, dst, screen_size, time), blind_size_(blindSize) {}
+    : EffectLongOperation(machine, src, dst, screen_size, time),
+      blind_size_(blindSize) {}
 
 BlindEffect::~BlindEffect() {}
 

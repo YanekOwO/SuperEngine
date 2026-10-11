@@ -45,27 +45,27 @@ class RLMachine;
 // are all LongOperations which take over the screen during the
 // transition, surpressing the normal auto-redrawing behaviour.
 //
-// There are a large number of Effect s. Instead of trying to manually
+// There are a large number of transition effects. Instead of trying to manually
 // create them, use the EffectFactory instead, which will instantiate
-// the correct Effect subclass based off the parameters
+// the correct EffectLongOperation subclass based off the parameters
 
 // Transition effect on DCs.
 //
-// Effect is the base class from which all transition effects defined
-// on \#SELs derive from. These effects are all implemented as
+// EffectLongOperation is the base class from which all transition effects
+// defined on \#SELs derive from. These effects are all implemented as
 // LongOperations on the RLMachine, as they are all long and blocking
 // operations.
-class Effect : public LongOperation {
+class EffectLongOperation : public LongOperation {
  public:
   // Sets up all other variables, adding 1 to both width and height; RL is the
   // only system I know of where ranges are inclusive...
-  Effect(RLMachine& machine,
-         std::shared_ptr<SDLSurface> src,
-         std::shared_ptr<SDLSurface> dst,
-         Size size,
-         int time);
+  EffectLongOperation(RLMachine& machine,
+                      std::shared_ptr<SDLSurface> src,
+                      std::shared_ptr<SDLSurface> dst,
+                      Size size,
+                      int time);
 
-  virtual ~Effect();
+  virtual ~EffectLongOperation();
 
   // Implements the LongOperation calling interface. This simply keeps
   // track of the current time and calls PerformEffectForTime() until
@@ -115,10 +115,10 @@ class Effect : public LongOperation {
 };
 
 // LongOperationDecorator used in cases where we need to blit an image
-// to the screen after an Effect finishes. This is most of the cases.
-// This is optional and isn't part of Effect because {rec,grp}OpenBg
-// can take '?' as the name of the image file to load, in which case
-// the Blit doesn't happen.
+// to the screen after an EffectLongOperation finishes. This is most of the
+// cases. This is optional and isn't part of EffectLongOperation because
+// {rec,grp}OpenBg can take '?' as the name of the image file to load, in which
+// case the Blit doesn't happen.
 class BlitAfterEffectFinishes : public PerformAfterLongOperationDecorator {
  public:
   BlitAfterEffectFinishes(LongOperation* in,

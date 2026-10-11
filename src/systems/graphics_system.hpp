@@ -82,7 +82,8 @@ struct GraphicsSystemGlobals {
 
   int show_weather;
 
-  // Whether we should skip animations (such as those made by Effect)
+  // Whether we should skip animations (such as those made by
+  // EffectLongOperation)
   int skip_animations;
 
   // screen mode. 1 is windowed (default), 0 is full-screen.
@@ -266,7 +267,8 @@ class GraphicsSystem : public EventListener {
   void ToggleInterfaceHidden();
   bool is_interface_hidden() { return interface_hidden_; }
 
-  // Whether we should skip animations (such as all the Effect subclasses).
+  // Whether we should skip animations (such as all EffectLongOperation
+  // subclasses).
   int should_skip_animations() const { return globals_.skip_animations; }
   void set_should_skip_animations(const int in) {
     globals_.skip_animations = in;

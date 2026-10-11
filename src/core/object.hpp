@@ -153,7 +153,11 @@ class GraphicsObject {
   void EndAllMutators();
   std::size_t CountMutators() const;
 
-  FrameAction frame_action_;
+  std::shared_ptr<FrameAction> GetFrameAction();
+  std::shared_ptr<FrameAction> GetFrameAction(std::size_t channel);
+  void ResetFrameActions();
+
+  std::shared_ptr<FrameAction> frame_action_;
   FrameActionList frame_action_list_;
 
  private:

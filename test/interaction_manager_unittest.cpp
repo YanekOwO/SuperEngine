@@ -57,7 +57,7 @@ class InteractionManagerTest : public ::testing::Test {
     auto& groups = stage_.groups[layer];
     const size_t index = groups.size();
     groups.resize(index + 1);
-    Group& group = stage_.groups.Get(layer, index);
+    Group& group = *stage_.groups.Get(layer, index);
     group.status = status;
     return group;
   }

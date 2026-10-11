@@ -30,7 +30,7 @@
 #include "effects/effect.hpp"
 
 // Simple fade in.
-class FadeEffect : public Effect {
+class FadeEffect : public EffectLongOperation {
  public:
   FadeEffect(RLMachine& machine,
              std::shared_ptr<SDLSurface> src,

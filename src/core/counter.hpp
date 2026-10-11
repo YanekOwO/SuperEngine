@@ -62,7 +62,7 @@ class CounterList {
   explicit CounterList(std::size_t size);
 
   inline std::size_t size() const { return elements_.size(); }
-  std::weak_ptr<Counter> GetHandle(int index) const;
+  std::shared_ptr<Counter> GetHandle(int index) const;
   void Advance(std::int64_t game_ms, std::int64_t real_ms);
   void Reset();
 

@@ -135,8 +135,8 @@ TEST(QuakeTransformTest, CompositionAppliesLaterTransformAfterEarlierOne) {
 
 TEST(QuakeListTest, ComposesOnlyMatchingActiveQuakesInIndexOrder) {
   QuakeList list(2);
-  auto first = list.GetHandle(0).lock();
-  auto second = list.GetHandle(1).lock();
+  auto first = list.GetHandle(0);
+  auto second = list.GetHandle(1);
   ASSERT_TRUE(first);
   ASSERT_TRUE(second);
 
@@ -159,6 +159,21 @@ TEST(QuakeListTest, ComposesOnlyMatchingActiveQuakesInIndexOrder) {
   EXPECT_DOUBLE_EQ(result.scale, 2.0);
   EXPECT_DOUBLE_EQ(result.translate_x, 100.0);
   EXPECT_TRUE(list.TransformForOrder(4).IsIdentity());
+}
+
+TEST(QuakeListTest, HandleKeepsQuakeAliveAfterListDestruction) {
+  std::shared_ptr<QuakeState> handle;
+  {
+    QuakeList list(1);
+    handle = list.GetHandle(0);
+    ASSERT_TRUE(handle->Start(ShakeParams()));
+  }
+  std::weak_ptr<QuakeState> lifetime = handle;
+  EXPECT_TRUE(handle->IsActive());
+  handle->End(0);
+  EXPECT_FALSE(handle->IsActive());
+  handle.reset();
+  EXPECT_TRUE(lifetime.expired());
 }
 
 }  // namespace

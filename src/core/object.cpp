@@ -78,8 +78,14 @@ GraphicsObject GraphicsObject::Clone() const {
       result.child_[i] = std::make_shared<GraphicsObject>(child_[i]->Clone());
   }
 
-  result.frame_action_ = frame_action_;
-  result.frame_action_list_ = frame_action_list_;
+  if (frame_action_)
+    result.frame_action_ = std::make_shared<FrameAction>(*frame_action_);
+  result.frame_action_list_.resize(frame_action_list_.size());
+  for (std::size_t i = 0; i < frame_action_list_.size(); ++i) {
+    if (frame_action_list_[i])
+      result.frame_action_list_[i] =
+          std::make_shared<FrameAction>(*frame_action_list_[i]);
+  }
 
   return result;
 }
@@ -245,13 +251,31 @@ void GraphicsObject::InitializeParams() {
 }
 
 void GraphicsObject::Reset() {
-  frame_action_.Reset();
-  frame_action_list_.clear();
+  ResetFrameActions();
   object_data_.reset();
   file_path_.clear();
   param_ = ObjectParameter();
   object_mutators_.clear();
   child_.clear();
+}
+
+std::shared_ptr<FrameAction> GraphicsObject::GetFrameAction() {
+  return TouchFrameAction(frame_action_);
+}
+
+std::shared_ptr<FrameAction> GraphicsObject::GetFrameAction(
+    std::size_t channel) {
+  return TouchFrameAction(frame_action_list_.at(channel));
+}
+
+void GraphicsObject::ResetFrameActions() {
+  if (frame_action_)
+    frame_action_->Reset();
+  for (const auto& action : frame_action_list_) {
+    if (action)
+      action->Reset();
+  }
+  frame_action_list_.clear();
 }
 
 void GraphicsObject::Execute() {

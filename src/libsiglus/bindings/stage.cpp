@@ -34,26 +34,6 @@ void BindStage(SiglusMachine& runtime) {
 
   std::string src = std::format(kLazyArrayClass, "LazyArray");
   src += R"(
-class ObjectArray {
-  fn __init__(self, layer){
-    self.layer = layer;
-  }
-  fn __getitem__(self, idx){
-    return Object(self.layer, idx);
-  }
-}
-
-class GroupArray {
-  fn __init__(self, layer){
-    self.layer = layer;
-  }
-  fn __getitem__(self, idx){
-    return Group(self.layer, idx);
-  }
-}
-)";
-
-  src += R"(
 class StageLayer {
   fn __init__(self, layer = 0) {
     self.object = nil;

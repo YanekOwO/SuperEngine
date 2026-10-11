@@ -42,16 +42,15 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-// A VM-facing non-owning reference to a Counter. Other Siglus elements use
+// A VM-facing owning reference to a Counter. Other Siglus elements use
 // this handle to expose the same native Counter type as the global list.
 struct CounterHandle {
-  std::weak_ptr<Counter> counter_;
+  std::shared_ptr<Counter> counter_;
 
   std::shared_ptr<Counter> Get() const {
-    std::shared_ptr<Counter> counter = counter_.lock();
-    if (!counter)
-      throw sr::RuntimeError("counter reference is no longer valid");
-    return counter;
+    if (!counter_)
+      throw sr::RuntimeError("counter handle is null");
+    return counter_;
   }
 };
 
@@ -109,7 +108,7 @@ void BindCounter(SiglusMachine& runtime) {
   });
 
   runtime.make_counter =
-      [counter_class](std::weak_ptr<Counter> counter) mutable -> sr::Value {
+      [counter_class](std::shared_ptr<Counter> counter) mutable -> sr::Value {
     return sr::Value(counter_class.make_inst(std::move(counter)));
   };
 
@@ -124,7 +123,7 @@ void BindCounter(SiglusMachine& runtime) {
   counter_list.def(
       "__getitem__",
       [counter_class](CounterListHandle* h, int index) mutable {
-        std::weak_ptr<Counter> counter = h->list->GetHandle(index);
+        std::shared_ptr<Counter> counter = h->list->GetHandle(index);
         sr::NativeInstance* handle =
             counter_class.make_inst(std::move(counter));
         return sr::Value(handle);

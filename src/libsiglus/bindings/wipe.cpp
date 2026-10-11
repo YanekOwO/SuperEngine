@@ -388,8 +388,7 @@ struct SiglusWipe {
       const std::shared_ptr<GraphicsObject>& object) {
     if (!object)
       return;
-    object->frame_action_.Reset();
-    object->frame_action_list_.clear();
+    object->ResetFrameActions();
     for (const auto& child : object->GetChildren())
       CancelObjectActions(child);
   }

@@ -103,7 +103,7 @@ struct SiglusMachine {
 
   std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;
   std::shared_ptr<srbind::class_<SiglusStrListFacade>> slist_cls;
-  std::function<serilang::Value(std::weak_ptr<Counter>)> make_counter;
+  std::function<serilang::Value(std::shared_ptr<Counter>)> make_counter;
 
   SiglusMachine() = default;
   ~SiglusMachine();

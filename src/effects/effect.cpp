@@ -34,14 +34,14 @@
 #include "systems/sdl/sdl_surface.hpp"
 
 // -----------------------------------------------------------------------
-// Effect
+// EffectLongOperation
 // -----------------------------------------------------------------------
 
-Effect::Effect(RLMachine& machine,
-               std::shared_ptr<SDLSurface> src,
-               std::shared_ptr<SDLSurface> dst,
-               Size size,
-               int time)
+EffectLongOperation::EffectLongOperation(RLMachine& machine,
+                                         std::shared_ptr<SDLSurface> src,
+                                         std::shared_ptr<SDLSurface> dst,
+                                         Size size,
+                                         int time)
     : screen_size_(size),
       duration_(time),
       start_time_(machine.GetSystem().event().GetTicks()),
@@ -51,11 +51,11 @@ Effect::Effect(RLMachine& machine,
   machine.GetSystem().graphics().set_is_responsible_for_update(false);
 }
 
-Effect::~Effect() {
+EffectLongOperation::~EffectLongOperation() {
   machine_.GetSystem().graphics().set_is_responsible_for_update(true);
 }
 
-bool Effect::operator()(RLMachine& machine) {
+bool EffectLongOperation::operator()(RLMachine& machine) {
   // TODO: this is ugly. Currently we have to manually manage the state of the
   // graphic system, and prevent it from automatically drawing during effects.
   // But when we have more than 2 effects queued up, the first one will change

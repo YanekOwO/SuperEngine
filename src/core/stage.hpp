@@ -24,10 +24,10 @@
 
 #pragma once
 
+#include "core/effect.hpp"
 #include "core/group.hpp"
 #include "core/object.hpp"
 #include "core/quake.hpp"
-#include "core/stage_effect.hpp"
 #include "utilities/lazy_array.hpp"
 
 #include <array>
@@ -46,7 +46,6 @@
 template <class T>
 struct StageElement {
   using pointer_type = std::shared_ptr<T>;
-  using Handle = std::weak_ptr<T>;
   using layer_type = std::vector<pointer_type>;
   using storage_type = std::array<layer_type, 3>;
 
@@ -65,16 +64,11 @@ struct StageElement {
     return storage[static_cast<size_t>(layer)];
   }
 
-  T& Get(int layer, size_t pos) {
+  pointer_type Get(int layer, size_t pos) {
     pointer_type& element = (*this)[layer].at(pos);
     if (!element)
       element = std::make_shared<T>();
-    return *element;
-  }
-
-  Handle GetHandle(int layer, size_t pos) {
-    (void)Get(layer, pos);
-    return (*this)[layer][pos];
+    return element;
   }
 
   void Assign(int layer, size_t pos, T value) {
@@ -96,13 +90,6 @@ struct StageElement {
   void Resize(int layer, size_t size) { (*this)[layer].resize(size); }
 
   size_t Size(int layer) const { return (*this)[layer].size(); }
-
-  static T& Resolve(const Handle& handle) {
-    pointer_type element = handle.lock();
-    if (!element)
-      throw std::runtime_error("Stage element has been deallocated");
-    return *element;
-  }
 
   void Clear() {
     for (auto& layer : storage)
@@ -127,7 +114,7 @@ class Stage {
   StageElement<Group> groups;
 
   // Foreground, background and next stage effects.
-  StageElement<StageEffect> effects;
+  StageElement<Effect> effects;
 
   // Foreground, background and next stage quakes.
   StageElement<QuakeState> quakes;
@@ -200,14 +187,14 @@ class Stage {
     return objects[layer];
   }
 
-  inline const StageElement<StageEffect>::layer_type& EffectsForLayer(
+  inline const StageElement<Effect>::layer_type& EffectsForLayer(
       int layer) const {
     return effects[layer];
   }
-  inline StageElement<StageEffect>::layer_type& EffectsForLayer(int layer) {
+  inline StageElement<Effect>::layer_type& EffectsForLayer(int layer) {
     return effects[layer];
   }
-  StageEffect& GetEffect(int layer, int effect_number);
+  Effect& GetEffect(int layer, int effect_number);
   void ResizeEffects(int layer, int size);
 
   inline const StageElement<QuakeState>::layer_type& QuakesForLayer(
@@ -217,7 +204,7 @@ class Stage {
   inline StageElement<QuakeState>::layer_type& QuakesForLayer(int layer) {
     return quakes[layer];
   }
-  std::weak_ptr<QuakeState> GetQuakeHandle(int layer, int quake_number);
+  std::shared_ptr<QuakeState> GetQuake(int layer, int index);
   void AdvanceQuakes(std::int64_t elapsed_ms);
   bool HasActiveQuakes() const;
 

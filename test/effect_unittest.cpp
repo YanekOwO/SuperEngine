@@ -23,13 +23,13 @@
 
 #include <gtest/gtest.h>
 
+#include "core/effect.hpp"
 #include "core/object_internal/object_parameter.hpp"
-#include "core/stage_effect.hpp"
 
 #include <limits>
 
 TEST(StageEffectTest, DefaultsAndAppliesToLegacyRange) {
-  StageEffect effect;
+  Effect effect;
 
   EXPECT_EQ(effect.begin_order, 0);
   EXPECT_EQ(effect.end_order, 0);
@@ -41,7 +41,7 @@ TEST(StageEffectTest, DefaultsAndAppliesToLegacyRange) {
 }
 
 TEST(StageEffectTest, ComposesObjectColourParameters) {
-  StageEffect effect;
+  Effect effect;
   effect.x = 10;
   effect.y = -5;
   effect.mono = 128;

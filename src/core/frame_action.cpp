@@ -25,6 +25,13 @@
 
 #include <utility>
 
+std::shared_ptr<FrameAction> TouchFrameAction(
+    std::shared_ptr<FrameAction>& action) {
+  if (!action)
+    action = std::make_shared<FrameAction>();
+  return action;
+}
+
 FrameAction::FrameAction(const FrameAction& source)
     : function(source.function),
       arguments(source.arguments),

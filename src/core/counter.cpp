@@ -139,7 +139,7 @@ CounterList::CounterList(std::size_t size) {
     elements_.emplace_back(std::make_shared<Counter>());
 }
 
-std::weak_ptr<Counter> CounterList::GetHandle(int index) const {
+std::shared_ptr<Counter> CounterList::GetHandle(int index) const {
   if (index < 0 || static_cast<std::size_t>(index) >= elements_.size())
     throw std::out_of_range("counter index out of range: " +
                             std::to_string(index));

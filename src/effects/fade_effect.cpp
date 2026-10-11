@@ -38,7 +38,7 @@ FadeEffect::FadeEffect(RLMachine& machine,
                        std::shared_ptr<SDLSurface> from,
                        const Size& screen_size,
                        int time)
-    : Effect(machine, to, from, screen_size, time) {}
+    : EffectLongOperation(machine, to, from, screen_size, time) {}
 
 FadeEffect::~FadeEffect() {}
 

@@ -114,70 +114,73 @@ TEST_F(GraphicsObjectTest, MoveTransfersFilePath) {
 }
 
 TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
-  EXPECT_FALSE(obj.frame_action_.IsActive());
-  EXPECT_EQ(obj.frame_action_.counter, nullptr);
+  EXPECT_EQ(obj.frame_action_, nullptr);
   EXPECT_EQ(obj.frame_action_list_.size(), 0u);
   serilang::Function callback(nullptr);
-  auto& action = obj.frame_action_;
-  action.function = &callback;
-  action.arguments = {12, std::string("original")};
-  action.end_time = 100;
-  action.end_action = true;
-  action.GetCounter()->Start(false);
-  action.counter->Advance(37, 37);
+  auto action = obj.GetFrameAction();
+  action->function = &callback;
+  action->arguments = {12, std::string("original")};
+  action->end_time = 100;
+  action->end_action = true;
+  action->GetCounter()->Start(false);
+  action->counter->Advance(37, 37);
   obj.frame_action_list_.resize(2);
-  auto& channel = obj.frame_action_list_[0];
-  channel.function = &callback;
-  channel.end_action = true;
-  channel.GetCounter()->Set(7);
-  std::weak_ptr<Counter> counter = action.counter;
-  std::weak_ptr<Counter> channel_counter = channel.counter;
+  auto channel = obj.GetFrameAction(0);
+  channel->function = &callback;
+  channel->end_action = true;
+  channel->GetCounter()->Set(7);
+  std::weak_ptr<Counter> counter = action->counter;
+  std::weak_ptr<Counter> channel_counter = channel->counter;
 
   GraphicsObject clone = obj.Clone();
-  auto& copied = clone.frame_action_;
-  EXPECT_NE(copied.counter, action.counter);
-  EXPECT_EQ(copied.function, &callback);
-  EXPECT_EQ(copied.arguments, action.arguments);
-  EXPECT_EQ(copied.end_time, 100);
-  EXPECT_FALSE(copied.end_action);
+  auto copied = clone.GetFrameAction();
+  EXPECT_NE(copied, action);
+  EXPECT_NE(copied->counter, action->counter);
+  EXPECT_EQ(copied->function, &callback);
+  EXPECT_EQ(copied->arguments, action->arguments);
+  EXPECT_EQ(copied->end_time, 100);
+  EXPECT_FALSE(copied->end_action);
   ASSERT_EQ(clone.frame_action_list_.size(), 2u);
-  EXPECT_NE(clone.frame_action_list_[0].counter, channel.counter);
-  EXPECT_EQ(clone.frame_action_list_[0].function, &callback);
-  EXPECT_EQ(clone.frame_action_list_[0].counter->Get(), 7);
-  EXPECT_FALSE(clone.frame_action_list_[0].end_action);
-  EXPECT_FALSE(clone.frame_action_list_[1].IsActive());
-  EXPECT_EQ(clone.frame_action_list_[1].counter, nullptr);
+  EXPECT_NE(clone.frame_action_list_[0]->counter, channel->counter);
+  EXPECT_EQ(clone.frame_action_list_[0]->function, &callback);
+  EXPECT_EQ(clone.frame_action_list_[0]->counter->Get(), 7);
+  EXPECT_FALSE(clone.frame_action_list_[0]->end_action);
+  EXPECT_EQ(clone.frame_action_list_[1], nullptr);
 
-  copied.counter->Advance(3, 3);
-  copied.arguments[1] = std::string("copy");
-  EXPECT_EQ(copied.counter->Get(), 40);
-  EXPECT_EQ(action.counter->Get(), 37);
-  EXPECT_EQ(std::get<std::string>(action.arguments[1]), "original");
+  copied->counter->Advance(3, 3);
+  copied->arguments[1] = std::string("copy");
+  EXPECT_EQ(copied->counter->Get(), 40);
+  EXPECT_EQ(action->counter->Get(), 37);
+  EXPECT_EQ(std::get<std::string>(action->arguments[1]), "original");
 
   GraphicsObject moved = std::move(obj);
-  EXPECT_EQ(moved.frame_action_.function, &callback);
-  EXPECT_EQ(moved.frame_action_.counter, counter.lock());
-  EXPECT_EQ(moved.frame_action_.counter->Get(), 37);
-  EXPECT_TRUE(moved.frame_action_.end_action);
+  EXPECT_EQ(moved.frame_action_, action);
+  EXPECT_EQ(moved.frame_action_list_[0], channel);
+  EXPECT_EQ(moved.GetFrameAction()->function, &callback);
+  EXPECT_EQ(moved.GetFrameAction()->counter, counter.lock());
+  EXPECT_EQ(moved.GetFrameAction()->counter->Get(), 37);
+  EXPECT_TRUE(moved.GetFrameAction()->end_action);
   ASSERT_EQ(moved.frame_action_list_.size(), 2u);
-  EXPECT_EQ(moved.frame_action_list_[0].counter, channel_counter.lock());
-  EXPECT_FALSE(obj.frame_action_.IsActive());
-  EXPECT_EQ(obj.frame_action_.counter, nullptr);
+  EXPECT_EQ(moved.frame_action_list_[0]->counter, channel_counter.lock());
+  EXPECT_FALSE(obj.GetFrameAction()->IsActive());
+  EXPECT_EQ(obj.GetFrameAction()->counter, nullptr);
   EXPECT_EQ(obj.frame_action_list_.size(), 0u);
-  EXPECT_EQ(obj.frame_action_.GetCounter()->Get(), 0);
-  obj.frame_action_.counter->Set(9);
+  EXPECT_EQ(obj.GetFrameAction()->GetCounter()->Get(), 0);
+  obj.GetFrameAction()->counter->Set(9);
   GraphicsObject assigned;
   assigned = std::move(moved);
-  EXPECT_EQ(assigned.frame_action_.function, &callback);
-  EXPECT_EQ(assigned.frame_action_.counter, counter.lock());
-  EXPECT_EQ(assigned.frame_action_.end_time, 100);
+  EXPECT_EQ(assigned.frame_action_, action);
+  EXPECT_EQ(assigned.frame_action_list_[0], channel);
+  EXPECT_EQ(assigned.GetFrameAction()->function, &callback);
+  EXPECT_EQ(assigned.GetFrameAction()->counter, counter.lock());
+  EXPECT_EQ(assigned.GetFrameAction()->end_time, 100);
   ASSERT_EQ(assigned.frame_action_list_.size(), 2u);
-  EXPECT_EQ(assigned.frame_action_list_[0].counter, channel_counter.lock());
-  EXPECT_FALSE(moved.frame_action_.IsActive());
-  EXPECT_EQ(moved.frame_action_.counter, nullptr);
+  EXPECT_EQ(assigned.frame_action_list_[0]->counter, channel_counter.lock());
+  EXPECT_FALSE(moved.GetFrameAction()->IsActive());
+  EXPECT_EQ(moved.GetFrameAction()->counter, nullptr);
   EXPECT_EQ(moved.frame_action_list_.size(), 0u);
-  EXPECT_EQ(moved.frame_action_.GetCounter()->Get(), 0);
-  EXPECT_EQ(assigned.frame_action_.counter->Get(), 37);
+  EXPECT_EQ(moved.GetFrameAction()->GetCounter()->Get(), 0);
+  EXPECT_EQ(assigned.GetFrameAction()->counter->Get(), 37);
 }
 
 TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {
@@ -198,36 +201,39 @@ TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {
   EXPECT_EQ(obj.GetChild(1)->Param().position_x, 42);
 }
 
-TEST_F(GraphicsObjectTest, ChildWeakHandlesTrackLifetimeAndMoves) {
+TEST_F(GraphicsObjectTest,
+       ChildSharedHandlesRetainTargetsAcrossMovesAndReplacement) {
   obj.ResetChildren(1);
   GraphicsObject& child = obj.TouchChild(0);
   child.Param().SetX(42);
-  std::weak_ptr<GraphicsObject> handle = obj.GetChildren()[0];
+  std::shared_ptr<GraphicsObject> handle = obj.GetChildren()[0];
 
   GraphicsObject moved = std::move(obj);
-  ASSERT_FALSE(handle.expired());
-  EXPECT_EQ(handle.lock()->Param().position_x, 42);
-  EXPECT_EQ(handle.lock().get(), moved.GetChild(0));
+  ASSERT_TRUE(handle);
+  EXPECT_EQ(handle->Param().position_x, 42);
+  EXPECT_EQ(handle.get(), moved.GetChild(0));
 
   moved.SetChild(0, GraphicsObject());
-  EXPECT_TRUE(handle.expired());
+  EXPECT_EQ(handle->Param().position_x, 42);
+  EXPECT_NE(handle.get(), moved.GetChild(0));
 }
 
-TEST_F(GraphicsObjectTest, ClonedChildrenHaveIndependentWeakHandles) {
+TEST_F(GraphicsObjectTest, ClonedChildrenHaveIndependentSharedHandles) {
   obj.ResetChildren(1);
   obj.TouchChild(0).Param().SetX(42);
-  std::weak_ptr<GraphicsObject> original = obj.GetChildren()[0];
+  std::shared_ptr<GraphicsObject> original = obj.GetChildren()[0];
 
   GraphicsObject clone = obj.Clone();
-  std::weak_ptr<GraphicsObject> copied = clone.GetChildren()[0];
+  std::shared_ptr<GraphicsObject> copied = clone.GetChildren()[0];
 
-  ASSERT_FALSE(original.expired());
-  ASSERT_FALSE(copied.expired());
-  EXPECT_NE(original.lock().get(), copied.lock().get());
+  ASSERT_TRUE(original);
+  ASSERT_TRUE(copied);
+  EXPECT_NE(original.get(), copied.get());
 
   clone.ResetChildren(0);
-  EXPECT_FALSE(original.expired());
-  EXPECT_TRUE(copied.expired());
+  EXPECT_TRUE(original);
+  EXPECT_EQ(copied->Param().position_x, 42);
+  EXPECT_TRUE(clone.GetChildren().empty());
 }
 
 TEST_F(GraphicsObjectTest, SetObjectDataShouldNotClearChildren) {

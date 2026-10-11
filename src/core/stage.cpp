@@ -200,10 +200,10 @@ void Stage::ClearTransitionRenderState() {
   next_render_alpha_ = 0.0;
 }
 
-StageEffect& Stage::GetEffect(int layer, int effect_number) {
+Effect& Stage::GetEffect(int layer, int effect_number) {
   if (effect_number < 0)
     throw std::out_of_range("Negative stage effect index");
-  return effects.Get(layer, static_cast<size_t>(effect_number));
+  return *effects.Get(layer, static_cast<size_t>(effect_number));
 }
 
 void Stage::ResizeEffects(int layer, int size) {
@@ -212,10 +212,10 @@ void Stage::ResizeEffects(int layer, int size) {
   EffectsForLayer(layer).resize(static_cast<size_t>(size));
 }
 
-std::weak_ptr<QuakeState> Stage::GetQuakeHandle(int layer, int quake_number) {
-  if (quake_number < 0)
+std::shared_ptr<QuakeState> Stage::GetQuake(int layer, int index) {
+  if (index < 0)
     throw std::out_of_range("Negative stage quake index");
-  return quakes.GetHandle(layer, static_cast<size_t>(quake_number));
+  return quakes.Get(layer, static_cast<size_t>(index));
 }
 
 void Stage::AdvanceQuakes(std::int64_t elapsed_ms) {
@@ -236,7 +236,7 @@ bool Stage::HasActiveQuakes() const {
 GraphicsObject& Stage::GetObject(int layer, int obj_number) {
   if (obj_number < 0)
     throw std::out_of_range("Negative object index");
-  return objects.Get(layer, static_cast<size_t>(obj_number));
+  return *objects.Get(layer, static_cast<size_t>(obj_number));
 }
 
 size_t Stage::GetFreeObjectId(int layer) {
@@ -261,8 +261,8 @@ void Stage::RemoveObject(int layer, size_t obj_number) {
 }
 
 void Stage::FreeObjectData(int obj_number) {
-  objects.Get(kLayerFg, obj_number).FreeObjectData();
-  objects.Get(kLayerBg, obj_number).FreeObjectData();
+  objects.Get(kLayerFg, obj_number)->FreeObjectData();
+  objects.Get(kLayerBg, obj_number)->FreeObjectData();
 }
 
 void Stage::FreeAllObjectData() {
@@ -280,8 +280,8 @@ void Stage::FreeLayerObjectData(int layer) {
 }
 
 void Stage::InitializeObjectParams(int obj_number) {
-  objects.Get(kLayerFg, obj_number).InitializeParams();
-  objects.Get(kLayerBg, obj_number).InitializeParams();
+  objects.Get(kLayerFg, obj_number)->InitializeParams();
+  objects.Get(kLayerBg, obj_number)->InitializeParams();
 }
 
 void Stage::InitializeAllObjectParams() {

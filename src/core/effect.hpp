@@ -25,10 +25,11 @@
 
 #include <limits>
 #include <string_view>
+#include <vector>
 
 struct ObjectParameter;
 
-struct StageEffect {
+struct Effect {
   int x = 0;
   int y = 0;
   int z = 0;
@@ -50,7 +51,7 @@ struct StageEffect {
   int wipe_copy = 0;
   int wipe_erase = 0;
 
-  StageEffect() = default;
+  Effect() = default;
 
   void Reset();
 

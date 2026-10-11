@@ -52,13 +52,13 @@ enum ScreenDirection {
 // Factory methods for EffectFactory
 // -----------------------------------------------------------------------
 
-Effect* BuildDrawerEffect(RLMachine& machine,
-                          std::shared_ptr<SDLSurface> src,
-                          std::shared_ptr<SDLSurface> dst,
-                          const Size& screen_size,
-                          int time,
-                          int style,
-                          int direction) {
+EffectLongOperation* BuildDrawerEffect(RLMachine& machine,
+                                       std::shared_ptr<SDLSurface> src,
+                                       std::shared_ptr<SDLSurface> dst,
+                                       const Size& screen_size,
+                                       int time,
+                                       int style,
+                                       int direction) {
   static const std::unordered_map<int, DrawerEffectDetails::Direction>
       map_direction = {
           {TOP_TO_BOTTOM, DrawerEffectDetails::Direction::TopToBottom},
@@ -100,13 +100,13 @@ Effect* BuildDrawerEffect(RLMachine& machine,
 };
 
 // Creates a specific subclass of WipeEffect for \#SEL #10, Wipe.
-Effect* BuildWipeEffect(RLMachine& machine,
-                        std::shared_ptr<SDLSurface> src,
-                        std::shared_ptr<SDLSurface> dst,
-                        const Size& screen_size,
-                        int time,
-                        int direction,
-                        int interpolation) {
+EffectLongOperation* BuildWipeEffect(RLMachine& machine,
+                                     std::shared_ptr<SDLSurface> src,
+                                     std::shared_ptr<SDLSurface> dst,
+                                     const Size& screen_size,
+                                     int time,
+                                     int direction,
+                                     int interpolation) {
   switch (direction) {
     case TOP_TO_BOTTOM:
       return new WipeTopToBottomEffect(machine, src, dst, screen_size, time,
@@ -130,14 +130,14 @@ Effect* BuildWipeEffect(RLMachine& machine,
 }
 
 // Creates a specific subclass of BlindEffect for \#SEL #120, Blind.
-Effect* BuildBlindEffect(RLMachine& machine,
-                         std::shared_ptr<SDLSurface> src,
-                         std::shared_ptr<SDLSurface> dst,
-                         const Size& screen_size,
-                         int time,
-                         int direction,
-                         int xsize,
-                         int ysize) {
+EffectLongOperation* BuildBlindEffect(RLMachine& machine,
+                                      std::shared_ptr<SDLSurface> src,
+                                      std::shared_ptr<SDLSurface> dst,
+                                      const Size& screen_size,
+                                      int time,
+                                      int direction,
+                                      int xsize,
+                                      int ysize) {
   // RL does something really weird: if the wrong xsize/ysize was set
   // (the correct one is zero), it uses the other.
   switch (direction) {
@@ -177,18 +177,19 @@ Effect* BuildBlindEffect(RLMachine& machine,
 // EffectFactory
 // -----------------------------------------------------------------------
 
-Effect* EffectFactory::BuildFromSEL(RLMachine& machine,
-                                    std::shared_ptr<SDLSurface> src,
-                                    std::shared_ptr<SDLSurface> dst,
-                                    int selNum) {
+EffectLongOperation* EffectFactory::BuildFromSEL(
+    RLMachine& machine,
+    std::shared_ptr<SDLSurface> src,
+    std::shared_ptr<SDLSurface> dst,
+    int selNum) {
   auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), selNum);
   return Build(machine, src, dst, sel_record);
 }
 
-Effect* EffectFactory::Build(RLMachine& machine,
-                             std::shared_ptr<SDLSurface> src,
-                             std::shared_ptr<SDLSurface> dst,
-                             selRecord record) {
+EffectLongOperation* EffectFactory::Build(RLMachine& machine,
+                                          std::shared_ptr<SDLSurface> src,
+                                          std::shared_ptr<SDLSurface> dst,
+                                          selRecord record) {
   Size screen_size = machine.GetSystem().graphics().screen_size();
 
   const auto time = record.duration;

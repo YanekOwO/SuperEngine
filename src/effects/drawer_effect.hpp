@@ -117,7 +117,7 @@ class Composer {
 // specifying two strategy classes, which describes how the surface should be
 // drawn
 template <class OnStrategy, class OffStrategy>
-class DrawerEffect : public Effect {
+class DrawerEffect : public EffectLongOperation {
  public:
   static_assert(std::is_base_of_v<DrawerEffectDetails::Strategy, OnStrategy>,
                 "OnStrategy must derive from Strategy");
@@ -130,7 +130,8 @@ class DrawerEffect : public Effect {
                std::shared_ptr<SDLSurface> dst,
                const Size& screen,
                int time)
-      : Effect(machine, src, dst, screen, time), direction_(direction) {}
+      : EffectLongOperation(machine, src, dst, screen, time),
+        direction_(direction) {}
 
   bool BlitOriginalImage() const final { return false; }
 

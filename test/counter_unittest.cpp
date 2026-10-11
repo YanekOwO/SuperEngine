@@ -145,8 +145,8 @@ TEST(SiglusCounterTest, FastForwardAffectsOnlyGameTimeDomain) {
 
 TEST(SiglusCounterListTest, AdvancesEverySharedSlot) {
   CounterList counters(2);
-  auto first = counters.GetHandle(0).lock();
-  auto second = counters.GetHandle(1).lock();
+  auto first = counters.GetHandle(0);
+  auto second = counters.GetHandle(1);
   ASSERT_TRUE(first);
   ASSERT_TRUE(second);
   first->Start(false);
@@ -165,4 +165,17 @@ TEST(SiglusCounterListTest, RejectsInvalidIndices) {
   CounterList counters(1);
   EXPECT_THROW(counters.GetHandle(-1), std::out_of_range);
   EXPECT_THROW(counters.GetHandle(1), std::out_of_range);
+}
+
+TEST(SiglusCounterListTest, HandleKeepsCounterAliveAfterListDestruction) {
+  std::shared_ptr<Counter> handle;
+  {
+    CounterList counters(1);
+    handle = counters.GetHandle(0);
+    handle->Set(42);
+  }
+  std::weak_ptr<Counter> lifetime = handle;
+  EXPECT_EQ(handle->Get(), 42);
+  handle.reset();
+  EXPECT_TRUE(lifetime.expired());
 }

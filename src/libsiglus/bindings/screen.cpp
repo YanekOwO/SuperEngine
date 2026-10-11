@@ -38,7 +38,7 @@ void BindScreen(SiglusMachine& runtime) {
   src += R"(
 class Screen {
   fn __init__(self){
-    self.quake = __SiglusScreenQuakeArray();
+    self.quake = ScreenQuakeArray();
     self.effect = nil;
     try{ self.effect = __SiglusLazyArray(Effect); }
     catch(e){ print("Siglus screen.effect binding unavailable:", e); }
