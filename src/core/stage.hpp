@@ -32,8 +32,11 @@
 #include <array>
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 [[maybe_unused]] constexpr int kLayerFg = 0;
 [[maybe_unused]] constexpr int kLayerBg = 1;
@@ -41,27 +44,69 @@
 
 template <class T>
 struct StageElement {
-  using array_type = LazyArray<T>;
-  using storage_type = std::array<array_type, 3>;
+  using pointer_type = std::shared_ptr<T>;
+  using Handle = std::weak_ptr<T>;
+  using layer_type = std::vector<pointer_type>;
+  using storage_type = std::array<layer_type, 3>;
 
   explicit StageElement(size_t size = 0)
-      : storage{array_type(size), array_type(size), array_type(size)} {}
+      : storage{layer_type(size), layer_type(size), layer_type(size)} {}
 
-  array_type& operator[](int layer) {
+  layer_type& operator[](int layer) {
     if (layer < kLayerFg || layer > kLayerNext)
       throw std::runtime_error("Invalid layer number");
     return storage[static_cast<size_t>(layer)];
   }
 
-  const array_type& operator[](int layer) const {
+  const layer_type& operator[](int layer) const {
     if (layer < kLayerFg || layer > kLayerNext)
       throw std::runtime_error("Invalid layer number");
     return storage[static_cast<size_t>(layer)];
+  }
+
+  T& Get(int layer, size_t pos) {
+    pointer_type& element = (*this)[layer].at(pos);
+    if (!element)
+      element = std::make_shared<T>();
+    return *element;
+  }
+
+  Handle GetHandle(int layer, size_t pos) {
+    (void)Get(layer, pos);
+    return (*this)[layer][pos];
+  }
+
+  void Assign(int layer, size_t pos, T value) {
+    (*this)[layer].at(pos) = std::make_shared<T>(std::move(value));
+  }
+
+  void Move(int dst_layer, size_t dst, int src_layer, size_t src) {
+    if (dst_layer == src_layer && dst == src)
+      return;
+    (*this)[dst_layer].at(dst) = std::move((*this)[src_layer].at(src));
+  }
+
+  bool Exists(int layer, size_t pos) const {
+    return static_cast<bool>((*this)[layer].at(pos));
+  }
+
+  void Delete(int layer, size_t pos) { (*this)[layer].at(pos).reset(); }
+
+  void Resize(int layer, size_t size) { (*this)[layer].resize(size); }
+
+  size_t Size(int layer) const { return (*this)[layer].size(); }
+
+  static T& Resolve(const Handle& handle) {
+    pointer_type element = handle.lock();
+    if (!element)
+      throw std::runtime_error("Stage element has been deallocated");
+    return *element;
   }
 
   void Clear() {
     for (auto& layer : storage)
-      layer.Clear();
+      for (auto& element : layer)
+        element.reset();
   }
 
   storage_type storage;
@@ -140,17 +185,19 @@ class Stage {
   // relativly cheap operation.)
   void TakeSavepointSnapshot();
 
-  inline const LazyArray<GraphicsObject>& ObjectsForLayer(int layer) const {
+  inline const StageElement<GraphicsObject>::layer_type& ObjectsForLayer(
+      int layer) const {
     return objects[layer];
   }
-  inline LazyArray<GraphicsObject>& ObjectsForLayer(int layer) {
+  inline StageElement<GraphicsObject>::layer_type& ObjectsForLayer(int layer) {
     return objects[layer];
   }
 
-  inline const LazyArray<StageEffect>& EffectsForLayer(int layer) const {
+  inline const StageElement<StageEffect>::layer_type& EffectsForLayer(
+      int layer) const {
     return effects[layer];
   }
-  inline LazyArray<StageEffect>& EffectsForLayer(int layer) {
+  inline StageElement<StageEffect>::layer_type& EffectsForLayer(int layer) {
     return effects[layer];
   }
   StageEffect& GetEffect(int layer, int effect_number);

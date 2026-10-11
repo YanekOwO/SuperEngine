@@ -35,23 +35,44 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
+using EffectHandle = StageElement<StageEffect>::Handle;
+
+StageEffect& ResolveEffect(const EffectHandle& handle) {
+  return StageElement<StageEffect>::Resolve(handle);
+}
+
 void BindStage(SiglusRuntime& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage_state = runtime.stage.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  m.def("__stage_effect_get",
-        [stage_state](int layer, int index, int property) {
-          return stage_state->GetEffect(layer, index).Get(property);
-        });
-  m.def("__stage_effect_set",
-        [stage_state](int layer, int index, int property, int value) {
-          stage_state->GetEffect(layer, index).Set(property, value);
-        });
-  m.def("__stage_effect_init", [stage_state](int layer, int index) {
-    stage_state->GetEffect(layer, index).Reset();
-  });
+  sb::class_<EffectHandle> effect(m, "Effect");
+  effect.def(sb::init([stage_state](int layer, int index) -> EffectHandle* {
+               if (!stage_state)
+                 throw std::runtime_error("Effect requires a stage");
+               if (index < 0)
+                 throw std::out_of_range("Negative stage effect index");
+               return new EffectHandle(stage_state->effects.GetHandle(
+                   layer, static_cast<std::size_t>(index)));
+             }),
+             sb::arg("layer") = static_cast<int>(kLayerFg),
+             sb::arg("index") = 0);
+  effect.def("init",
+             [](EffectHandle* handle) { ResolveEffect(*handle).Reset(); });
+  for (int i = 0; i <= 34; ++i) {
+    try {
+      const std::string name(StageEffect::GetPropertyName(i));
+      const std::string setter_name = "set_" + name;
+      effect.def(name.c_str(), [i](EffectHandle* handle) {
+        return ResolveEffect(*handle).Get(i);
+      });
+      effect.def(setter_name.c_str(), [i](EffectHandle* handle, int value) {
+        ResolveEffect(*handle).Set(i, value);
+      });
+    } catch (const std::runtime_error&) {
+    }
+  }
   m.def("__stage_effect_size", [stage_state](int layer) {
-    return static_cast<int>(stage_state->EffectsForLayer(layer).Size());
+    return static_cast<int>(stage_state->EffectsForLayer(layer).size());
   });
   m.def("__stage_effect_resize", [stage_state](int layer, int size) {
     stage_state->ResizeEffects(layer, size);
@@ -67,28 +88,16 @@ class ObjectArray {
     return Object(self.layer, idx);
   }
 }
-)";
 
-  src += R"(
-class Effect {
-  fn __init__(self, layer, index){ self.layer = layer; self.index = index; }
-  fn init(self){ __stage_effect_init(self.layer, self.index); }
-)";
-
-  for (int i = 0; i <= 34; ++i) {
-    std::string getset;
-    try {
-      getset = std::format(
-          R"(
-  fn {0}(self){{ return __stage_effect_get(self.layer,self.index,{1}); }}
-  fn set_{0}(self,v){{ __stage_effect_set(self.layer,self.index,{1},v); }}
-)",
-          StageEffect::GetPropertyName(i), i);
-    } catch (std::runtime_error&) {
-    }
-    src += getset;
+class GroupArray {
+  fn __init__(self, layer){
+    self.layer = layer;
   }
-  src += "\n}\n";
+  fn __getitem__(self, idx){
+    return Group(self.layer, idx);
+  }
+}
+)";
 
   src += R"(
 class EffectArray {
@@ -116,7 +125,7 @@ class StageLayer {
 
     self.objgroup = nil;
     try {
-      self.objgroup = LazyArray(Group);
+      self.objgroup = GroupArray(layer);
     } catch (e) {
       print("Siglus stage.objgroup binding unavailable:", e);
     }

@@ -37,28 +37,11 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-struct GroupRef {
-  Stage* stage;
-  int layer;
-  int group_no;
+using GroupHandle = StageElement<Group>::Handle;
 
-  Group& Get() {
-    if (!stage)
-      throw sr::RuntimeError("Group requires a stage");
-    if (layer < kLayerFg || layer > kLayerNext)
-      throw sr::RuntimeError("Invalid group layer: " + std::to_string(layer));
-    if (group_no < 0) {
-      throw sr::RuntimeError("Invalid group number: " +
-                             std::to_string(group_no));
-    }
-
-    LazyArray<Group>& grp_arr = stage->groups[layer];
-    const std::size_t index = static_cast<std::size_t>(group_no);
-    if (index >= grp_arr.Size())
-      grp_arr.Resize(index + 1);
-    return grp_arr[index];
-  }
-};
+Group& ResolveGroup(const GroupHandle& handle) {
+  return StageElement<Group>::Resolve(handle);
+}
 
 static std::optional<int> FirstOptionalInt(std::vector<sr::Value> raw_args) {
   CallPacket packet = CallPacket::DecodeFrom(std::move(raw_args));
@@ -70,20 +53,30 @@ static std::optional<int> FirstOptionalInt(std::vector<sr::Value> raw_args) {
 void BindGroup(SiglusRuntime& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  sb::class_<GroupRef> grp(m, "Group");
+  sb::class_<GroupHandle> grp(m, "Group");
   grp.def(sb::init([stg = runtime.stage.get()](int layer,
-                                               int group_no) -> GroupRef* {
-            return new GroupRef(stg, layer, group_no);
+                                               int group_no) -> GroupHandle* {
+            if (!stg)
+              throw sr::RuntimeError("Group requires a stage");
+            if (group_no < 0) {
+              throw sr::RuntimeError("Invalid group number: " +
+                                     std::to_string(group_no));
+            }
+            auto& group_layer = stg->groups[layer];
+            const std::size_t index = static_cast<std::size_t>(group_no);
+            if (index >= group_layer.size())
+              group_layer.resize(index + 1);
+            return new GroupHandle(stg->groups.GetHandle(layer, index));
           }),
           sb::arg("layer") = 0, sb::arg("group_no") = 0);
-  grp.def("init", [](GroupRef* ref) { ref->Get().Reset(); });
-  grp.def("start", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("init", [](GroupHandle* ref) { ResolveGroup(*ref).Reset(); });
+  grp.def("start", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     grp.InitSel();
     grp.status = Group::Status::Active;
   });
-  grp.def("end", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("end", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     grp.status = Group::Status::Disabled;
     grp.cancel_enabled = false;
     grp.decided_button_no.reset();
@@ -91,8 +84,8 @@ void BindGroup(SiglusRuntime& runtime) {
   });
   grp.def(
       "start_cancel",
-      [](GroupRef* ref, std::vector<sr::Value> raw_args) {
-        Group& grp = ref->Get();
+      [](GroupHandle* ref, std::vector<sr::Value> raw_args) {
+        Group& grp = ResolveGroup(*ref);
         grp.InitSel();
         grp.status = Group::Status::Active;
         grp.cancel_enabled = true;
@@ -101,8 +94,8 @@ void BindGroup(SiglusRuntime& runtime) {
       sb::vararg);
   grp.def(
       "sel",
-      [](GroupRef* ref, std::vector<sr::Value> raw_args) -> sr::Value {
-        Group& grp = ref->Get();
+      [](GroupHandle* ref, std::vector<sr::Value> raw_args) -> sr::Value {
+        Group& grp = ResolveGroup(*ref);
         grp.InitSel();
         grp.status = Group::Status::Waiting;
         grp.cancel_se = FirstOptionalInt(std::move(raw_args));
@@ -111,8 +104,8 @@ void BindGroup(SiglusRuntime& runtime) {
       sb::vararg);
   grp.def(
       "sel_cancel",
-      [](GroupRef* ref, std::vector<sr::Value> raw_args) -> sr::Value {
-        Group& grp = ref->Get();
+      [](GroupHandle* ref, std::vector<sr::Value> raw_args) -> sr::Value {
+        Group& grp = ResolveGroup(*ref);
         grp.InitSel();
         grp.status = Group::Status::Waiting;
         grp.cancel_enabled = true;
@@ -120,48 +113,48 @@ void BindGroup(SiglusRuntime& runtime) {
         throw sr::RuntimeError("TODO: group.sel_cancel not implemented yet");
       },
       sb::vararg);
-  grp.def("get_hit_no", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("get_hit_no", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.hit_button_no.value_or(-1);
   });
-  grp.def("get_pushed_no", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("get_pushed_no", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.pushed_button_no.value_or(-1);
   });
-  grp.def("get_decided_no", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("get_decided_no", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.decided_button_no.value_or(-2);
   });
-  grp.def("get_result", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("get_result", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return static_cast<int>(grp.result);
   });
-  grp.def("get_result_button_no", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("get_result_button_no", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.result_button_no.value_or(0);
   });
-  grp.def("order", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("order", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.order;
   });
-  grp.def("set_order", [](GroupRef* ref, int order) {
-    Group& grp = ref->Get();
+  grp.def("set_order", [](GroupHandle* ref, int order) {
+    Group& grp = ResolveGroup(*ref);
     grp.order = order;
   });
-  grp.def("layer", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("layer", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.layer;
   });
-  grp.def("set_layer", [](GroupRef* ref, int layer) {
-    Group& grp = ref->Get();
+  grp.def("set_layer", [](GroupHandle* ref, int layer) {
+    Group& grp = ResolveGroup(*ref);
     grp.layer = layer;
   });
-  grp.def("cancel_priority", [](GroupRef* ref) {
-    Group& grp = ref->Get();
+  grp.def("cancel_priority", [](GroupHandle* ref) {
+    Group& grp = ResolveGroup(*ref);
     return grp.cancel_priority;
   });
-  grp.def("set_cancel_priority", [](GroupRef* ref, int cancel_priority) {
-    Group& grp = ref->Get();
+  grp.def("set_cancel_priority", [](GroupHandle* ref, int cancel_priority) {
+    Group& grp = ResolveGroup(*ref);
     grp.cancel_priority = cancel_priority;
   });
 }

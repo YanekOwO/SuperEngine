@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/stage.hpp"
 #include "systems/scene_renderer.hpp"
 
 #include <memory>
@@ -30,12 +31,8 @@
 #include <vector>
 
 class GraphicsObject;
-class Stage;
 class System;
 class MaskList;
-
-template <typename T>
-class LazyArray;
 
 namespace libsiglus {
 
@@ -54,7 +51,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
 
   static void RenderObject(GraphicsObject& object, const MaskList* mask_list);
   void RenderStageObjects(::Stage& stage, ToRenderVec& to_render);
-  void QueueObjects(LazyArray<GraphicsObject>& objects,
+  void QueueObjects(StageElement<GraphicsObject>::layer_type& objects,
                     int source_order,
                     double alpha_multiplier,
                     int effect_layer);

@@ -289,7 +289,8 @@ struct SiglusWipe {
         return;
 
       stage_->ClearTransitionRenderState();
-      stage_->objects[kLayerNext].Clear();
+      for (auto& object : stage_->objects[kLayerNext])
+        object.reset();
     }
 
     System* system_ = nullptr;
@@ -369,7 +370,8 @@ struct SiglusWipe {
   void ClearWipeState() {
     if (stage_) {
       stage_->ClearTransitionRenderState();
-      stage_->objects[kLayerNext].Clear();
+      for (auto& object : stage_->objects[kLayerNext])
+        object.reset();
     }
   }
 

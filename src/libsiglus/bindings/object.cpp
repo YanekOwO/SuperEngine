@@ -112,64 +112,33 @@ void ApplyObjectFileSuffix(std::string& filename, ObjectParameter& param) {
 
 }  // namespace
 
-struct ObjectReference {
-  Stage* stage_ = nullptr;
-  int layer_ = kLayerFg;
-  int object_id_ = 0;
-  std::vector<std::size_t> child_path_;
+using ObjectHandle = StageElement<GraphicsObject>::Handle;
 
-  ObjectReference() = default;
-  ObjectReference(Stage* stage, int layer, int id)
-      : stage_(stage), layer_(layer), object_id_(id) {}
-  ObjectReference(Stage* stage,
-                  int layer,
-                  int id,
-                  std::vector<std::size_t> child_path)
-      : stage_(stage),
-        layer_(layer),
-        object_id_(id),
-        child_path_(std::move(child_path)) {}
+GraphicsObject& ResolveObject(const ObjectHandle& handle) {
+  return StageElement<GraphicsObject>::Resolve(handle);
+}
 
-  GraphicsObject& get() {
-    if (!stage_)
-      throw std::runtime_error("Object requires a stage buffer");
-    if (object_id_ < 0) {
-      throw sr::RuntimeError("Invalid object number: " +
-                             std::to_string(object_id_));
-    }
-
-    GraphicsObject* current = &stage_->GetObject(layer_, object_id_);
-    for (const std::size_t child_index : child_path_) {
-      if (child_index >= current->GetChildren().size()) {
-        throw sr::RuntimeError(
-            "object.child index out of range: " + std::to_string(child_index) +
-            " for size " + std::to_string(current->GetChildren().size()));
-      }
-      current = &current->TouchChild(child_index);
-    }
-    return *current;
+ObjectHandle ChildHandle(ObjectHandle parent, std::size_t index) {
+  GraphicsObject& object = ResolveObject(parent);
+  if (index >= object.GetChildren().size()) {
+    throw sr::RuntimeError(
+        "object.child index out of range: " + std::to_string(index) +
+        " for size " + std::to_string(object.GetChildren().size()));
   }
-  const GraphicsObject& get() const {
-    return const_cast<ObjectReference*>(this)->get();
-  }
-
-  ObjectReference child(std::size_t index) const {
-    std::vector<std::size_t> path = child_path_;
-    path.emplace_back(index);
-    return ObjectReference(stage_, layer_, object_id_, std::move(path));
-  }
-};
+  (void)object.TouchChild(index);
+  return object.GetChildren()[index];
+}
 
 namespace {
 
 sr::Value WaitForObjectMutator(sr::VM& vm,
-                               ObjectReference ref,
+                               ObjectHandle ref,
                                int repno,
                                std::string name,
                                EventSystem* event,
                                bool key_skip) {
   auto done = [ref = std::move(ref), repno, name = std::move(name)]() mutable {
-    return !ref.get().IsMutatorRunningMatching(repno, name);
+    return !ResolveObject(ref).IsMutatorRunningMatching(repno, name);
   };
   return MakePollingWaitFuture(vm, std::move(done), key_skip, event);
 }
@@ -178,13 +147,13 @@ sr::Value WaitForObjectMutator(sr::VM& vm,
 
 class SiglusObject {
  public:
-  ObjectReference ref_;
+  ObjectHandle ref_;
   std::shared_ptr<GraphicsSystem> graphics_;
   std::shared_ptr<EventSystem> event_;
   std::shared_ptr<AssetScanner> asset_scanner_;
 
-  inline GraphicsObject& object() { return ref_.get(); }
-  inline const GraphicsObject& object() const { return ref_.get(); }
+  inline GraphicsObject& object() { return ResolveObject(ref_); }
+  inline const GraphicsObject& object() const { return ResolveObject(ref_); }
 
   ObjectParameter& param() { return object().Param(); }
   const ObjectParameter& param() const { return object().Param(); }
@@ -210,11 +179,18 @@ class SiglusObject {
                std::shared_ptr<AssetScanner> asset_scanner,
                int layer,
                int object_id)
-      : ref_(stage, layer, object_id),
-        graphics_(std::move(graphics)),
+      : graphics_(std::move(graphics)),
         event_(std::move(event)),
-        asset_scanner_(std::move(asset_scanner)) {}
-  SiglusObject(ObjectReference ref,
+        asset_scanner_(std::move(asset_scanner)) {
+    if (!stage)
+      throw std::runtime_error("Object requires a stage buffer");
+    if (object_id < 0) {
+      throw sr::RuntimeError("Invalid object number: " +
+                             std::to_string(object_id));
+    }
+    ref_ = stage->objects.GetHandle(layer, static_cast<size_t>(object_id));
+  }
+  SiglusObject(ObjectHandle ref,
                std::shared_ptr<GraphicsSystem> graphics,
                std::shared_ptr<EventSystem> event,
                std::shared_ptr<AssetScanner> asset_scanner)
@@ -541,7 +517,7 @@ class SiglusObject {
 
 class ObjectEvent {
  public:
-  ObjectReference ref_;
+  ObjectHandle ref_;
   std::shared_ptr<GraphicsSystem> graphics_;
   std::shared_ptr<EventSystem> event_;
   std::string name;
@@ -550,7 +526,7 @@ class ObjectEvent {
 
   void set(int end_value, int duration_time, int delay, int type) {
     Verify();
-    GraphicsObject& obj = ref_.get();
+    GraphicsObject& obj = ResolveObject(ref_);
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(-1, name, 0);
@@ -568,7 +544,7 @@ class ObjectEvent {
             int delay,
             int speed_type) {
     Verify();
-    GraphicsObject& obj = ref_.get();
+    GraphicsObject& obj = ResolveObject(ref_);
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(-1, name, 0);
@@ -586,7 +562,7 @@ class ObjectEvent {
             int delay,
             int speed_type) {
     Verify();
-    GraphicsObject& obj = ref_.get();
+    GraphicsObject& obj = ResolveObject(ref_);
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(-1, name, 0);
@@ -600,12 +576,12 @@ class ObjectEvent {
 
   void end() {
     Verify();
-    ref_.get().EndObjectMutatorMatching(-1, name, 0);
+    ResolveObject(ref_).EndObjectMutatorMatching(-1, name, 0);
   }
 
   int check() {
     Verify();
-    return ref_.get().IsMutatorRunningMatching(-1, name) ? 1 : 0;
+    return ResolveObject(ref_).IsMutatorRunningMatching(-1, name) ? 1 : 0;
   }
 
   sr::Value wait(sr::VM& vm, std::vector<sr::Value>) {
@@ -630,7 +606,7 @@ class ObjectRepnoEvent {
   using Getter = std::function<int(const ObjectParameter&, int)>;
   using Setter = std::function<void(ObjectParameter&, int, int)>;
 
-  ObjectReference ref_;
+  ObjectHandle ref_;
   int repno_ = 0;
   std::shared_ptr<GraphicsSystem> graphics_;
   std::shared_ptr<EventSystem> event_;
@@ -638,7 +614,7 @@ class ObjectRepnoEvent {
   Getter getter_;
   Setter setter_;
 
-  ObjectRepnoEvent(ObjectReference ref,
+  ObjectRepnoEvent(ObjectHandle ref,
                    int repno,
                    std::shared_ptr<GraphicsSystem> graphics,
                    std::shared_ptr<EventSystem> event,
@@ -655,7 +631,7 @@ class ObjectRepnoEvent {
 
   void set(int end_value, int duration_time, int delay, int type) {
     Verify();
-    GraphicsObject& obj = ref_.get();
+    GraphicsObject& obj = ResolveObject(ref_);
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
@@ -691,12 +667,12 @@ class ObjectRepnoEvent {
 
   void end() {
     Verify();
-    ref_.get().EndObjectMutatorMatching(repno_, name, 0);
+    ResolveObject(ref_).EndObjectMutatorMatching(repno_, name, 0);
   }
 
   int check() {
     Verify();
-    return ref_.get().IsMutatorRunningMatching(repno_, name) ? 1 : 0;
+    return ResolveObject(ref_).IsMutatorRunningMatching(repno_, name) ? 1 : 0;
   }
 
   sr::Value wait(sr::VM& vm, std::vector<sr::Value>) {
@@ -715,7 +691,7 @@ class ObjectRepnoEvent {
                            int delay,
                            int speed_type) {
     Verify();
-    GraphicsObject& obj = ref_.get();
+    GraphicsObject& obj = ResolveObject(ref_);
     std::shared_ptr<Clock> clock = event_->GetClock();
 
     obj.EndObjectMutatorMatching(repno_, name, 0);
@@ -740,13 +716,13 @@ class ObjectRepnoEvent {
 
 class ObjectChild {
  public:
-  using Factory = std::function<sr::Value(ObjectReference)>;
+  using Factory = std::function<sr::Value(ObjectHandle)>;
 
-  ObjectReference parent_;
+  ObjectHandle parent_;
   Factory make_object_;
 
   ObjectChild() = default;
-  ObjectChild(ObjectReference parent, Factory make_object)
+  ObjectChild(ObjectHandle parent, Factory make_object)
       : parent_(std::move(parent)), make_object_(std::move(make_object)) {}
 
   sr::Value get(int idx) {
@@ -755,7 +731,7 @@ class ObjectChild {
                              std::to_string(idx));
     }
     const std::size_t index = static_cast<std::size_t>(idx);
-    GraphicsObject& parent = parent_.get();
+    GraphicsObject& parent = ResolveObject(parent_);
     const std::size_t size = parent.GetChildren().size();
     if (index >= size) {
       throw sr::RuntimeError(
@@ -764,7 +740,7 @@ class ObjectChild {
     }
     if (!make_object_)
       throw std::runtime_error("ObjectChild requires an object factory");
-    return make_object_(parent_.child(index));
+    return make_object_(ChildHandle(parent_, index));
   }
 
   void resize(int size) {
@@ -772,11 +748,11 @@ class ObjectChild {
       throw sr::RuntimeError("object.child size is negative: " +
                              std::to_string(size));
     }
-    parent_.get().ResetChildren(static_cast<std::size_t>(size));
+    ResolveObject(parent_).ResetChildren(static_cast<std::size_t>(size));
   }
 
   int size() {
-    const std::size_t size = parent_.get().GetChildren().size();
+    const std::size_t size = ResolveObject(parent_).GetChildren().size();
     if (size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
       throw sr::RuntimeError("object.child size exceeds script integer range");
     return static_cast<int>(size);
@@ -787,17 +763,17 @@ class ObjectRepnoEventList {
  public:
   using Getter = ObjectRepnoEvent::Getter;
   using Setter = ObjectRepnoEvent::Setter;
-  using Factory = std::function<
-      sr::Value(ObjectReference, int, std::string, Getter, Setter)>;
+  using Factory =
+      std::function<sr::Value(ObjectHandle, int, std::string, Getter, Setter)>;
 
-  ObjectReference ref_;
+  ObjectHandle ref_;
   std::string name_;
   Getter getter_;
   Setter setter_;
   Factory make_event_;
 
   ObjectRepnoEventList() = default;
-  ObjectRepnoEventList(ObjectReference ref,
+  ObjectRepnoEventList(ObjectHandle ref,
                        std::string name,
                        Getter getter,
                        Setter setter,
@@ -1175,7 +1151,7 @@ void BindObject(SiglusRuntime& runtime) {
 
   ObjectChild::Factory make_child_object =
       [object_class = obj, graphics, event,
-       asset_scanner](ObjectReference ref) mutable -> sr::Value {
+       asset_scanner](ObjectHandle ref) mutable -> sr::Value {
     return sr::Value(
         object_class.make_inst(std::move(ref), graphics, event, asset_scanner));
   };
@@ -1192,8 +1168,8 @@ void BindObject(SiglusRuntime& runtime) {
         [F = std::move(F)](
             SiglusObject* parent) -> std::unique_ptr<SiglusIntListFacade> {
           auto getter = [ref = parent->ref_,
-                         &F](serilang::Fiber&) mutable -> std::vector<int>& {
-            auto& object = ref.get();
+                         F](serilang::Fiber&) mutable -> std::vector<int>& {
+            auto& object = ResolveObject(ref);
             return std::invoke(F, object.Param());
           };
           return std::make_unique<SiglusIntListFacade>(std::move(getter));
@@ -1237,7 +1213,7 @@ void BindObject(SiglusRuntime& runtime) {
 
   ObjectRepnoEventList::Factory make_repno_event =
       [event_class = repno_event, graphics, event](
-          ObjectReference ref, int repno, std::string name,
+          ObjectHandle ref, int repno, std::string name,
           ObjectRepnoEventList::Getter getter,
           ObjectRepnoEventList::Setter setter) mutable -> sr::Value {
     return sr::Value(event_class.make_inst(

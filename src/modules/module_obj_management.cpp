@@ -27,14 +27,14 @@
 
 #include "modules/module_obj_management.hpp"
 
+#include "core/object.hpp"
+#include "core/stage.hpp"
 #include "machine/general_operations.hpp"
 #include "machine/properties.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
 #include "modules/module_obj.hpp"
-#include "core/object.hpp"
-#include "core/stage.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
@@ -63,8 +63,9 @@ void ForEachTargetObject(RLMachine& machine, RLOperation* op, Function fn) {
     return;
   }
 
-  for (GraphicsObject& object : stage.ObjectsForLayer(fgbg))
-    fn(object);
+  for (auto& object : stage.ObjectsForLayer(fgbg))
+    if (object)
+      fn(*object);
 }
 
 struct objCopyFgToBg_0 : public RLOpcode<IntConstant_T> {
@@ -120,15 +121,16 @@ struct SetWipeCopyTo_1 : public RLOpcode<IntConstant_T, IntConstant_T> {
 
 struct objFreeAll : public RLOpcode<> {
   virtual void operator()(RLMachine& machine) override {
-    ForEachTargetObject(machine, this,
-                        [](GraphicsObject& object) { object.FreeObjectData(); });
+    ForEachTargetObject(
+        machine, this, [](GraphicsObject& object) { object.FreeObjectData(); });
   }
 };
 
 struct objInitAll : public RLOpcode<> {
   virtual void operator()(RLMachine& machine) override {
-    ForEachTargetObject(
-        machine, this, [](GraphicsObject& object) { object.InitializeParams(); });
+    ForEachTargetObject(machine, this, [](GraphicsObject& object) {
+      object.InitializeParams();
+    });
   }
 };
 
@@ -227,8 +229,7 @@ ObjManagement::ObjManagement() : RLModule("ObjManagement", 1, 60) {
   AddOpcode(2, 0, "objCopyFgToBg", new objCopyFgToBg_0);
   AddOpcode(2, 1, "objCopyFgToBg", new objCopyFgToBg_1);
 
-  AddOpcode(10, 0, "objInit",
-            CallFunction(&Stage::InitializeObjectParams));
+  AddOpcode(10, 0, "objInit", CallFunction(&Stage::InitializeObjectParams));
   AddOpcode(10, 1, "objInit",
             RangeMappingFun(std::shared_ptr<RLOperation>(
                 CallFunction(&Stage::InitializeObjectParams))));

@@ -55,10 +55,11 @@ void Stage::Wipe(int begin_order,
                  int end_layer) {
   // TODO(siglus): Promote mwnd, btnsel, world, and quake stage state
   // when those core Siglus element implementations exist.
-  LazyArray<GraphicsObject>& foreground_objects = objects[kLayerFg];
-  LazyArray<GraphicsObject>& background_objects = objects[kLayerBg];
-  LazyArray<GraphicsObject>& next_objects = objects[kLayerNext];
-  next_objects.Clear();
+  auto& foreground_objects = objects[kLayerFg];
+  auto& background_objects = objects[kLayerBg];
+  auto& next_objects = objects[kLayerNext];
+  for (auto& object : next_objects)
+    object.reset();
 
   auto InWipeRange = [begin = std::make_pair(begin_order, begin_layer),
                       end = std::make_pair(end_order, end_layer)](
@@ -70,98 +71,95 @@ void Stage::Wipe(int begin_order,
   };
 
   const size_t count =
-      std::min({foreground_objects.Size(), background_objects.Size(),
-                next_objects.Size()});
+      std::min({foreground_objects.size(), background_objects.size(),
+                next_objects.size()});
   for (size_t i = 0; i < count; ++i) {
-    const bool fg_exists = foreground_objects.Exists(i);
-    const bool bg_exists = background_objects.Exists(i);
+    const bool fg_exists = static_cast<bool>(foreground_objects[i]);
+    const bool bg_exists = static_cast<bool>(background_objects[i]);
 
     const bool front_in_range =
-        fg_exists &&
-        InWipeRange(ObjOrd(foreground_objects.At(i).value().Param()));
+        fg_exists && InWipeRange(ObjOrd(foreground_objects[i]->Param()));
     const bool back_participates =
-        bg_exists && (background_objects[i].HasDrawer() ||
-                      background_objects[i].HasChildren() ||
-                      background_objects[i].Param().wipe_erase != 0);
+        bg_exists && (background_objects[i]->HasDrawer() ||
+                      background_objects[i]->HasChildren() ||
+                      background_objects[i]->Param().wipe_erase != 0);
     if (!front_in_range && !back_participates)
       continue;
 
     if (fg_exists)
-      next_objects[i] = foreground_objects[i].Clone();
+      objects.Assign(kLayerNext, i, foreground_objects[i]->Clone());
 
     const bool replace_front =
         back_participates || (front_in_range && fg_exists &&
-                              foreground_objects[i].Param().wipe_copy == 0);
+                              foreground_objects[i]->Param().wipe_copy == 0);
     if (!replace_front)
       continue;
 
     if (back_participates) {
-      foreground_objects[i] = std::move(background_objects[i]);
-      background_objects.DeleteAt(i);
+      objects.Move(kLayerFg, i, kLayerBg, i);
     } else {
-      foreground_objects[i].FreeDataAndInitializeParams();
+      foreground_objects[i]->FreeDataAndInitializeParams();
     }
   }
 
-  LazyArray<Group>& foreground_groups = groups[kLayerFg];
-  LazyArray<Group>& background_groups = groups[kLayerBg];
-  LazyArray<Group>& next_groups = groups[kLayerNext];
-  next_groups.Clear();
+  auto& foreground_groups = groups[kLayerFg];
+  auto& background_groups = groups[kLayerBg];
+  auto& next_groups = groups[kLayerNext];
+  for (auto& group : next_groups)
+    group.reset();
   const size_t group_count =
-      std::max(foreground_groups.Size(), background_groups.Size());
-  foreground_groups.Resize(group_count);
-  background_groups.Resize(group_count);
-  next_groups.Resize(group_count);
+      std::max(foreground_groups.size(), background_groups.size());
+  foreground_groups.resize(group_count);
+  background_groups.resize(group_count);
+  next_groups.resize(group_count);
 
   for (size_t i = 0; i < group_count; ++i) {
     const Group default_group;
-    const Group& foreground = foreground_groups.Exists(i)
-                                  ? foreground_groups.At(i).value()
-                                  : default_group;
+    const Group& foreground =
+        foreground_groups[i] ? *foreground_groups[i] : default_group;
     if (!InWipeRange(std::make_pair(foreground.order, foreground.layer)))
       continue;
 
-    if (foreground_groups.Exists(i)) {
-      next_groups[i] = foreground;
-      next_groups[i].ClearTransientInteraction();
+    if (foreground_groups[i]) {
+      groups.Assign(kLayerNext, i, foreground);
+      next_groups[i]->ClearTransientInteraction();
     }
 
-    if (background_groups.Exists(i)) {
-      foreground_groups[i] = std::move(background_groups[i]);
-      foreground_groups[i].ClearTransientInteraction();
-      background_groups.DeleteAt(i);
+    if (background_groups[i]) {
+      groups.Move(kLayerFg, i, kLayerBg, i);
+      foreground_groups[i]->ClearTransientInteraction();
     } else {
-      foreground_groups.DeleteAt(i);
+      foreground_groups[i].reset();
     }
   }
 
-  LazyArray<StageEffect>& foreground_effects = effects[kLayerFg];
-  LazyArray<StageEffect>& background_effects = effects[kLayerBg];
-  LazyArray<StageEffect>& next_effects = effects[kLayerNext];
-  next_effects.Clear();
+  auto& foreground_effects = effects[kLayerFg];
+  auto& background_effects = effects[kLayerBg];
+  auto& next_effects = effects[kLayerNext];
+  for (auto& effect : next_effects)
+    effect.reset();
   const size_t effect_count =
-      std::min({foreground_effects.Size(), background_effects.Size(),
-                next_effects.Size()});
+      std::min({foreground_effects.size(), background_effects.size(),
+                next_effects.size()});
   for (size_t i = 0; i < effect_count; ++i) {
-    const bool foreground_exists = foreground_effects.Exists(i);
-    const bool background_exists = background_effects.Exists(i);
+    const bool foreground_exists = static_cast<bool>(foreground_effects[i]);
+    const bool background_exists = static_cast<bool>(background_effects[i]);
 
     if (foreground_exists)
-      next_effects[i] = foreground_effects[i];
+      effects.Assign(kLayerNext, i, *foreground_effects[i]);
 
     bool replace_foreground =
-        !foreground_exists || foreground_effects.At(i).value().wipe_copy == 0;
-    if (background_exists && background_effects.At(i).value().wipe_erase != 0) {
+        !foreground_exists || foreground_effects[i]->wipe_copy == 0;
+    if (background_exists && background_effects[i]->wipe_erase != 0) {
       replace_foreground = true;
     }
     if (!replace_foreground)
       continue;
 
     if (background_exists) {
-      foreground_effects[i] = std::move(background_effects[i]);
-      background_effects.DeleteAt(i);
+      effects.Move(kLayerFg, i, kLayerBg, i);
     } else {
-      foreground_effects.DeleteAt(i);
+      foreground_effects[i].reset();
     }
   }
 }
@@ -180,24 +178,26 @@ void Stage::ClearTransitionRenderState() {
 StageEffect& Stage::GetEffect(int layer, int effect_number) {
   if (effect_number < 0)
     throw std::out_of_range("Negative stage effect index");
-  return EffectsForLayer(layer)[static_cast<size_t>(effect_number)];
+  return effects.Get(layer, static_cast<size_t>(effect_number));
 }
 
 void Stage::ResizeEffects(int layer, int size) {
   if (size < 0)
     throw std::runtime_error("Negative stage effect count");
-  EffectsForLayer(layer).Resize(static_cast<size_t>(size));
+  EffectsForLayer(layer).resize(static_cast<size_t>(size));
 }
 
 GraphicsObject& Stage::GetObject(int layer, int obj_number) {
-  return ObjectsForLayer(layer)[obj_number];
+  if (obj_number < 0)
+    throw std::out_of_range("Negative object index");
+  return objects.Get(layer, static_cast<size_t>(obj_number));
 }
 
 size_t Stage::GetFreeObjectId(int layer) {
-  LazyArray<GraphicsObject>& objects = ObjectsForLayer(layer);
+  auto& objects = ObjectsForLayer(layer);
 
-  for (size_t i = 0, end = objects.Size(); i < end; ++i) {
-    if (!objects.Exists(i))
+  for (size_t i = 0, end = objects.size(); i < end; ++i) {
+    if (!objects[i])
       return i;
   }
 
@@ -205,16 +205,18 @@ size_t Stage::GetFreeObjectId(int layer) {
 }
 
 void Stage::SetObject(int layer, int obj_number, GraphicsObject&& object) {
-  ObjectsForLayer(layer)[obj_number] = std::move(object);
+  if (obj_number < 0)
+    throw std::out_of_range("Negative object index");
+  objects.Assign(layer, static_cast<size_t>(obj_number), std::move(object));
 }
 
 void Stage::RemoveObject(int layer, size_t obj_number) {
-  ObjectsForLayer(layer).DeleteAt(obj_number);
+  ObjectsForLayer(layer).at(obj_number).reset();
 }
 
 void Stage::FreeObjectData(int obj_number) {
-  objects[kLayerFg][obj_number].FreeObjectData();
-  objects[kLayerBg][obj_number].FreeObjectData();
+  objects.Get(kLayerFg, obj_number).FreeObjectData();
+  objects.Get(kLayerBg, obj_number).FreeObjectData();
 }
 
 void Stage::FreeAllObjectData() {
@@ -224,29 +226,35 @@ void Stage::FreeAllObjectData() {
 }
 
 void Stage::FreeLayerObjectData(int layer) {
-  LazyArray<GraphicsObject>& objects = ObjectsForLayer(layer);
-  for (auto& obj : objects)
-    obj.FreeObjectData();
+  auto& objects = ObjectsForLayer(layer);
+  for (auto& obj : objects) {
+    if (obj)
+      obj->FreeObjectData();
+  }
 }
 
 void Stage::InitializeObjectParams(int obj_number) {
-  objects[kLayerFg][obj_number].InitializeParams();
-  objects[kLayerBg][obj_number].InitializeParams();
+  objects.Get(kLayerFg, obj_number).InitializeParams();
+  objects.Get(kLayerBg, obj_number).InitializeParams();
 }
 
 void Stage::InitializeAllObjectParams() {
-  for (GraphicsObject& object : objects[kLayerFg])
-    object.InitializeParams();
+  for (auto& object : objects[kLayerFg])
+    if (object)
+      object->InitializeParams();
 
-  for (GraphicsObject& object : objects[kLayerBg])
-    object.InitializeParams();
+  for (auto& object : objects[kLayerBg])
+    if (object)
+      object->InitializeParams();
 }
 
 void Stage::Execute() {
   for (auto& layer_objects : objects.storage) {
     for (auto& obj : layer_objects) {
-      obj.Execute();
-      obj.ExecuteMutators();
+      if (!obj)
+        continue;
+      obj->Execute();
+      obj->ExecuteMutators();
     }
   }
 }
@@ -265,14 +273,14 @@ void Stage::TakeSavepointSnapshot() {
   auto& background = objects[kLayerBg];
 
   saved_foreground_objects.Clear();
-  for (auto it = foreground.begin(), end = foreground.end(); it != end; ++it) {
-    saved_foreground_objects[it.pos()] = it->Clone();
-  }
+  for (size_t i = 0; i < foreground.size(); ++i)
+    if (foreground[i])
+      saved_foreground_objects[i] = foreground[i]->Clone();
 
   saved_background_objects.Clear();
-  for (auto it = background.begin(), end = background.end(); it != end; ++it) {
-    saved_background_objects[it.pos()] = it->Clone();
-  }
+  for (size_t i = 0; i < background.size(); ++i)
+    if (background[i])
+      saved_background_objects[i] = background[i]->Clone();
 
   saved_graphics_stack = graphics_stack;
 }

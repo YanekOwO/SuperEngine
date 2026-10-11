@@ -130,6 +130,38 @@ TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {
   EXPECT_EQ(obj.GetChild(1)->Param().position_x, 42);
 }
 
+TEST_F(GraphicsObjectTest, ChildWeakHandlesTrackLifetimeAndMoves) {
+  obj.ResetChildren(1);
+  GraphicsObject& child = obj.TouchChild(0);
+  child.Param().SetX(42);
+  std::weak_ptr<GraphicsObject> handle = obj.GetChildren()[0];
+
+  GraphicsObject moved = std::move(obj);
+  ASSERT_FALSE(handle.expired());
+  EXPECT_EQ(handle.lock()->Param().position_x, 42);
+  EXPECT_EQ(handle.lock().get(), moved.GetChild(0));
+
+  moved.SetChild(0, GraphicsObject());
+  EXPECT_TRUE(handle.expired());
+}
+
+TEST_F(GraphicsObjectTest, ClonedChildrenHaveIndependentWeakHandles) {
+  obj.ResetChildren(1);
+  obj.TouchChild(0).Param().SetX(42);
+  std::weak_ptr<GraphicsObject> original = obj.GetChildren()[0];
+
+  GraphicsObject clone = obj.Clone();
+  std::weak_ptr<GraphicsObject> copied = clone.GetChildren()[0];
+
+  ASSERT_FALSE(original.expired());
+  ASSERT_FALSE(copied.expired());
+  EXPECT_NE(original.lock().get(), copied.lock().get());
+
+  clone.ResetChildren(0);
+  EXPECT_FALSE(original.expired());
+  EXPECT_TRUE(copied.expired());
+}
+
 TEST_F(GraphicsObjectTest, SetObjectDataClearsChildren) {
   obj.ResetChildren(1);
   obj.TouchChild(0).Param().SetX(42);

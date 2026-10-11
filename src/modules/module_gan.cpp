@@ -52,8 +52,7 @@ struct objWaitAll : public RLOpcode<> {
     machine.GetSystem().graphics().ForceRefresh();
     auto& fgobj = machine.stage().objects[kLayerFg];
     bool animations_playing = false;
-    for (size_t i = 0, end = fgobj.Size(); i < end; ++i) {
-      const auto& object = fgobj.At(i);
+    for (const auto& object : fgobj) {
       if (object && object->HasDrawer()) {
         const GraphicsObjectData& data = object->GetDrawer();
         if (data.IsAnimation() && data.GetAnimator()->IsPlaying()) {

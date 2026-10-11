@@ -101,8 +101,8 @@ class GraphicsObject {
 
   // Children objects
   inline bool HasChildren() const { return !child_.empty(); }
-  std::vector<std::unique_ptr<GraphicsObject>>& GetChildren();
-  const std::vector<std::unique_ptr<GraphicsObject>>& GetChildren() const;
+  std::vector<std::shared_ptr<GraphicsObject>>& GetChildren();
+  const std::vector<std::shared_ptr<GraphicsObject>>& GetChildren() const;
   GraphicsObject* GetChild(std::size_t idx);
   const GraphicsObject* GetChild(std::size_t idx) const;
   GraphicsObject& TouchChild(std::size_t idx);
@@ -160,5 +160,5 @@ class GraphicsObject {
   // RLMAX SDK.
   std::vector<ObjectMutator> object_mutators_;
 
-  std::vector<std::unique_ptr<GraphicsObject>> child_;
+  std::vector<std::shared_ptr<GraphicsObject>> child_;
 };

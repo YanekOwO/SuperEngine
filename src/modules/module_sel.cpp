@@ -166,9 +166,9 @@ struct Sel_select_objbtn_cancel_2 : public RLOpcode<> {
 
     auto& fg_objs = machine.stage().objects[kLayerFg];
     int group = 0;
-    for (GraphicsObject& obj : fg_objs)
-      if (obj.Param().IsButton()) {
-        group = obj.Param().GetButtonGroup();
+    for (auto& obj : fg_objs)
+      if (obj && obj->Param().IsButton()) {
+        group = obj->Param().GetButtonGroup();
         break;
       }
 

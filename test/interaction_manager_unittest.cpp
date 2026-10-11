@@ -54,10 +54,10 @@ class InteractionManagerTest : public ::testing::Test {
 
   Group& AddGroup(int layer = kLayerFg,
                   Group::Status status = Group::Status::Active) {
-    LazyArray<Group>& groups = stage_.groups[layer];
-    const size_t index = groups.Size();
-    groups.Resize(index + 1);
-    Group& group = groups[index];
+    auto& groups = stage_.groups[layer];
+    const size_t index = groups.size();
+    groups.resize(index + 1);
+    Group& group = stage_.groups.Get(layer, index);
     group.status = status;
     return group;
   }
@@ -90,9 +90,9 @@ TEST_F(InteractionManagerTest, HoverSelectsEligibleButtonInEveryLayer) {
 
   manager_.Update();
 
-  EXPECT_EQ(stage_.groups[kLayerFg][0].hit_button_no, 10);
-  EXPECT_EQ(stage_.groups[kLayerBg][0].hit_button_no, 11);
-  EXPECT_EQ(stage_.groups[kLayerNext][0].hit_button_no, 12);
+  EXPECT_EQ(stage_.groups[kLayerFg][0]->hit_button_no, 10);
+  EXPECT_EQ(stage_.groups[kLayerBg][0]->hit_button_no, 11);
+  EXPECT_EQ(stage_.groups[kLayerNext][0]->hit_button_no, 12);
   EXPECT_EQ(stage_.GetObject(kLayerFg, 0).Param().GetPattNo(), 11);
 }
 

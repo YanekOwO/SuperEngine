@@ -46,16 +46,15 @@ class ScopedRenderParameters {
  public:
   ScopedRenderParameters(GraphicsObject& object,
                          double multiplier,
-                         const LazyArray<StageEffect>& effects)
+                         const StageElement<StageEffect>::layer_type& effects)
       : object_(object), original_(object.Param()) {
     const int order = original_.z_order;
     const int layer = original_.z_layer;
-    for (size_t i = 0; i < effects.Size(); ++i) {
-      if (!effects.Exists(i))
+    for (const auto& effect : effects) {
+      if (!effect)
         continue;
-      const StageEffect& effect = effects.At(i).value();
-      if (effect.Contains(order, layer))
-        effect.ApplyTo(object_.Param());
+      if (effect->Contains(order, layer))
+        effect->ApplyTo(object_.Param());
     }
 
     const int alpha = std::clamp(
@@ -99,15 +98,17 @@ void SiglusSceneRenderer::RenderStageObjects(Stage& stage,
   RenderQueuedObjects();
 }
 
-void SiglusSceneRenderer::QueueObjects(LazyArray<GraphicsObject>& objects,
-                                       int source_order,
-                                       double alpha_multiplier,
-                                       int effect_layer) {
-  for (auto it = objects.begin(), end = objects.end(); it != end; ++it) {
-    to_render_.emplace_back(it->Param().z_order, it->Param().z_layer,
-                            it->Param().z_depth, static_cast<int>(it.pos()),
-                            source_order, &*it, alpha_multiplier, effect_layer);
-  }
+void SiglusSceneRenderer::QueueObjects(
+    StageElement<GraphicsObject>::layer_type& objects,
+    int source_order,
+    double alpha_multiplier,
+    int effect_layer) {
+  for (size_t i = 0; i < objects.size(); ++i)
+    if (objects[i])
+      to_render_.emplace_back(
+          objects[i]->Param().z_order, objects[i]->Param().z_layer,
+          objects[i]->Param().z_depth, static_cast<int>(i), source_order,
+          objects[i].get(), alpha_multiplier, effect_layer);
 }
 
 void SiglusSceneRenderer::RenderQueuedObjects() {

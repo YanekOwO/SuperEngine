@@ -76,13 +76,14 @@ void rlSceneRenderer::RenderScene() {
   // Render objects
   to_render_.clear();
   auto& foreground_objects = stage.objects[kLayerFg];
-  for (auto it = foreground_objects.begin(), end = foreground_objects.end();
-       it != end; ++it) {
-    if (!ShouldRenderObject(it.pos(), *it))
+  for (size_t i = 0; i < foreground_objects.size(); ++i) {
+    if (!foreground_objects[i] ||
+        !ShouldRenderObject(i, *foreground_objects[i]))
       continue;
-    to_render_.emplace_back(it->Param().z_order, it->Param().z_layer,
-                            it->Param().z_depth, static_cast<int>(it.pos()),
-                            &*it);
+    to_render_.emplace_back(foreground_objects[i]->Param().z_order,
+                            foreground_objects[i]->Param().z_layer,
+                            foreground_objects[i]->Param().z_depth,
+                            static_cast<int>(i), foreground_objects[i].get());
   }
   std::sort(to_render_.begin(), to_render_.end());
   for (const auto& [order, layer, depth, pos, obj] : to_render_) {

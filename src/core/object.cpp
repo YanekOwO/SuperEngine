@@ -76,7 +76,7 @@ GraphicsObject GraphicsObject::Clone() const {
   result.child_.resize(child_.size());
   for (std::size_t i = 0; i < child_.size(); ++i) {
     if (child_[i])
-      result.child_[i] = std::make_unique<GraphicsObject>(child_[i]->Clone());
+      result.child_[i] = std::make_shared<GraphicsObject>(child_[i]->Clone());
   }
 
   return result;
@@ -160,11 +160,11 @@ void GraphicsObject::SetDrawer(std::unique_ptr<GraphicsObjectData> obj) {
   object_data_ = std::move(obj);
 }
 
-std::vector<std::unique_ptr<GraphicsObject>>& GraphicsObject::GetChildren() {
+std::vector<std::shared_ptr<GraphicsObject>>& GraphicsObject::GetChildren() {
   return child_;
 }
 
-const std::vector<std::unique_ptr<GraphicsObject>>&
+const std::vector<std::shared_ptr<GraphicsObject>>&
 GraphicsObject::GetChildren() const {
   return child_;
 }
@@ -185,13 +185,13 @@ GraphicsObject& GraphicsObject::TouchChild(std::size_t idx) {
   if (idx >= child_.size())
     throw std::out_of_range("GraphicsObject child index out of range");
   if (!child_[idx])
-    child_[idx] = std::make_unique<GraphicsObject>();
+    child_[idx] = std::make_shared<GraphicsObject>();
   return *child_[idx];
 }
 
 void GraphicsObject::SetChild(std::size_t idx, GraphicsObject&& obj) {
   EnsureChildCapacity(idx + 1);
-  child_[idx] = std::make_unique<GraphicsObject>(std::move(obj));
+  child_[idx] = std::make_shared<GraphicsObject>(std::move(obj));
 }
 
 void GraphicsObject::ResetChildren(std::size_t count) {
