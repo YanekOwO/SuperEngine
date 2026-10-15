@@ -43,7 +43,7 @@
 namespace {
 
 bool BgmWait(RLMachine& machine) {
-  return machine.GetSystem().sound().BgmStatus() == 0;
+  return !machine.GetSystem().sound().BgmPlaying();
 }
 
 std::shared_ptr<LongOperation> MakeBgmWait(RLMachine& machine) {
@@ -54,7 +54,7 @@ std::shared_ptr<LongOperation> MakeBgmWait(RLMachine& machine) {
 
 struct LongOp_bgmWait : public LongOperation {
   bool operator()(RLMachine& machine) override {
-    return machine.GetSystem().sound().BgmStatus() == 0;
+    return !machine.GetSystem().sound().BgmPlaying();
   }
 };
 
@@ -110,7 +110,7 @@ struct bgmWait : public RLOpcode<> {
 
 struct bgmPlaying : public RLStoreOpcode<> {
   int operator()(RLMachine& machine) {
-    return machine.GetSystem().sound().BgmStatus() == 1;
+    return machine.GetSystem().sound().BgmPlaying() ;
   }
 };
 
@@ -174,7 +174,7 @@ BgmModule::BgmModule() : RLModule("Bgm", 1, 20) {
   AddOpcode(4, 0, "bgmPlaying", new bgmPlaying);
   AddOpcode(5, 0, "bgmStop", CallFunction(&SoundSystem::BgmStop));
   AddOpcode(6, 0, "bgmStop2", CallFunction(&SoundSystem::BgmStop));
-  AddOpcode(7, 0, "bgmStatus", ReturnIntValue(&SoundSystem::BgmStatus));
+  AddOpcode(7, 0, "bgmStatus", ReturnIntValue(&SoundSystem::BgmPlaying));
   AddUnsupportedOpcode(8, 0, "bgmRewind");
   AddOpcode(9, 0, "bgmPause", CallFunction(&SoundSystem::BgmPause));
   AddOpcode(10, 0, "bgmUnPause", CallFunction(&SoundSystem::BgmUnPause));

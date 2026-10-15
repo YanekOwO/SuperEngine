@@ -314,11 +314,11 @@ int SoundSystem::GetBgmVolumeScript() const {
 
 player_t SoundSystem::GetBgm() const { return sound_impl_->GetBgm(); }
 
-int SoundSystem::BgmStatus() const {
+bool SoundSystem::BgmPlaying() const {
   auto player = sound_impl_->GetBgm();
   if (player && player->GetStatus() == AudioPlayer::STATUS::PLAYING)
-    return 1;
-  return 0;
+    return true;
+  return false;
 }
 
 void SoundSystem::BgmPlay(const std::string& bgm_name, bool loop) {
@@ -677,7 +677,7 @@ void SoundSystem::save(Archive& ar, unsigned int version) const {
   std::string track_name;
   bool looping = false;
 
-  if (BgmStatus() == 1) {
+  if (BgmPlaying()) {
     track_name = GetBgmName();
     looping = BgmLooping();
   }

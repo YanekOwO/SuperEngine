@@ -81,7 +81,7 @@ class SoundSystem {
 
   player_t GetBgm() const;
 
-  int BgmStatus() const;
+  bool BgmPlaying() const;
 
   void BgmPlay(const std::string& bgm_name, bool loop);
   void BgmPlay(const std::string& bgm_name, bool loop, int fade_in_ms);

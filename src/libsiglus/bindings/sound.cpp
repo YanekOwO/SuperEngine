@@ -335,7 +335,7 @@ class SiglusBgm {
 
   int Check() const {
     return playback_.Check(
-        [this] { return system_ && system_->sound().BgmStatus(); });
+        [this] { return system_ && system_->sound().BgmPlaying(); });
   }
 
   void SetVolume(const BgmSetVolumeParams& params) {
@@ -363,7 +363,9 @@ class SiglusBgm {
 
   sr::Value WaitForPlayback(sr::VM& vm, bool key_skip, bool fade_only) {
     return playback_.WaitForPlayback(vm, system_, key_skip, fade_only, [this] {
-      return system_ && system_->sound().BgmStatus();
+      if (system_->ShouldFastForward())
+        return false;
+      return system_->sound().BgmPlaying();
     });
   }
 
