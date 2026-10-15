@@ -32,6 +32,7 @@
 
 #include <ctime>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -45,6 +46,9 @@ static void nop() {}
 
 void BindSystem(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
+  auto* sys = runtime.system.get();
+  if (!sys)
+    throw std::runtime_error("system bindings require a System object");
 
   sb::module_ m(vm, "system");
   m.def("is_debug", +[]() { return false; });
@@ -66,47 +70,42 @@ void BindSystem(SiglusMachine& runtime) {
   sb::module_ gm(vm.gc_.get(), vm.globals_.get());
   gm.def(
       "wait",
-      [sys = runtime.system.get()](sr::VM& vm, int msecs) -> sr::Value {
+      [&runtime, sys](sr::VM& vm, int msecs) -> sr::Value {
         if (!sys || msecs <= 0)
           return MakeResolvedFuture(*vm.gc_);
 
-        const unsigned int start_ticks = sys->event().GetTicks();
-        const unsigned int duration = static_cast<unsigned int>(msecs);
-        auto done = [sys, start_ticks, duration] {
+        auto counter = runtime.CreateCounter();
+        counter->StartGame();
+        auto done = [sys, counter = std::move(counter), msecs] {
           if (sys->ShouldFastForward())
             return true;
 
-          const unsigned int elapsed = sys->event().GetTicks() - start_ticks;
-          return elapsed >= duration;
+          return counter->Get() >= msecs;
         };
         return MakePollingWaitFuture(vm, std::move(done));
       },
       sb::arg("msecs") = 0);
   gm.def(
       "wait_key",
-      [sys = runtime.system.get()](sr::VM& vm, int msecs) -> sr::Value {
+      [&runtime, sys](sr::VM& vm, int msecs) -> sr::Value {
         if (!sys)
           return MakeResolvedFuture(*vm.gc_);
 
         const bool has_timeout = msecs > 0;
-        const unsigned int start_ticks = sys->event().GetTicks();
-        const unsigned int duration =
-            has_timeout ? static_cast<unsigned int>(msecs) : 0;
-        auto done = [sys, has_timeout, start_ticks, duration] {
+        auto counter = has_timeout ? runtime.CreateCounter() : nullptr;
+        if (counter)
+          counter->StartGame();
+        auto done = [sys, counter = std::move(counter), msecs] {
           if (sys->ShouldFastForward())
             return true;
 
-          if (!has_timeout)
-            return false;
-
-          const unsigned int elapsed = sys->event().GetTicks() - start_ticks;
-          return elapsed >= duration;
+          return counter && counter->Get() >= msecs;
         };
         return MakePollingWaitFuture(vm, std::move(done), true,
                                      sys->event_ptr().get());
       },
       sb::arg("msecs") = 0);
-  gm.def("set_title", [sys = runtime.system.get()](std::string title) {
+  gm.def("set_title", [sys](std::string title) {
     sys->graphics().SetWindowSubtitle(std::move(title));
   });
 }

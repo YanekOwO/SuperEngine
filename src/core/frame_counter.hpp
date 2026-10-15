@@ -6,6 +6,7 @@
 //
 // Copyright (C) 2006 Elliot Glaysher
 // Copyright (C) 2025 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,8 +30,10 @@
 
 #include <chrono>
 #include <memory>
+#include <variant>
 
 class Clock;
+class Counter;
 
 // Frame Counters
 //
@@ -43,6 +46,13 @@ class Clock;
 class FrameCounter {
  public:
   FrameCounter(std::shared_ptr<Clock> clock,
+               Interpolation interpolation,
+               int milliseconds);
+
+  // Retains |counter| and reads Get() as the current time in milliseconds,
+  // regardless of its mode or active state. The caller controls the source;
+  // FrameCounter never starts, stops, resets, resumes, or advances it.
+  FrameCounter(std::shared_ptr<Counter> counter,
                Interpolation interpolation,
                int milliseconds);
 
@@ -64,12 +74,22 @@ class FrameCounter {
   inline bool IsActive() const { return is_active_; }
 
  private:
+  using TimeSource =
+      std::variant<std::shared_ptr<Clock>, std::shared_ptr<Counter>>;
+
+  FrameCounter(Interpolation interpolation,
+               int milliseconds,
+               TimeSource time_source);
+
+  // Reads the selected source without modifying it.
+  std::chrono::milliseconds CurrentTime() const;
+
   // Computes an un-clamped fraction of how far along we are, i.e.
   // 0.0 at start_time_, 1.0 at exactly total_time_, and >1.0 if time is beyond
   // total_time_.
   double ComputeNormalizedTime() const;
 
-  std::shared_ptr<Clock> clock_;
+  TimeSource time_source_;
   Interpolation interpolation_;
   float value_;
   bool is_active_;

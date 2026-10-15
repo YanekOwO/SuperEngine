@@ -34,6 +34,7 @@
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -71,13 +72,18 @@ void BindCounter(SiglusMachine& runtime) {
   counter_class.def("get",
                     [](const CounterHandle* h) { return h->Get()->Get(); });
   counter_class.def("reset", [](CounterHandle* h) { h->Get()->Reset(); });
-  counter_class.def("start", [](CounterHandle* h) { h->Get()->Start(false); });
+  counter_class.def("start", [](CounterHandle* h) { h->Get()->StartGame(); });
   counter_class.def("start_real",
-                    [](CounterHandle* h) { h->Get()->Start(true); });
+                    [](CounterHandle* h) { h->Get()->StartReal(); });
   auto counter_start_frame = [](bool real_time, bool loop) {
     return
         [real_time, loop](CounterHandle* h, int start, int end, int duration) {
-          h->Get()->StartFrame(start, end, duration, real_time, loop);
+          std::shared_ptr<Counter> counter = h->Get();
+          const auto frame_duration = std::chrono::milliseconds(duration);
+          if (real_time)
+            counter->StartFrameReal(start, end, frame_duration, loop);
+          else
+            counter->StartFrameGame(start, end, frame_duration, loop);
         };
   };
   counter_class.def("start_frame", counter_start_frame(false, false));

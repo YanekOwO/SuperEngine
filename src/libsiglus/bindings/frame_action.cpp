@@ -38,6 +38,7 @@
 #include "vm/vm.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -46,6 +47,8 @@
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
+
+using ms = std::chrono::milliseconds;
 
 namespace {
 
@@ -284,7 +287,11 @@ void FrameActionManager::Start(ActionReference reference,
   action.function = &callback;
   action.arguments = std::move(arguments);
   action.end_time = duration;
-  action.GetCounter()->Start(real_time);
+  std::shared_ptr<Counter> counter = action.GetCounter();
+  if (real_time)
+    counter->StartReal();
+  else
+    counter->StartGame();
 }
 
 void FrameActionManager::End(ActionReference reference) {
@@ -310,15 +317,10 @@ void FrameActionManager::StartConfiguredButton(
   Start({owner->GetFrameAction(), owner}, -1, false, *command.function, {});
 }
 
-void FrameActionManager::AdvanceAndDispatch(
-    std::chrono::milliseconds real_delta,
-    bool fast_forward) {
-  const std::int64_t real_ms = std::max<std::int64_t>(0, real_delta.count());
-  const std::int64_t game_ms =
-      !fast_forward ? real_ms
-                    : (real_ms > std::numeric_limits<std::int64_t>::max() / 32
-                           ? std::numeric_limits<std::int64_t>::max()
-                           : real_ms * 32);
+void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
+  const auto real_time = std::max(ms::zero(), real_delta);
+  const auto game_time = std::max(ms::zero(), game_delta);
+
   const bool globals_stopped =
       local_config_.time_stop || local_config_.frame_action_time_stop;
   const bool objects_stopped =
@@ -328,7 +330,7 @@ void FrameActionManager::AdvanceAndDispatch(
                  auto& action = *reference.action;
                  if (action.counter &&
                      !(reference.owner ? objects_stopped : globals_stopped))
-                   action.counter->Advance(game_ms, real_ms);
+                   action.counter->Advance(game_time, real_time);
                });
   VisitActions(global_action_, global_channels_, stage_,
                [&](const ActionReference& reference, bool) {

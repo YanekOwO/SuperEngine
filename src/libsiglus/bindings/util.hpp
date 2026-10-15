@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/counter.hpp"
 #include "core/frame_counter.hpp"
 #include "core/interpolation.hpp"
 
@@ -47,14 +48,14 @@ FrameCounter MakeFrameCounter(int duration,
                               int start_val,
                               int end_val,
                               int type,
-                              std::shared_ptr<Clock> clock);
+                              std::shared_ptr<Counter> counter);
 FrameCounter MakeRepeatingFrameCounter(InterpolationType type,
                                        int duration,
                                        int delay,
                                        int start_value,
                                        int end_value,
                                        int speed_type,
-                                       std::shared_ptr<Clock> clock);
+                                       std::shared_ptr<Counter> counter);
 
 // for code injection
 serilang::Value Execute(serilang::VM& vm, std::string src);

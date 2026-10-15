@@ -59,14 +59,10 @@ FrameCounter MakeFrameCounter(int duration,
                               int start_val,
                               int end_val,
                               int speed_type,
-                              std::shared_ptr<Clock> clock) {
-  FrameCounter fc(
-      std::move(clock),
-      Interpolation(Range(start_val, end_val), InterpolationType::OneShot,
-                    GetInterpolationMode(speed_type)),
-      duration);
-  fc.BeginTimer(std::chrono::milliseconds(delay));
-  return fc;
+                              std::shared_ptr<Counter> counter) {
+  return MakeRepeatingFrameCounter(InterpolationType::OneShot, duration, delay,
+                                   start_val, end_val, speed_type,
+                                   std::move(counter));
 }
 
 FrameCounter MakeRepeatingFrameCounter(InterpolationType type,
@@ -75,13 +71,13 @@ FrameCounter MakeRepeatingFrameCounter(InterpolationType type,
                                        int start_value,
                                        int end_value,
                                        int speed_type,
-                                       std::shared_ptr<Clock> clock) {
-  FrameCounter counter(std::move(clock),
-                       Interpolation(Range(start_value, end_value), type,
-                                     GetInterpolationMode(speed_type)),
-                       duration);
-  counter.BeginTimer(std::chrono::milliseconds(delay));
-  return counter;
+                                       std::shared_ptr<Counter> counter) {
+  FrameCounter frame(std::move(counter),
+                     Interpolation(Range(start_value, end_value), type,
+                                   GetInterpolationMode(speed_type)),
+                     duration);
+  frame.BeginTimer(std::chrono::milliseconds(delay));
+  return frame;
 }
 
 // ------------------------------------------------------------------------------

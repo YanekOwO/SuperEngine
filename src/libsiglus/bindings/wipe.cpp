@@ -46,7 +46,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -193,13 +192,11 @@ struct SiglusWipe {
     SiglusWipe* owner = nullptr;
   };
 
-  SiglusWipe(System* system,
-             Stage* stage,
-             const GlobalConfig& global_config,
-             std::shared_ptr<Control> control)
-      : system_(system),
-        stage_(stage),
-        global_config_(global_config),
+  SiglusWipe(SiglusMachine& runtime, std::shared_ptr<Control> control)
+      : runtime_(runtime),
+        system_(runtime.system.get()),
+        stage_(runtime.stage.get()),
+        global_config_(runtime.global_config),
         control_(std::move(control)) {
     control_->owner = this;
   }
@@ -214,25 +211,13 @@ struct SiglusWipe {
     WipeCompletion completion;
   };
 
-  FrameCounter MakeWipeFrameCounter(const WipeParams& params,
-                                    std::shared_ptr<Clock> clock) {
-    InterpolationMode mode = InterpolationMode::Linear;
-    switch (params.speed_mode) {
-      case 1:
-        mode = InterpolationMode::Accelerate;
-        break;
-      case 2:
-        mode = InterpolationMode::Decelerate;
-        break;
-      case 0:
-      default:
-        break;
-    }
-
-    FrameCounter counter(
-        std::move(clock),
-        Interpolation(Range(0, 1), InterpolationType::OneShot, mode),
-        params.wipe_time);
+  FrameCounter MakeWipeFrameCounter(const WipeParams& params) {
+    auto source = runtime_.CreateCounter();
+    source->StartGame();
+    FrameCounter counter(std::move(source),
+                         Interpolation(Range(0, 1), InterpolationType::OneShot,
+                                       GetInterpolationMode(params.speed_mode)),
+                         params.wipe_time);
     counter.BeginTimer(std::chrono::milliseconds(0) -
                        std::chrono::milliseconds(params.start_time));
     return counter;
@@ -252,7 +237,6 @@ struct SiglusWipe {
           stage_(stage),
           params_(std::move(params)),
           active_(std::move(active)),
-          start_ticks_(system ? system->event().GetTicks() : 0),
           progress_counter_(std::move(progress_counter)),
           global_config_(global_config),
           finish_stage_(std::move(finish_stage)) {}
@@ -287,16 +271,14 @@ struct SiglusWipe {
           co_return 0;
         }
 
-        // A non-waiting wipe is not force-ended by skipping. Its game-time
-        // clock advances at Siglus' 32x rate instead.
-        const int elapsed = ElapsedTime(fast_forward);
-        if (elapsed >= params_.wipe_time) {
+        // Non-waiting wipes follow the game delta supplied by the machine,
+        // including changes to fast-forward while a wipe is in progress.
+        const float progress = progress_counter_.ReadFrame();
+        if (progress_counter_.IsFinished()) {
           FinishStage(0, 3);
           co_return 0;
         }
 
-        float progress =
-            fast_forward ? ProgressAt(elapsed) : progress_counter_.ReadFrame();
         stage_->SetTransitionRenderAlpha(progress, 1.0 - progress);
 
         const WaitOutcome outcome =
@@ -341,31 +323,6 @@ struct SiglusWipe {
       return global_config_.system.skip_wipe_anime;
     }
 
-    int ElapsedTime(bool fast_forward) const {
-      const unsigned int now = system_->event().GetTicks();
-      const std::uint64_t real_elapsed = now - start_ticks_;
-      const std::uint64_t multiplier = fast_forward ? 32 : 1;
-      const std::uint64_t scaled = std::min<std::uint64_t>(
-          real_elapsed * multiplier,
-          static_cast<std::uint64_t>(std::numeric_limits<int>::max()));
-      return params_.start_time + static_cast<int>(scaled);
-    }
-
-    float ProgressAt(int elapsed) const {
-      if (params_.wipe_time <= 0)
-        return 1.0f;
-      InterpolationMode mode = InterpolationMode::Linear;
-      if (params_.speed_mode == 1)
-        mode = InterpolationMode::Accelerate;
-      else if (params_.speed_mode == 2)
-        mode = InterpolationMode::Decelerate;
-      const double normalized = std::clamp(
-          static_cast<double>(elapsed) / params_.wipe_time, 0.0, 1.0);
-      return static_cast<float>(
-          Interpolation(Range(0, 1), InterpolationType::OneShot, mode)
-              .ValueAt(normalized));
-    }
-
     void FinishStage(int result, int regular_boundaries = 1) {
       if (finish_stage_)
         finish_stage_(result, regular_boundaries);
@@ -375,7 +332,6 @@ struct SiglusWipe {
     Stage* stage_ = nullptr;
     WipeParams params_;
     std::weak_ptr<ActiveWipe> active_;
-    unsigned int start_ticks_ = 0;
     FrameCounter progress_counter_;
     const GlobalConfig& global_config_;
     std::function<void(int, int)> finish_stage_;
@@ -466,8 +422,7 @@ struct SiglusWipe {
     const bool wait_flag = params.wait_flag;
     const bool initially_terminal =
         params.wipe_time <= 0 || params.start_time >= params.wipe_time;
-    auto progress_counter =
-        MakeWipeFrameCounter(params, system_->event().GetClock());
+    auto progress_counter = MakeWipeFrameCounter(params);
     const double initial_progress =
         initially_terminal ? 0.0 : progress_counter.ReadFrame();
     stage_->SetTransitionRenderRange(params.begin_order, params.end_order,
@@ -527,6 +482,7 @@ struct SiglusWipe {
     return sr::Value(future);
   }
 
+  SiglusMachine& runtime_;
   System* system_ = nullptr;
   Stage* stage_ = nullptr;
   const GlobalConfig& global_config_;
@@ -540,8 +496,7 @@ void BindWipe(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusWipe> wipe_cls(m, "Wipe", false);
   auto control = std::make_shared<SiglusWipe::Control>();
-  auto wipe = wipe_cls.inst("wipe", runtime.system.get(), runtime.stage.get(),
-                            runtime.global_config, control);
+  auto wipe = wipe_cls.inst("wipe", runtime, control);
 
   if (!runtime.finish_active_wipe)
     runtime.finish_active_wipe = std::make_shared<SiglusWipeEndHook>();

@@ -84,7 +84,7 @@ class FrameActionManager {
                              ActionOwner owner,
                              const MwndConfig::CallTarget& target);
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
-                          bool fast_forward);
+                          std::chrono::milliseconds game_delta);
   void CancelGlobals();
 
  private:

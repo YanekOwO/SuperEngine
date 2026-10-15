@@ -38,6 +38,7 @@
 #include "systems/system.hpp"
 #include "vm/value.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -114,6 +115,16 @@ struct SiglusMachine {
   SiglusMachine& operator=(SiglusMachine&&) noexcept = delete;
 
   void Run();
+
+  // Advance one frame using given deltas.
+  void Update(std::chrono::milliseconds real_delta,
+              std::chrono::milliseconds game_delta);
+
+  // Create an inactive caller-owned counter.
+  std::shared_ptr<Counter> CreateCounter();
+
+ private:
+  std::vector<std::weak_ptr<Counter>> counters_;
 };
 
 }  // namespace libsiglus

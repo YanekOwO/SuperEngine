@@ -59,11 +59,6 @@ struct MaskEventHandle {
   Mask::Parameter parameter_;
   EventSystem* event_;
 
-  EventSystem& GetEvent() {
-    if (!event_)
-      throw std::runtime_error("mask event requires an event system");
-    return *event_;
-  }
   inline Mask& Get() { return mask_.Get(); }
 };
 
@@ -81,45 +76,46 @@ void BindMask(SiglusMachine& runtime) {
   // ------------------------------------------------------------------------------
   // MaskEvent
   sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
-  // starting oneshot event
-  auto mask_eve_set = [](MaskEventHandle* h, int value, int duration, int delay,
-                         int speed_type) {
-    Mask& mask = h->Get();
-    mask.EndMutator(h->parameter_);
-
-    const int start = mask.Param().*(h->parameter_);
-    auto fc = MakeRepeatingFrameCounter(InterpolationType::OneShot, duration,
-                                        delay, start, value, speed_type,
-                                        h->GetEvent().GetClock());
-    mask.AddMutator(Mask::ParameterMutator(h->parameter_, fc));
-  };
-  event_class.def("set", mask_eve_set, sb::arg("value"), sb::arg("duration"),
-                  sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("set_real", mask_eve_set, sb::arg("value"),
-                  sb::arg("duration"), sb::arg("delay"), sb::arg("speed_type"));
-  // starting loop event
-  auto mask_eve_repeat = [](InterpolationType type) {
-    return [type](MaskEventHandle* h, int start, int end, int duration,
-                  int delay, int speed_type) {
+  for (const bool real_time : {false, true}) {
+    auto make_counter = [&runtime, real_time] {
+      auto counter = runtime.CreateCounter();
+      if (real_time)
+        counter->StartReal();
+      else
+        counter->StartGame();
+      return counter;
+    };
+    auto set = [make_counter](MaskEventHandle* h, int value, int duration,
+                              int delay, int speed_type) {
       Mask& mask = h->Get();
       mask.EndMutator(h->parameter_);
-      auto fc = MakeRepeatingFrameCounter(type, duration, delay, start, end,
-                                          speed_type, h->GetEvent().GetClock());
-      mask.AddMutator(Mask::ParameterMutator(h->parameter_, fc));
+      const int start = mask.Param().*(h->parameter_);
+      auto fc = MakeFrameCounter(duration, delay, start, value, speed_type,
+                                 make_counter());
+      mask.AddMutator(Mask::ParameterMutator(h->parameter_, std::move(fc)));
     };
-  };
-  event_class.def("loop", mask_eve_repeat(InterpolationType::Loop),
-                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
-                  sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("loop_real", mask_eve_repeat(InterpolationType::Loop),
-                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
-                  sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("turn", mask_eve_repeat(InterpolationType::Turn),
-                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
-                  sb::arg("delay"), sb::arg("speed_type"));
-  event_class.def("turn_real", mask_eve_repeat(InterpolationType::Turn),
-                  sb::arg("start"), sb::arg("end"), sb::arg("duration"),
-                  sb::arg("delay"), sb::arg("speed_type"));
+    event_class.def(real_time ? "set_real" : "set", set, sb::arg("value"),
+                    sb::arg("duration"), sb::arg("delay"),
+                    sb::arg("speed_type"));
+    auto repeating = [make_counter](InterpolationType type) {
+      return [make_counter, type](MaskEventHandle* h, int start, int end,
+                                  int duration, int delay, int speed_type) {
+        Mask& mask = h->Get();
+        mask.EndMutator(h->parameter_);
+        auto fc = MakeRepeatingFrameCounter(type, duration, delay, start, end,
+                                            speed_type, make_counter());
+        mask.AddMutator(Mask::ParameterMutator(h->parameter_, std::move(fc)));
+      };
+    };
+    event_class.def(real_time ? "loop_real" : "loop",
+                    repeating(InterpolationType::Loop), sb::arg("start"),
+                    sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
+                    sb::arg("speed_type"));
+    event_class.def(real_time ? "turn_real" : "turn",
+                    repeating(InterpolationType::Turn), sb::arg("start"),
+                    sb::arg("end"), sb::arg("duration"), sb::arg("delay"),
+                    sb::arg("speed_type"));
+  }
   // end event
   event_class.def("end", [](MaskEventHandle* h) {
     Mask& mask = h->Get();

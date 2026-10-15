@@ -132,15 +132,17 @@ class MwndWaitTask : public CoroutineTask {
   enum class AfterWait { None, Paragraph, Clear };
 
   MwndWaitTask(sr::VM& vm,
-               System* system,
+               SiglusMachine& runtime,
                std::shared_ptr<TextWindow> window,
-               LocalConfig& local_config,
                std::shared_ptr<MwndMessageState> message_state,
                AfterWait after_wait)
-      : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
-        system_(system),
+      : CoroutineTask(
+            vm,
+            runtime.system ? runtime.system->event_ptr().get() : nullptr),
+        runtime_(runtime),
+        system_(runtime.system.get()),
         window_(std::move(window)),
-        local_config_(local_config),
+        local_config_(runtime.local_config),
         message_state_(std::move(message_state)),
         after_wait_(after_wait) {}
 
@@ -153,7 +155,8 @@ class MwndWaitTask : public CoroutineTask {
     PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
 
     try {
-      const unsigned int start_ticks = system_->event().GetTicks();
+      auto counter = runtime_.CreateCounter();
+      counter->StartGame();
       const int auto_time = EffectiveAutoTime(
           local_config_, system_->global_config(), AutoModeCharCount());
 
@@ -172,9 +175,7 @@ class MwndWaitTask : public CoroutineTask {
         }
 
         if (AutoModeEnabled(system_)) {
-          const unsigned int elapsed =
-              system_->event().GetTicks() - start_ticks;
-          if (elapsed >= static_cast<unsigned int>(std::max(auto_time, 0))) {
+          if (counter->Get() >= std::max(auto_time, 0)) {
             pause.Reset();
             FinishWait();
             co_return 0;
@@ -246,6 +247,7 @@ class MwndWaitTask : public CoroutineTask {
 
   TextPage& Page() { return system_->text().GetPageOnWindow(window_); }
 
+  SiglusMachine& runtime_;
   System* system_;
   std::shared_ptr<TextWindow> window_;
   LocalConfig& local_config_;
@@ -275,13 +277,12 @@ void BindMwnd(SiglusMachine& runtime) {
   };
   auto context = std::make_shared<PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
-  auto wait = [sys, get, context, cfg = &runtime.local_config](
-                  MwndHandle* h, sr::VM& vm,
-                  MwndWaitTask::AfterWait after_wait) {
+  auto wait = [&runtime, get, context](MwndHandle* h, sr::VM& vm,
+                                       MwndWaitTask::AfterWait after_wait) {
     auto window = get(h);
     auto message_state = window->message_state();
     auto task = std::make_unique<MwndWaitTask>(
-        vm, sys, std::move(window), *cfg, std::move(message_state), after_wait);
+        vm, runtime, std::move(window), std::move(message_state), after_wait);
     return sr::Value(context->MakeFuture(*vm.gc_, std::move(task)));
   };
 

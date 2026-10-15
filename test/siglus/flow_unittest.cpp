@@ -35,6 +35,7 @@
 #include "vm/gc.hpp"
 #include "vm/value.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -127,7 +128,8 @@ TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionUsesTypedSceneCommand) {
   const auto action = object->GetFrameAction();
   EXPECT_TRUE(action->IsActive());
   EXPECT_EQ(action->end_time, -1);
-  action->GetCounter()->Advance(32, 1);
+  action->GetCounter()->Advance(std::chrono::milliseconds(32),
+                                std::chrono::milliseconds(1));
   EXPECT_EQ(action->GetCounter()->Get(), 32);
   EXPECT_TRUE(action->arguments.empty());
 }
@@ -150,25 +152,28 @@ TEST_F(SiglusSceneEntryTest, FrameActionClocksBorrowLiveLocalConfiguration) {
   LocalConfig config;
   FrameActionManager manager(vm, stage, config, 0);
   auto global_counter = manager.global_action()->GetCounter();
-  global_counter->Start(false);
+  global_counter->StartGame();
   auto object = std::make_shared<GraphicsObject>();
   stage.objects[kLayerFg][0] = object;
   auto object_counter = object->GetFrameAction()->GetCounter();
-  object_counter->Start(false);
+  object_counter->StartGame();
 
   config.frame_action_time_stop = true;
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(10), false);
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(10),
+                             std::chrono::milliseconds(10));
   EXPECT_EQ(global_counter->Get(), 0);
   EXPECT_EQ(object_counter->Get(), 10);
 
   config.frame_action_time_stop = false;
   config.stage_time_stop = true;
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(10), false);
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(10),
+                             std::chrono::milliseconds(10));
   EXPECT_EQ(global_counter->Get(), 10);
   EXPECT_EQ(object_counter->Get(), 10);
 
   config = LocalConfig{};
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(5), true);
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(5),
+                             std::chrono::milliseconds(160));
   EXPECT_EQ(global_counter->Get(), 170);
   EXPECT_EQ(object_counter->Get(), 170);
 }

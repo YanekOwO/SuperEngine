@@ -211,8 +211,8 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   action->arguments = {12, std::string("original")};
   action->end_time = 100;
   action->end_action = true;
-  action->GetCounter()->Start(false);
-  action->counter->Advance(37, 37);
+  action->GetCounter()->StartGame();
+  action->counter->Advance(37ms, 37ms);
   obj.frame_action_list_.resize(2);
   auto channel = obj.GetFrameAction(0);
   channel->function = &callback;
@@ -236,7 +236,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   EXPECT_FALSE(clone.frame_action_list_[0]->end_action);
   EXPECT_EQ(clone.frame_action_list_[1], nullptr);
 
-  copied->counter->Advance(3, 3);
+  copied->counter->Advance(3ms, 3ms);
   copied->arguments[1] = std::string("copy");
   EXPECT_EQ(copied->counter->Get(), 40);
   EXPECT_EQ(action->counter->Get(), 37);

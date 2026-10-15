@@ -382,13 +382,6 @@ sr::Value WaitMovie(std::shared_ptr<GraphicsObject> object,
                                system ? system->event_ptr().get() : nullptr);
 }
 
-void VerifyObjectEvent(System* system, std::string_view name) {
-  if (!system || !system->graphics_ptr())
-    throw std::runtime_error(std::string(name) + " requires a graphics system");
-  if (!system->event_ptr())
-    throw std::runtime_error(std::string(name) + " requires an event system");
-}
-
 int EventRepno(const ObjectEventHandle* h) { return -1; }
 int EventRepno(const ObjectRepnoEventHandle* h) { return h->repno; }
 
@@ -420,51 +413,54 @@ void AddObjectEvent(Handle* h, FrameCounter counter) {
 template <typename Handle>
 void BindObjectEvents(sb::class_<Handle>& event_class,
                       System* system,
-                      const char* error_name) {
-  // The real-time aliases currently use the same clock as ordinary events.
-  auto set = [system, error_name](Handle* h, int end_value, int duration_time,
-                                  int delay, int type) {
-    VerifyObjectEvent(system, error_name);
-    h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
-    const int start = EventStartValue(h);
-    AddObjectEvent(h, MakeFrameCounter(duration_time, delay, start, end_value,
-                                       type, system->event().GetClock()));
-  };
-  for (const char* name : {"set", "set_real"}) {
-    event_class.def(name, set, sb::arg("end_value"), sb::arg("duration_time"),
-                    sb::arg("delay"), sb::arg("type"));
+                      SiglusMachine& machine) {
+  for (const bool real_time : {false, true}) {
+    auto make_counter = [&machine, real_time] {
+      auto counter = machine.CreateCounter();
+      if (real_time)
+        counter->StartReal();
+      else
+        counter->StartGame();
+      return counter;
+    };
+
+    auto set = [make_counter](Handle* h, int end_value, int duration_time,
+                              int delay, int type) {
+      h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
+      const int start = EventStartValue(h);
+      AddObjectEvent(h, MakeFrameCounter(duration_time, delay, start, end_value,
+                                         type, make_counter()));
+    };
+    event_class.def(real_time ? "set_real" : "set", set, sb::arg("end_value"),
+                    sb::arg("duration_time"), sb::arg("delay"),
+                    sb::arg("type"));
+
+    auto repeating = [make_counter](InterpolationType type) {
+      return [make_counter, type](Handle* h, int start_value, int end_value,
+                                  int loop_time, int delay, int speed_type) {
+        h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
+        AddObjectEvent(h, MakeRepeatingFrameCounter(
+                              type, loop_time, delay, start_value, end_value,
+                              speed_type, make_counter()));
+      };
+    };
+    event_class.def(real_time ? "loop_real" : "loop",
+                    repeating(InterpolationType::Loop), sb::arg("start_value"),
+                    sb::arg("end_value"), sb::arg("loop_time"),
+                    sb::arg("delay"), sb::arg("speed_type"));
+    event_class.def(real_time ? "turn_real" : "turn",
+                    repeating(InterpolationType::Turn), sb::arg("start_value"),
+                    sb::arg("end_value"), sb::arg("loop_time"),
+                    sb::arg("delay"), sb::arg("speed_type"));
   }
-  auto repeating = [system, error_name](InterpolationType type) {
-    return
-        [system, error_name, type](Handle* h, int start_value, int end_value,
-                                   int loop_time, int delay, int speed_type) {
-          VerifyObjectEvent(system, error_name);
-          h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
-          AddObjectEvent(h, MakeRepeatingFrameCounter(
-                                type, loop_time, delay, start_value, end_value,
-                                speed_type, system->event().GetClock()));
-        };
-  };
-  for (const char* name : {"loop", "loop_real"}) {
-    event_class.def(name, repeating(InterpolationType::Loop),
-                    sb::arg("start_value"), sb::arg("end_value"),
-                    sb::arg("loop_time"), sb::arg("delay"),
-                    sb::arg("speed_type"));
-  }
-  for (const char* name : {"turn", "turn_real"}) {
-    event_class.def(name, repeating(InterpolationType::Turn),
-                    sb::arg("start_value"), sb::arg("end_value"),
-                    sb::arg("loop_time"), sb::arg("delay"),
-                    sb::arg("speed_type"));
-  }
-  event_class.def("end", [system, error_name](Handle* h) {
-    VerifyObjectEvent(system, error_name);
+
+  event_class.def("end", [](Handle* h) {
     h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
   });
-  event_class.def("check", [system, error_name](Handle* h) -> int {
-    VerifyObjectEvent(system, error_name);
+  event_class.def("check", [](Handle* h) -> int {
     return h->object->IsMutatorRunningMatching(EventRepno(h), h->name);
   });
+
   auto wait = [system](bool key_skip) {
     return [system, key_skip](Handle* h, sr::VM& vm, std::vector<sr::Value>) {
       auto done = [object = h->object, repno = EventRepno(h), name = h->name] {
@@ -905,8 +901,8 @@ void BindObject(SiglusMachine& runtime) {
   ilist_param("tr_rep", &ObjectParameter::adjustment_alphas);
 
   DirectObjectPropertyBinder{object}.Bind();
-  BindObjectEvents(event, system, "ObjEve");
-  BindObjectEvents(repno_event, system, "ObjectRepnoEvent");
+  BindObjectEvents(event, system, runtime);
+  BindObjectEvents(repno_event, system, runtime);
   ObjectEventPropertyBinder{object, event}.Bind();
 
   repno_event_list.add_gc_root(repno_event);

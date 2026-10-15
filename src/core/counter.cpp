@@ -24,44 +24,51 @@
 #include "core/counter.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 
+#include <boost/multiprecision/cpp_int.hpp>
+
+using ms = std::chrono::milliseconds;
+
 Counter::Counter() { Reset(); }
 
 void Counter::Reset() {
   is_running_ = false;
-  real_time_ = false;
-  frame_mode_ = false;
-  frame_loop_ = false;
-  frame_start_value_ = 0;
-  frame_end_value_ = 0;
-  frame_time_ = 0;
-  current_time_ = 0;
+  use_real_time_ = false;
+  mode_ = Timer{};
+  current_time_ = ms::zero();
 }
 
-void Counter::Start(bool real_time) {
+void Counter::StartReal() {
   is_running_ = true;
-  real_time_ = real_time;
-  frame_mode_ = false;
-  current_time_ = 0;
+  use_real_time_ = true;
+  mode_ = Timer{};
+  current_time_ = ms::zero();
 }
 
-void Counter::StartFrame(int start_value,
-                         int end_value,
-                         int frame_time,
-                         bool real_time,
-                         bool loop) {
+void Counter::StartGame() {
   is_running_ = true;
-  real_time_ = real_time;
-  frame_mode_ = true;
-  frame_loop_ = loop;
-  frame_start_value_ = start_value;
-  frame_end_value_ = end_value;
-  frame_time_ = frame_time;
-  current_time_ = 0;
+  use_real_time_ = false;
+  mode_ = Timer{};
+  current_time_ = ms::zero();
+}
+
+void Counter::StartFrameReal(int start, int end, ms duration, bool loop) {
+  is_running_ = true;
+  use_real_time_ = true;
+  mode_ = Frame{.loop = loop, .start = start, .end = end, .duration = duration};
+  current_time_ = ms::zero();
+}
+
+void Counter::StartFrameGame(int start, int end, ms duration, bool loop) {
+  is_running_ = true;
+  use_real_time_ = false;
+  mode_ = Frame{.loop = loop, .start = start, .end = end, .duration = duration};
+  current_time_ = ms::zero();
 }
 
 void Counter::Stop() { is_running_ = false; }
@@ -69,69 +76,80 @@ void Counter::Stop() { is_running_ = false; }
 void Counter::Resume() { is_running_ = true; }
 
 void Counter::Set(int value) {
-  if (!frame_mode_) {
-    current_time_ = value;
-  } else if (frame_end_value_ == frame_start_value_ || frame_time_ <= 0) {
-    current_time_ = 0;
+  const Frame* frame = std::get_if<Frame>(&mode_);
+  if (!frame) {
+    current_time_ = ms(value);
+  } else if (frame->end == frame->start || frame->duration <= ms::zero()) {
+    current_time_ = ms::zero();
   } else {
-    const std::int64_t offset =
-        static_cast<std::int64_t>(value) - frame_start_value_;
+    const std::int64_t offset = static_cast<std::int64_t>(value) - frame->start;
     const std::int64_t range =
-        static_cast<std::int64_t>(frame_end_value_) - frame_start_value_;
-    current_time_ = offset * frame_time_ / range;
-    const int maximum = frame_loop_ ? frame_time_ - 1 : frame_time_;
-    current_time_ = std::clamp<std::int64_t>(current_time_, 0, maximum);
+        static_cast<std::int64_t>(frame->end) - frame->start;
+    // Chrono durations can span more than an int's worth of milliseconds;
+    // keep the intermediate product wide until after clamping.
+    using WideInt = boost::multiprecision::int128_t;
+    const WideInt elapsed = WideInt(offset) * frame->duration.count() / range;
+    const auto maximum =
+        frame->loop ? frame->duration - ms(1) : frame->duration;
+    current_time_ = ms(
+        static_cast<ms::rep>(std::clamp<WideInt>(elapsed, 0, maximum.count())));
   }
 }
 
-void Counter::Advance(std::int64_t game_ms, std::int64_t real_ms) {
+void Counter::Advance(ms game_time, ms real_time) {
   if (!is_running_)
     return;
 
-  const std::int64_t elapsed =
-      std::max<std::int64_t>(0, real_time_ ? real_ms : game_ms);
-  if (current_time_ > std::numeric_limits<std::int64_t>::max() - elapsed)
-    current_time_ = std::numeric_limits<std::int64_t>::max();
+  const auto elapsed =
+      std::max(ms::zero(), use_real_time_ ? real_time : game_time);
+  if (current_time_ > ms::max() - elapsed)
+    current_time_ = ms::max();
   else
     current_time_ += elapsed;
 
-  if (frame_mode_ && !frame_loop_ && current_time_ >= frame_time_)
+  const Frame* frame = std::get_if<Frame>(&mode_);
+  if (frame && !frame->loop && current_time_ >= frame->duration)
     is_running_ = false;
 }
 
 int Counter::Get() const {
-  if (!frame_mode_) {
-    return static_cast<int>(
-        std::clamp<std::int64_t>(current_time_, std::numeric_limits<int>::min(),
-                                 std::numeric_limits<int>::max()));
+  const Frame* frame = std::get_if<Frame>(&mode_);
+  if (!frame) {
+    return static_cast<int>(std::clamp<ms::rep>(
+        current_time_.count(), std::numeric_limits<int>::min(),
+        std::numeric_limits<int>::max()));
   }
-  if (frame_time_ <= 0 || frame_start_value_ == frame_end_value_)
-    return frame_end_value_;
+  if (frame->duration <= ms::zero() || frame->start == frame->end)
+    return frame->end;
 
   const std::int64_t range =
-      static_cast<std::int64_t>(frame_end_value_) - frame_start_value_;
-  if (frame_loop_) {
-    // The interpolation repeats once per frame_time_. Reducing first keeps
-    // the multiplication in range even after an arbitrarily long runtime,
-    // and works for both ascending and descending ranges.
-    std::int64_t cycle_time = current_time_ % frame_time_;
-    if (cycle_time < 0)
-      cycle_time += frame_time_;
-    const std::int64_t value = range * cycle_time / frame_time_;
-    return static_cast<int>(value + frame_start_value_);
+      static_cast<std::int64_t>(frame->end) - frame->start;
+  using WideInt = boost::multiprecision::int128_t;
+  if (frame->loop) {
+    // The interpolation repeats once per frame duration, for both ascending
+    // and descending ranges. A wide product also handles long durations.
+    auto cycle_time = current_time_ % frame->duration;
+    if (cycle_time < ms::zero())
+      cycle_time += frame->duration;
+    const std::int64_t value = static_cast<std::int64_t>(
+        WideInt(range) * cycle_time.count() / frame->duration.count());
+    return static_cast<int>(value + frame->start);
   }
 
-  // A completed one-shot is exactly at its endpoint. Besides avoiding an
-  // unnecessary interpolation this prevents a large accumulated time from
-  // overflowing the multiplication below.
-  if (current_time_ >= frame_time_)
-    return frame_end_value_;
+  // A completed one-shot is exactly at its endpoint.
+  if (current_time_ >= frame->duration)
+    return frame->end;
 
-  std::int64_t value = range * current_time_ / frame_time_ + frame_start_value_;
-  const int minimum = std::min(frame_start_value_, frame_end_value_);
-  const int maximum = std::max(frame_start_value_, frame_end_value_);
+  const std::int64_t value =
+      static_cast<std::int64_t>(WideInt(range) * current_time_.count() /
+                                frame->duration.count()) +
+      frame->start;
+  const int minimum = std::min(frame->start, frame->end);
+  const int maximum = std::max(frame->start, frame->end);
   return static_cast<int>(std::clamp<std::int64_t>(value, minimum, maximum));
 }
+
+// ------------------------------------------------------------------------------
 
 CounterList::CounterList(std::size_t size) {
   elements_.reserve(size);
@@ -146,9 +164,9 @@ std::shared_ptr<Counter> CounterList::GetHandle(int index) const {
   return elements_[static_cast<std::size_t>(index)];
 }
 
-void CounterList::Advance(std::int64_t game_ms, std::int64_t real_ms) {
+void CounterList::Advance(ms game_time, ms real_time) {
   for (const std::shared_ptr<Counter>& counter : elements_)
-    counter->Advance(game_ms, real_ms);
+    counter->Advance(game_time, real_time);
 }
 
 void CounterList::Reset() {

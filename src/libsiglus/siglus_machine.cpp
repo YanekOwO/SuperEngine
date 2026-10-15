@@ -32,10 +32,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
-#include <limits>
+#include <memory>
 #include <stdexcept>
-#include <string_view>
 #include <thread>
 
 namespace libsiglus {
@@ -45,6 +43,47 @@ SiglusMachine::~SiglusMachine() {
   // to runtime services. Finalize them before member destruction tears those
   // services down.
   vm.reset();
+}
+
+void SiglusMachine::Update(std::chrono::milliseconds real_delta,
+                           std::chrono::milliseconds game_delta) {
+  using ms = std::chrono::milliseconds;
+  real_delta = std::max(ms::zero(), real_delta);
+  game_delta = std::max(ms::zero(), game_delta);
+
+  const bool time_stopped = local_config.time_stop;
+  if (!time_stopped && !local_config.counter_time_stop && counter_list)
+    counter_list->Advance(game_delta, real_delta);
+
+  // Advance before callbacks can create new timers. Such timers must not
+  // receive the elapsed time from before their creation.
+  std::erase_if(counters_,
+                [real_delta, game_delta, time_stopped](const auto& ptr) {
+                  if (auto counter = ptr.lock()) {
+                    if (!time_stopped)
+                      counter->Advance(game_delta, real_delta);
+                    return false;
+                  }
+                  return true;
+                });
+
+  bool should_refresh = (screen_quakes && screen_quakes->IsActive()) ||
+                        (stage && stage->HasActiveQuakes());
+  if (!time_stopped && screen_quakes)
+    screen_quakes->Advance(game_delta.count());
+
+  if (!time_stopped && !local_config.stage_time_stop && stage)
+    stage->AdvanceQuakes(game_delta.count());
+  should_refresh |= (screen_quakes && screen_quakes->IsActive()) ||
+                    (stage && stage->HasActiveQuakes());
+
+  if (should_refresh)
+    system->graphics().ForceRefresh();
+
+  if (frame_action_manager)
+    frame_action_manager->AdvanceAndDispatch(real_delta, game_delta);
+  if (update_wipe_after_frame_actions)
+    update_wipe_after_frame_actions();
 }
 
 void SiglusMachine::Run() {
@@ -74,34 +113,13 @@ void SiglusMachine::Run() {
           std::max(now - last_frame_tick, Clock::duration_t::zero());
       last_frame_tick = now;
 
-      const std::int64_t real_ms = real_delta.count();
       const bool fast_forward = system->ShouldFastForward();
-      const std::int64_t game_ms =
-          fast_forward
-              ? (real_ms > std::numeric_limits<std::int64_t>::max() / 32
-                     ? std::numeric_limits<std::int64_t>::max()
-                     : real_ms * 32)
-              : real_ms;
-      if (!local_config.time_stop && !local_config.counter_time_stop)
-        counter_list->Advance(game_ms, real_ms);
+      const auto fast_forward_delta = real_delta > Clock::duration_t::max() / 32
+                                          ? Clock::duration_t::max()
+                                          : real_delta * 32;
+      const auto game_delta = fast_forward ? fast_forward_delta : real_delta;
 
-      const bool time_stopped = local_config.time_stop;
-      const bool quakes_were_active =
-          (screen_quakes && screen_quakes->IsActive()) ||
-          (stage && stage->HasActiveQuakes());
-      if (!time_stopped && screen_quakes)
-        screen_quakes->Advance(game_ms);
-      if (!time_stopped && !local_config.stage_time_stop && stage)
-        stage->AdvanceQuakes(game_ms);
-      const bool quakes_are_active =
-          (screen_quakes && screen_quakes->IsActive()) ||
-          (stage && stage->HasActiveQuakes());
-      if (quakes_were_active || quakes_are_active)
-        system->graphics().ForceRefresh();
-
-      frame_action_manager->AdvanceAndDispatch(real_delta, fast_forward);
-      if (update_wipe_after_frame_actions)
-        update_wipe_after_frame_actions();
+      Update(real_delta, game_delta);
     });
     if (vm->IsStopRequested() || system->IsQuitRequested())
       break;
@@ -116,6 +134,12 @@ void SiglusMachine::Run() {
 
   if (system->IsQuitRequested())
     vm->RequestStop();
+}
+
+std::shared_ptr<Counter> SiglusMachine::CreateCounter() {
+  auto ret = std::make_shared<Counter>();
+  counters_.emplace_back(ret);
+  return ret;
 }
 
 }  // namespace libsiglus
