@@ -387,6 +387,78 @@ TEST_F(AudioPlayerTest, AujustVolume) {
   }
 }
 
+TEST_F(AudioPlayerTest, BufferedSamplesApplyVolumeOnce) {
+  std::fill(decoder->buffer_.begin(), decoder->buffer_.end(), 1.0f);
+  const float volume = 86.0f / 255.0f;
+  player->SetVolume(volume);
+
+  int consumed = 0;
+  // Split decoded frames and request both buffered and newly decoded samples.
+  for (int count : {256, 256, 128, 1024, 384, 2048}) {
+    SCOPED_TRACE(count);
+    auto samples = player->LoadPCM(count).GetAs<float>();
+    ASSERT_EQ(samples.size(), count);
+    for (float sample : samples)
+      ASSERT_FLOAT_EQ(sample, volume);
+    consumed += count;
+    EXPECT_EQ(player->GetCurrentTime(),
+              consumed / channel_count * 1000 / sample_rate);
+  }
+}
+
+TEST_F(AudioPlayerTest, BufferedSamplesUseCurrentVolume) {
+  constexpr int count = 256;
+  int consumed = 0;
+  // All four reads come from one decoded frame, including mute and unmute.
+  for (float volume : {0.5f, 0.0f, 1.0f, 0.25f}) {
+    SCOPED_TRACE(volume);
+    player->SetVolume(volume);
+    auto samples = player->LoadPCM(count).GetAs<float>();
+    ASSERT_EQ(samples.size(), count);
+    for (int i = 0; i < count; ++i)
+      ASSERT_FLOAT_EQ(samples[i], decoder->buffer_[consumed + i] * volume);
+    consumed += count;
+    EXPECT_EQ(player->GetCurrentTime(),
+              consumed / channel_count * 1000 / sample_rate);
+  }
+}
+
+TEST_F(AudioPlayerTest, LoadRemainKeepsBufferedVolume) {
+  constexpr int count = 256;
+  player->SetVolume(0.5f);
+  auto first = player->LoadPCM(count).GetAs<float>();
+  ASSERT_EQ(first.size(), count);
+  for (int i = 0; i < count; ++i)
+    ASSERT_FLOAT_EQ(first[i], decoder->buffer_[i] * 0.5f);
+
+  player->SetVolume(0.25f);
+  auto remaining = player->LoadRemain().GetAs<float>();
+  ASSERT_EQ(remaining.size(), decoder->buffer_.size() - count);
+  for (std::size_t i = 0; i < remaining.size(); ++i)
+    ASSERT_FLOAT_EQ(remaining[i], decoder->buffer_[count + i] * 0.25f);
+  EXPECT_EQ(player->GetCurrentTime(), GetTicks(duration));
+}
+
+TEST_F(AudioPlayerTest, BufferedFadeAppliesOnce) {
+  constexpr int fade_ms = 50;
+  constexpr int fade_samples = fade_ms * sample_rate * channel_count / 1000;
+  player->FadeIn(fade_ms);
+  player->SetVolume(0.5f);
+
+  int consumed = 0;
+  for (int count : {256, 256, 128, 1024, 384, 2048}) {
+    SCOPED_TRACE(count);
+    auto samples = player->LoadPCM(count).GetAs<float>();
+    ASSERT_EQ(samples.size(), count);
+    for (int i = 0; i < count; ++i) {
+      const int position = consumed + i;
+      const float fade = static_cast<float>(position) / fade_samples;
+      ASSERT_FLOAT_EQ(samples[i], decoder->buffer_[position] * fade * 0.5f);
+    }
+    consumed += count;
+  }
+}
+
 TEST_F(AudioPlayerTest, SetPLoop) {
   const auto quarter_samples = sample_rate * channel_count * duration / 4;
   player->SetPLoop(quarter_samples / channel_count,

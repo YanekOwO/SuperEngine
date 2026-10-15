@@ -150,8 +150,8 @@ AudioData AudioPlayer::LoadPCM(sample_count_t nsamples) {
         ret.Append(std::move(next.ad));
       }
 
-      std::visit(Multiply(volume_), ret.data);
-
+      // Buffered samples already contain command processing, such as fades,
+      // but must remain free of player volume until they are requested.
       if (ret.SampleCount() > nsamples) {
         std::visit(
             [&](auto& data) {
@@ -165,6 +165,8 @@ AudioData AudioPlayer::LoadPCM(sample_count_t nsamples) {
             },
             ret.data);
       }
+
+      std::visit(Multiply(volume_), ret.data);
     }
   }
 
