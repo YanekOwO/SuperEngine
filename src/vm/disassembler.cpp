@@ -236,8 +236,9 @@ void Disassembler::PrintIns(Code& chunk,
       ip += sizeof(ins);
       emit_mnemonic("MAKE_CLASS");
       emit_operand("");
-      out_ << std::format("name={}({})  nmem={}  nstatic={}", ins.name_index,
-                          string_at(ins.name_index), ins.nmemfn, ins.nstaticfn);
+      out_ << std::format("name={}({})  nmem={}  nstatic={}  nproperty={}",
+                          ins.name_index, string_at(ins.name_index), ins.nmemfn,
+                          ins.nstaticfn, ins.nproperty);
     } break;
     case OpCode::GetField: {
       const auto ins = chunk.Read<GetField>(ip);

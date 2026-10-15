@@ -73,6 +73,13 @@ TEST_F(TokenizerTest, MultiID) {
             "<ID(\"print\"), 0,5> <ID(\"ObjFgInit\"), 6,15>");
 }
 
+TEST_F(TokenizerTest, PropertyWordsAreContextual) {
+  tokenizer.Parse(SourceBuffer::Create("property get set", "<test>"));
+  EXPECT_EQ(Accumulate(tokens),
+            "<ID(\"property\"), 0,8> <ID(\"get\"), 9,12> "
+            "<ID(\"set\"), 13,16>");
+}
+
 TEST_F(TokenizerTest, IntLiteral) {
   {  // decimal-literal
     const std::string input = "123 00321 -21";

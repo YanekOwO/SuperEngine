@@ -24,7 +24,6 @@
 
 #pragma once
 
-#include "machine/op.hpp"
 #include "vm/gc.hpp"
 #include "vm/objtype.hpp"
 #include "vm/value_fwd.hpp"
@@ -50,11 +49,23 @@ class IObject {
   virtual std::string Str() const;
   virtual std::string Desc() const;
 
-  virtual void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs);
+  virtual void Call(VM& vm,
+                    Fiber& f,
+                    uint8_t nargs,
+                    uint8_t nkwargs,
+                    CallResultMode mode = CallResultMode::Keep);
+
   virtual void GetItem(VM& vm, Fiber& f);
   virtual void SetItem(VM& vm, Fiber& f);
-  virtual TempValue Member(std::string_view mem);
+
+  virtual TempValue GetMember(std::string_view mem);
   virtual void SetMember(std::string_view mem, Value value);
+
+  // Stack contracts: (receiver) -> (value), (receiver, value) -> ().
+  // These operations may enter a script accessor on the current fiber.
+  virtual void GetMember(VM& vm, Fiber& f, std::string_view mem);
+  virtual void SetMember(VM& vm, Fiber& f, std::string_view mem);
+
   virtual std::size_t Hash() const;
 
   // Optional truthiness hook. If not provided, non-null objects are truthy.

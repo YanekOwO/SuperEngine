@@ -18,6 +18,6 @@ bg = create_effects_obj(file);
 
 fn test_poseve(obj, delay = 100){
   obj.set_pos(-480, -270);
-  obj.set_xeve(480, 35000, delay, 0);
-  obj.set_yeve(-270, 35000, delay, 0);
+  obj.x_eve.set(480, 35000, delay, 0);
+  obj.y_eve.set(-270, 35000, delay, 0);
 }

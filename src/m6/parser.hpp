@@ -131,6 +131,7 @@ class Parser {
   std::shared_ptr<AST> parseFromImportStmt();
   std::shared_ptr<AST> parseFuncDecl(bool alreadyConsumedFn = false);
   std::shared_ptr<AST> parseClassDecl();
+  std::optional<PropertyDecl> parsePropertyDecl();
 
   std::shared_ptr<ExprAST> parseLogicalOr();
   std::shared_ptr<ExprAST> parseLogicalAnd();

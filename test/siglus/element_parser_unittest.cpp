@@ -23,6 +23,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "libsiglus/element.hpp"
 #include "libsiglus/element_parser.hpp"
@@ -89,6 +90,26 @@ class ElementParserTest : public ::testing::Test {
     friend std::ostream& operator<<(std::ostream& os, const ChainCtx& ctx) {
       return os << ctx.chain.ToDebugString();
     }
+
+    // [overload id] (empty for no overload), a = await result, s = simple call.
+    std::string CallFlags() const {
+      const Call* call = chain.nodes.empty()
+                             ? nullptr
+                             : std::get_if<Call>(&chain.nodes.back().var);
+      if (!call)
+        return "not a call: " + chain.ToDebugString();
+
+      std::string flags;
+      flags += std::format("[{}]", call->overload_id
+                                       ? std::to_string(*call->overload_id)
+                                       : std::string());
+      if (call->await_result)
+        flags += 'a';
+      if (call->is_simple)
+        flags += 's';
+
+      return flags;
+    }
   };
 
   ChainCtx chain(ElementCode elm) {
@@ -99,12 +120,6 @@ class ElementParserTest : public ::testing::Test {
   ChainCtx chain(Ts&&... elms) {
     ElementCode elmcode{std::forward<Ts>(elms)...};
     return ChainCtx{.chain = parser->Parse(elmcode)};
-  }
-
-  static const Call* last_call(const ChainCtx& ctx) {
-    if (ctx.chain.nodes.empty())
-      return nullptr;
-    return std::get_if<Call>(&ctx.chain.nodes.back().var);
   }
 
   template <typename T>
@@ -124,14 +139,66 @@ class ElementParserTest : public ::testing::Test {
 
 TEST_F(ElementParserTest, MemoryBank) {
   EXPECT_EQ(chain(25, -1, 0), "A[int:0]");
-  EXPECT_EQ(chain(26, 3, -1, 1), "B.b1(int:1)");
-  EXPECT_EQ(chain(27, 4, -1, 2), "C.b2(int:2)");
-  EXPECT_EQ(chain(28, 5, -1, 3), "D.b4(int:3)");
-  EXPECT_EQ(chain(29, 7, -1, 4), "E.b8(int:4)");
-  EXPECT_EQ(chain(30, 6, -1, 5), "F.b16(int:5)");
+  EXPECT_EQ(chain(26, 3, -1, 1), "B.b1[int:1]");
+  EXPECT_EQ(chain(27, 4, -1, 2), "C.b2[int:2]");
+  EXPECT_EQ(chain(28, 5, -1, 3), "D.b4[int:3]");
+  EXPECT_EQ(chain(29, 7, -1, 4), "E.b8[int:4]");
+  EXPECT_EQ(chain(30, 6, -1, 5), "F.b16[int:5]");
   EXPECT_EQ(chain(31, -1, 250), "G[int:250]");
   EXPECT_EQ(chain(32, -1, 251), "Z[int:251]");
   EXPECT_EQ(chain(34, 3), "S.init()");
+}
+
+TEST_F(ElementParserTest, PropertyBindsRejectInvalidArgumentsAndOverloads) {
+  for (const auto& source :
+       {ElementCode{38, 2, -1, 0, 3}, ElementCode{79, 0}}) {
+    for (const auto& bind :
+         {Invoke{0, {v(1)}}, Invoke{1, {}}, Invoke{1, {v(1), v(2)}},
+          Invoke{2, {}}, Invoke{-1, {}}}) {
+      ElementCode elm = source;
+      elm.ForceBind(bind);
+      EXPECT_THROW(chain(elm), std::runtime_error);
+    }
+    for (int overload : {0, 1}) {
+      Invoke bind{overload, overload == 0 ? std::vector<Value>{}
+                                          : std::vector<Value>{v(1)}};
+      bind.named_arg.emplace_back(7, v(2));
+      ElementCode elm = source;
+      elm.ForceBind(std::move(bind));
+      EXPECT_THROW(chain(elm), std::runtime_error);
+    }
+  }
+}
+
+TEST_F(ElementParserTest, PropertyPrefixesPreserveFinalCommandBinds) {
+  ElementCode elm{38, 2, -1, 0, 93, -1, 1, 120};
+  Invoke bind{1, {v("movie"), v(0), v(0), v(640), v(480)}};
+  bind.named_arg.emplace_back(4, v(1));
+  elm.ForceBind(bind);
+  auto parsed = chain(elm);
+  EXPECT_EQ(parsed,
+            "stage.front.object[int:0].child[int:1].create_movie[1](str:movie,"
+            "int:0,int:0,int:640,int:480,4=int:1)");
+  EXPECT_EQ(parsed.CallFlags(), "[1]");
+}
+
+TEST_F(ElementParserTest, BitPropertiesKeepDynamicIndicesAndValidateMarkers) {
+  ElementCode dynamic{26, 3, -1, 0};
+  dynamic.code.back() = Variable{Type::Int, 7};
+  auto parsed = chain(dynamic);
+  EXPECT_EQ(parsed, "B.b1[t7]");
+
+  fail_on_warn = false;
+  auto missing = chain(26, 3);
+  EXPECT_EQ(missing, "B.b1[int:-1]");
+  EXPECT_THAT(
+      warnings,
+      ElementsAre(HasSubstr("[IntListBit] b1 expected immediate index")));
+  warnings.clear();
+  auto invalid = chain(26, 3, 0, 1);
+  EXPECT_EQ(invalid, "B.b1[int:-1]");
+  EXPECT_THAT(warnings, ::testing::Contains(HasSubstr(
+                            "[IntListBit] b1 expected immediate index")));
 }
 
 TEST_F(ElementParserTest, Farcall) {
@@ -162,9 +229,7 @@ TEST_F(ElementParserTest, Jump) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "jump(str:scene_name)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_FALSE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{4};
@@ -180,9 +245,7 @@ TEST_F(ElementParserTest, TimeWait) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "wait(int:123)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{55};
@@ -190,9 +253,7 @@ TEST_F(ElementParserTest, TimeWait) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "wait_key(int:456)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{55};
@@ -200,9 +261,7 @@ TEST_F(ElementParserTest, TimeWait) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "wait_key(t456)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
 }
 
@@ -227,18 +286,14 @@ TEST_F(ElementParserTest, FrameAction) {
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed,
               "frame_action_ch[int:8].start(int:-1,str:$$command_name)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_FALSE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{79, 3};
     elm.ForceBind({0, {v(-1), v("$$command_name")}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.start_real(int:-1,str:$$command_name)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_FALSE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{79, 1};
@@ -247,49 +302,44 @@ TEST_F(ElementParserTest, FrameAction) {
                     Value(Variable(Type::String, 123))}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.start(t456,t123)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_FALSE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{79, 2};
     elm.ForceBind({0, {}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.end()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_FALSE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
 }
 
 TEST_F(ElementParserTest, FrameActionCounterGetterReturnsCounter) {
   auto parsed = chain(79, 0);
 
-  EXPECT_EQ(parsed, "frame_action.counter()");
+  EXPECT_EQ(parsed, "frame_action.counter");
   EXPECT_EQ(parsed.chain.GetType(), Type::Counter);
-  const Call* call = last_call(parsed);
-  ASSERT_NE(call, nullptr);
-  EXPECT_TRUE(call->args.empty());
-  EXPECT_TRUE(call->is_simple);
-  EXPECT_FALSE(call->overload_id);
-  EXPECT_FALSE(call->await_result);
+  ASSERT_EQ(parsed.chain.nodes.size(), 2u);
+  const auto* member = std::get_if<Member>(&parsed.chain.nodes.back().var);
+  ASSERT_NE(member, nullptr);
+  EXPECT_EQ(member->name, "counter");
+  EXPECT_FALSE(member->implicit_call);
 }
 
 TEST_F(ElementParserTest,
        FrameActionCounterGetterContinuesIntoCounterCommands) {
-  EXPECT_EQ(chain(79, 0, 1), "frame_action.counter().get()");
+  EXPECT_EQ(chain(79, 0, 1), "frame_action.counter.get()");
   EXPECT_EQ(chain(38, 2, -1, 0, 52, 0, 1),
-            "stage.front.object[int:0].frame_action().counter().get()");
+            "stage.front.object[int:0].frame_action.counter.get()");
 
   ElementCode elm{53, -1, 8, 0, 0};
   elm.ForceBind({0, {v(17)}});
   auto parsed = chain(elm);
-  EXPECT_EQ(parsed, "frame_action_ch[int:8].counter().set(int:17)");
-  ASSERT_EQ(parsed.chain.nodes.size(), 6u);
-  const auto* getter = std::get_if<Call>(&parsed.chain.nodes[3].var);
-  ASSERT_NE(getter, nullptr);
-  EXPECT_TRUE(getter->args.empty());
-  EXPECT_EQ(parsed.chain.nodes[3].type, Type::Counter);
+  EXPECT_EQ(parsed, "frame_action_ch[int:8].counter.set(int:17)");
+  ASSERT_EQ(parsed.chain.nodes.size(), 5u);
+  const auto* counter = std::get_if<Member>(&parsed.chain.nodes[2].var);
+  ASSERT_NE(counter, nullptr);
+  EXPECT_EQ(counter->name, "counter");
+  EXPECT_EQ(parsed.chain.nodes[2].type, Type::Counter);
 }
 
 TEST_F(ElementParserTest, FrameActionCallbackCounterGetter) {
@@ -297,7 +347,7 @@ TEST_F(ElementParserTest, FrameActionCallbackCounterGetter) {
   const int flag = 0x7d << 24;
 
   auto parsed = chain(ElementCode{83, flag, 0, 1});
-  EXPECT_EQ(parsed, "arg_0.counter().get()");
+  EXPECT_EQ(parsed, "arg_0.counter.get()");
   EXPECT_EQ(parsed.chain.GetType(), Type::Int);
 }
 
@@ -319,9 +369,7 @@ TEST_F(ElementParserTest, Movie) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mov.play_wait(str:mov1)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{20, 3};
@@ -329,9 +377,7 @@ TEST_F(ElementParserTest, Movie) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mov.play_waitkey(str:mov2,int:0,int:0,int:420,int:420)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
 }
 
@@ -355,9 +401,7 @@ TEST_F(ElementParserTest, ObjectMovieWaitCallsAreAwaitable) {
     EXPECT_EQ(parsed,
               "stage.back.object[int:114].create_movie_wait[0]"
               "(str:ef_dust01)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
   }
   {
@@ -367,25 +411,19 @@ TEST_F(ElementParserTest, ObjectMovieWaitCallsAreAwaitable) {
     EXPECT_EQ(parsed,
               "stage.back.object[int:114].create_movie_waitkey[0]"
               "(str:ef_dust01)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
   {
     auto parsed = chain(37, 2, -1, 114, 128);
     EXPECT_EQ(parsed, "stage.back.object[int:114].wait_movie()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
   }
   {
     auto parsed = chain(37, 2, -1, 114, 142);
     EXPECT_EQ(parsed, "stage.back.object[int:114].wait_movie_key()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
 }
@@ -398,10 +436,7 @@ TEST_F(ElementParserTest, ObjectGanCallsAreSimpleObjectMethods) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "stage.back.object[int:106].load_gan(str:ef_noise02)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->is_simple);
-    EXPECT_FALSE(call->overload_id);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{37, 2, -1, 106, 0x01000001};
@@ -410,10 +445,7 @@ TEST_F(ElementParserTest, ObjectGanCallsAreSimpleObjectMethods) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "stage.back.object[int:106].start_gan(int:0,int:1)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->is_simple);
-    EXPECT_FALSE(call->overload_id);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
 }
 
@@ -427,18 +459,17 @@ TEST_F(ElementParserTest, MaskOperationsUseNativeCalls) {
   {
     ElementCode elm{135, -1, 1, 4};
     elm.ForceBind({0, {}});
-    EXPECT_EQ(chain(elm), "mask[int:1].x()");
+    EXPECT_EQ(chain(elm), "mask[int:1].x");
   }
   {
     ElementCode elm{135, -1, 1, 4};
     elm.ForceBind({1, {v(320)}});
-    EXPECT_EQ(chain(elm), "mask[int:1].set_x(int:320)");
+    EXPECT_EQ(chain(elm), "mask[int:1].x = int:320");
   }
   {
     ElementCode elm{135, -1, 1, 2, 0};
     elm.ForceBind({0, {v(640), v(350), v(0), v(2)}});
-    EXPECT_EQ(chain(elm),
-              "mask[int:1].x_eve().set(int:640,int:350,int:0,int:2)");
+    EXPECT_EQ(chain(elm), "mask[int:1].x_eve.set(int:640,int:350,int:0,int:2)");
   }
 }
 
@@ -452,10 +483,7 @@ TEST_F(ElementParserTest, ObjectGetFilePathIsImplicitGetterCall) {
   auto parsed = chain(37, 2, -1, 10, 62);
   EXPECT_EQ(parsed, "stage.back.object[int:10].get_file_path()");
   EXPECT_EQ(parsed.chain.GetType(), Type::String);
-  const Call* call = last_call(parsed);
-  ASSERT_NE(call, nullptr);
-  EXPECT_TRUE(call->is_simple);
-  EXPECT_FALSE(call->overload_id);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
 }
 
 TEST_F(ElementParserTest, ObjectButtonCallsAreSimpleCallables) {
@@ -467,10 +495,7 @@ TEST_F(ElementParserTest, ObjectButtonCallsAreSimpleCallables) {
     EXPECT_EQ(parsed,
               "stage.back.object[int:40].set_button(int:0,int:1,int:2,int:3)");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->is_simple);
-    EXPECT_FALSE(call->overload_id);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
 
   EXPECT_EQ(chain(37, 2, -1, 44, 61),
@@ -485,66 +510,63 @@ TEST_F(ElementParserTest, ObjectButtonCallsAreSimpleCallables) {
             "stage.back.object[int:44].get_button_real_state()");
 }
 
-TEST_F(ElementParserTest, ObjectGetSetUsesSimpleGetterAndSetterCalls) {
+TEST_F(ElementParserTest, ObjectPropertyReadsAndSetterCommands) {
   {
     ElementCode elm{38, 2, -1, 0, 3};
     elm.ForceBind({0, {}});
 
     auto parsed = chain(elm);
-    EXPECT_EQ(parsed, "stage.front.object[int:0].x()");
+    EXPECT_EQ(parsed, "stage.front.object[int:0].x");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->is_simple);
-    EXPECT_FALSE(call->overload_id);
+    ASSERT_TRUE(std::holds_alternative<Member>(parsed.chain.nodes.back().var));
   }
   {
     ElementCode elm{38, 2, -1, 0, 3};
     elm.ForceBind({1, {v(42)}});
 
     auto parsed = chain(elm);
-    EXPECT_EQ(parsed, "stage.front.object[int:0].set_x(int:42)");
+    EXPECT_EQ(parsed, "stage.front.object[int:0].x = int:42");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->is_simple);
-    EXPECT_FALSE(call->overload_id);
+    const auto* setter = std::get_if<SetMember>(&parsed.chain.nodes.back().var);
+    ASSERT_NE(setter, nullptr);
+    EXPECT_EQ(setter->name, "x");
+    EXPECT_EQ(setter->value, v(42));
   }
 }
 
 TEST_F(ElementParserTest, ObjectChildList) {
   EXPECT_EQ(chain(37, 2, -1, 0, 93, -1, 1, 35),
-            "stage.back.object[int:0].child()[int:1].init()");
+            "stage.back.object[int:0].child[int:1].init()");
 
   {
     ElementCode elm{37, 2, -1, 0, 93, 4};
     elm.ForceBind({0, {v(2)}});
-    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child().resize(int:2)");
+    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child.resize(int:2)");
   }
   {
     ElementCode elm{37, 2, -1, 0, 93, 3};
     elm.ForceBind({0, {}});
-    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child().size()");
+    EXPECT_EQ(chain(elm), "stage.back.object[int:0].child.size()");
   }
 }
 
 TEST_F(ElementParserTest, ObjectFList) {
   ElementCode elm{37, 2, -1, 40, 111, 2};
   elm.ForceBind({0, {v(1)}});
-  EXPECT_EQ(chain(elm), "stage.back.object[int:40].F().resize(int:1)");
+  EXPECT_EQ(chain(elm), "stage.back.object[int:40].F.resize(int:1)");
 }
 
 TEST_F(ElementParserTest, ObjectRepnoAlphaLists) {
   {
     ElementCode elm{38, 2, -1, 0, 141, 2};
     elm.ForceBind({0, {v(1)}});
-    EXPECT_EQ(chain(elm), "stage.front.object[int:0].tr_rep().resize(int:1)");
+    EXPECT_EQ(chain(elm), "stage.front.object[int:0].tr_rep.resize(int:1)");
   }
   {
     ElementCode elm{38, 2, -1, 0, 140, -1, 0, 0};
     elm.ForceBind({0, {v(128), v(1000), v(0), v(0)}});
     EXPECT_EQ(chain(elm),
-              "stage.front.object[int:0].tr_rep_eve()[int:0].set(int:128,int:"
+              "stage.front.object[int:0].tr_rep_eve[int:0].set(int:128,int:"
               "1000,int:0,int:0)");
   }
 }
@@ -552,10 +574,9 @@ TEST_F(ElementParserTest, ObjectRepnoAlphaLists) {
 TEST_F(ElementParserTest, ObjectRepnoEventTurn) {
   ElementCode elm{37, 2, -1, 109, 112, -1, 0, 2};
   elm.ForceBind({0, {v(0), v(20), v(1000), v(0), v(2)}});
-  EXPECT_EQ(
-      chain(elm),
-      "stage.back.object[int:109].x_rep_eve()[int:0].turn(int:0,int:20,int:"
-      "1000,int:0,int:2)");
+  EXPECT_EQ(chain(elm),
+            "stage.back.object[int:109].x_rep_eve[int:0].turn(int:0,int:20,int:"
+            "1000,int:0,int:2)");
 }
 
 TEST_F(ElementParserTest, BgmTable) {
@@ -588,32 +609,24 @@ TEST_F(ElementParserTest, BgmWaitCallsAreAwaitable) {
   {
     auto parsed = chain(42, 2);
     EXPECT_EQ(parsed, "bgm.play_wait()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     auto parsed = chain(42, 3);
     EXPECT_EQ(parsed, "bgm.wait()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
   }
   {
     auto parsed = chain(42, 14);
     EXPECT_EQ(parsed, "bgm.wait_key()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
   {
     auto parsed = chain(42, 15);
     EXPECT_EQ(parsed, "bgm.wait_fade_key()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
 }
@@ -642,9 +655,7 @@ TEST_F(ElementParserTest, CounterWaitCallsAreAwaitable) {
     elm.ForceBind({0, {v(100)}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "counter[int:1].wait(int:100)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
   }
   {
@@ -652,9 +663,7 @@ TEST_F(ElementParserTest, CounterWaitCallsAreAwaitable) {
     elm.ForceBind({0, {v(100)}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "counter[int:1].wait_key(int:100)");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
 }
@@ -683,63 +692,50 @@ TEST_F(ElementParserTest, WipeCommandMappings) {
     elm.ForceBind({0, {v("mask")}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "wipe.wipe_mask[0](str:mask)");
-    const auto* call = std::get_if<Call>(&parsed.chain.nodes.back().var);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
   }
   {
     ElementCode elm{50};
     elm.ForceBind({0, {v("mask")}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "wipe.wipe_mask_all[0](str:mask)");
-    const auto* call = std::get_if<Call>(&parsed.chain.nodes.back().var);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
   }
   auto end = chain(33);
   EXPECT_EQ(end, "wipe.end()");
-  const auto* end_call = std::get_if<Call>(&end.chain.nodes.back().var);
-  ASSERT_NE(end_call, nullptr);
-  EXPECT_FALSE(end_call->await_result);
+  EXPECT_EQ(end.CallFlags(), "[]");
 
   auto wait = chain(103);
   EXPECT_EQ(wait, "wipe.wait()");
   EXPECT_EQ(wait.chain.GetType(), Type::Int);
-  const auto* wait_call = std::get_if<Call>(&wait.chain.nodes.back().var);
-  ASSERT_NE(wait_call, nullptr);
-  EXPECT_TRUE(wait_call->await_result);
+  EXPECT_EQ(wait.CallFlags(), "[]as");
 
   auto check = chain(109);
   EXPECT_EQ(check, "wipe.check()");
   EXPECT_EQ(check.chain.GetType(), Type::Int);
-  const auto* check_call = std::get_if<Call>(&check.chain.nodes.back().var);
-  ASSERT_NE(check_call, nullptr);
-  EXPECT_FALSE(check_call->await_result);
+  EXPECT_EQ(check.CallFlags(), "[]s");
 }
 
 TEST_F(ElementParserTest, MwndObjectUsesGetterBeforeIndexing) {
   EXPECT_EQ(chain(38, 3, -1, 1, 30, -1, 2, 35),
-            "stage.front.mwnd[int:1].object()[int:2].init()");
+            "stage.front.mwnd[int:1].object[int:2].init()");
   ElementCode setter{38, 3, -1, 1, 30, -1, 2, 93, -1, 0, 3};
   setter.ForceBind({1, {v(42)}});
-  EXPECT_EQ(
-      chain(setter),
-      "stage.front.mwnd[int:1].object()[int:2].child()[int:0].set_x(int:42)");
+  EXPECT_EQ(chain(setter),
+            "stage.front.mwnd[int:1].object[int:2].child[int:0].x = int:42");
   ElementCode wait{38, 3, -1, 1, 54};
   auto parsed = chain(wait);
   EXPECT_EQ(parsed, "stage.front.mwnd[int:1].page()");
-  ASSERT_NE(last_call(parsed), nullptr);
-  EXPECT_TRUE(last_call(parsed)->await_result);
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
 }
 
 TEST_F(ElementParserTest, MwndButtonUsesObjectBindingAndGetterBeforeIndexing) {
   EXPECT_EQ(chain(38, 3, -1, 1, 32, -1, 2, 35),
-            "stage.front.mwnd[int:1].button()[int:2].init()");
+            "stage.front.mwnd[int:1].button[int:2].init()");
   ElementCode setter{38, 3, -1, 1, 32, -1, 2, 93, -1, 0, 3};
   setter.ForceBind({1, {v(42)}});
-  EXPECT_EQ(
-      chain(setter),
-      "stage.front.mwnd[int:1].button()[int:2].child()[int:0].set_x(int:42)");
+  EXPECT_EQ(chain(setter),
+            "stage.front.mwnd[int:1].button[int:2].child[int:0].x = int:42");
 }
 
 TEST_F(ElementParserTest, Mwnd) {
@@ -748,37 +744,32 @@ TEST_F(ElementParserTest, Mwnd) {
     elm.ForceBind({1, {v(1)}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.set_waku(int:1)");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{22};
     elm.ForceBind({2, {v(1), v(-1)}});
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.set_waku(int:1,int:-1)");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{9};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.open()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{58};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.open_wait()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{59};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.open_nowait()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{10};
@@ -788,29 +779,25 @@ TEST_F(ElementParserTest, Mwnd) {
     ElementCode elm{115};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.page()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{84};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.msg_block()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{121};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.msg_pp_block()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{11};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.clear()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{12};
@@ -819,8 +806,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.print(str:hello)");
     EXPECT_EQ(parsed.chain.kidoku, 105);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{12};
@@ -829,29 +815,25 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.print(int:123)");
     EXPECT_EQ(parsed.chain.kidoku, 106);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{21};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.msg_wait()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{13};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.pp()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{14};
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.r()");
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{119};
@@ -892,8 +874,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.koe[0](int:12345,int:7)");
     EXPECT_EQ(parsed.chain.kidoku, 101);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]");
   }
   {
     ElementCode elm{18};
@@ -906,8 +887,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.koe[0](int:12345,0=int:1)");
     EXPECT_EQ(parsed.chain.kidoku, 102);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->is_simple);
+    EXPECT_EQ(parsed.CallFlags(), "[0]");
   }
   {
     ElementCode elm{90};
@@ -916,8 +896,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.koe_play_wait[0](int:12345)");
     EXPECT_EQ(parsed.chain.kidoku, 103);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
   }
   {
     ElementCode elm{91};
@@ -927,8 +906,7 @@ TEST_F(ElementParserTest, Mwnd) {
     EXPECT_EQ(parsed, "mwnd.koe_play_wait_key[0](int:12345,int:7)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
     EXPECT_EQ(parsed.chain.kidoku, 104);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[0]a");
   }
 }
 
@@ -939,8 +917,7 @@ TEST_F(ElementParserTest, GlobalKoe) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "exkoe(int:12345,int:1)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_FALSE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
   }
   {
     ElementCode elm{88};
@@ -948,8 +925,7 @@ TEST_F(ElementParserTest, GlobalKoe) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "exkoe_play_wait(int:12345)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{89};
@@ -957,8 +933,7 @@ TEST_F(ElementParserTest, GlobalKoe) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "exkoe_play_wait_key(int:12345,int:1)");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
-    ASSERT_NE(last_call(parsed), nullptr);
-    EXPECT_TRUE(last_call(parsed)->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{68};
@@ -1055,32 +1030,24 @@ TEST_F(ElementParserTest, PcmchWaitCallsAreAwaitable) {
   {
     auto parsed = chain(44, -1, 0, 1);
     EXPECT_EQ(parsed, "pcmch_list[int:0].play_wait()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     auto parsed = chain(44, -1, 0, 3);
     EXPECT_EQ(parsed, "pcmch_list[int:0].wait()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::None);
   }
   {
     auto parsed = chain(44, -1, 0, 6);
     EXPECT_EQ(parsed, "pcmch_list[int:0].wait_key()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
   {
     auto parsed = chain(44, -1, 0, 7);
     EXPECT_EQ(parsed, "pcmch_list[int:0].wait_fade_key()");
-    const Call* call = last_call(parsed);
-    ASSERT_NE(call, nullptr);
-    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
     EXPECT_EQ(parsed.chain.GetType(), Type::Int);
   }
 }
@@ -1095,10 +1062,10 @@ TEST_F(ElementParserTest, UsrcmdGlobal) {
 }
 
 TEST_F(ElementParserTest, LayeredMwndCommandsPreserveStageSelection) {
-  EXPECT_EQ(chain(37, 3, -1, 0, 10), "stage.back.mwnd[int:0].get_layer()");
+  EXPECT_EQ(chain(37, 3, -1, 0, 10), "stage.back.mwnd[int:0].layer");
   ElementCode setter{73, 3, -1, 1, 10};
   setter.ForceBind({1, {v(-2)}});
-  EXPECT_EQ(chain(setter), "stage.next.mwnd[int:1].set_layer(int:-2)");
+  EXPECT_EQ(chain(setter), "stage.next.mwnd[int:1].layer = int:-2");
   EXPECT_EQ(chain(38, 3, 3), "stage.front.mwnd.close_nowait()");
   ElementCode create{37, 1};
   create.ForceBind({0, {v(3)}});

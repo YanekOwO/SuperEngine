@@ -62,6 +62,9 @@ std::string Call::ToDebugString() const {
 std::string Subscript::ToDebugString() const {
   return std::format("[{}]", ToString(idx));
 }
+std::string SetMember::ToDebugString() const {
+  return std::format(".{} = {}", name, ToString(value));
+}
 
 // -----------------------------------------------------------------------
 // AccessChain

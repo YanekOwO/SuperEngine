@@ -333,12 +333,8 @@ void BindMwnd(SiglusMachine& runtime) {
       },
       sb::arg("size"));
 
-  mwnd.def("get_layer",
-           [get](MwndHandle* h) { return get(h)->sorter().second; });
-  mwnd.def(
-      "set_layer",
-      [get](MwndHandle* h, int layer) { get(h)->set_layer(layer); },
-      sb::arg("layer"));
+  mwnd.prop("layer", [get](MwndHandle* h) { return get(h)->sorter().second; },
+            [get](MwndHandle* h, int layer) { get(h)->set_layer(layer); });
 
   auto open = [get](MwndHandle* h) { get(h)->SetVisible(true); };
   auto close = [get, sys](MwndHandle* h) {
@@ -369,10 +365,10 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::arg("size"));
   mwnd.add_gc_root(object_list);
   // The Object binding is installed after Mwnd. Resolve its factory on access.
-  mwnd.def("object", [get, object_list, &runtime](MwndHandle* h) mutable {
+  mwnd.prop_r("object", [get, object_list, &runtime](MwndHandle* h) mutable {
     return sr::Value(object_list.make_inst(get(h), runtime.make_object));
   });
-  mwnd.def("button", [get, object_list, &runtime](MwndHandle* h) mutable {
+  mwnd.prop_r("button", [get, object_list, &runtime](MwndHandle* h) mutable {
     return sr::Value(object_list.make_inst(get(h), runtime.make_object, true));
   });
 

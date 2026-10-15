@@ -167,8 +167,17 @@ struct Subscript {
   bool operator==(const Subscript&) const = default;
 };
 
+// A property setter encoded as a Siglus command. Unlike an assignment token,
+// the command produces a nil result for its destination temporary.
+struct SetMember {
+  std::string_view name;
+  Value value;
+  std::string ToDebugString() const;
+  bool operator==(const SetMember&) const = default;
+};
+
 struct Node {
-  using var_t = std::variant<Member, Call, Subscript>;
+  using var_t = std::variant<Member, Call, Subscript, SetMember>;
   var_t var;
   Type type;  // Static type after evaluating this step in the chain.
 

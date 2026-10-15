@@ -44,7 +44,7 @@ std::optional<TempValue> CallMagicIfPresent(VM& vm,
 
   try {
     // Return the member value to the caller; execution is the caller's choice.
-    return obj->Member(name);
+    return obj->GetMember(name);
   } catch (RuntimeError&) {
     return std::nullopt;
   }

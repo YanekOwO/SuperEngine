@@ -62,11 +62,9 @@ void BindEffect(SiglusMachine& runtime) {
   for (int i = 0; i <= 34; ++i) {
     try {
       const std::string name(Effect::GetPropertyName(i));
-      const std::string setter_name = "set_" + name;
-      effect.def(name.c_str(),
-                 [i](EffectHandle* h) { return h->effect->Get(i); });
-      effect.def(setter_name.c_str(),
-                 [i](EffectHandle* h, int value) { h->effect->Set(i, value); });
+      effect.prop(name.c_str(),
+                  [i](EffectHandle* h) { return h->effect->Get(i); },
+                  [i](EffectHandle* h, int value) { h->effect->Set(i, value); });
     } catch (const std::runtime_error&) {
     }
   }

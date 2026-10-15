@@ -30,7 +30,6 @@
 #include <chrono>
 #include <functional>
 #include <memory>
-#include <string_view>
 #include <vector>
 
 struct LocalConfig;

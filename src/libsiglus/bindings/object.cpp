@@ -480,31 +480,27 @@ struct DirectObjectPropertyBinder {
 
   template <auto member>
   void Member(const char* name) {
-    const std::string setter_name = std::string("set_") + name;
-    object.def(name, [](const ObjectHandle* h) {
-      return static_cast<int>(h->object->Param().*member);
-    });
-    object.def(
-        setter_name.c_str(),
+    object.prop(
+        name,
+        [](const ObjectHandle* h) {
+          return static_cast<int>(h->object->Param().*member);
+        },
         [](ObjectHandle* h, int value) {
           using MemberType = ObjectParameterMemberType<member>;
           h->object->Param().*member = static_cast<MemberType>(value);
-        },
-        sb::arg("value"));
+        });
   }
 
   template <typename Getter, typename Setter>
   void Property(const char* name, Getter getter, Setter setter) {
-    const std::string setter_name = std::string("set_") + name;
-    object.def(name, [getter = std::move(getter)](const ObjectHandle* h) {
-      return getter(h->object->Param());
-    });
-    object.def(
-        setter_name.c_str(),
+    object.prop(
+        name,
+        [getter = std::move(getter)](const ObjectHandle* h) {
+          return getter(h->object->Param());
+        },
         [setter = std::move(setter)](ObjectHandle* h, int value) {
           setter(h->object->Param(), value);
-        },
-        sb::arg("value"));
+        });
   }
 
   void Bind() {
@@ -674,12 +670,13 @@ struct ObjectEventPropertyBinder {
         std::move(setter);
     std::string field_name = name;
     object.add_gc_root(event_class);
-    object.def(field_name.c_str(), [event = event_class, name = std::move(name),
-                                    getter = std::move(property_getter),
-                                    setter = std::move(property_setter)](
-                                       ObjectHandle* h) mutable {
-      return sr::Value(event.make_inst(h->object, name, getter, setter));
-    });
+    object.prop_r(
+        field_name.c_str(),
+        [event = event_class, name = std::move(name),
+         getter = std::move(property_getter),
+         setter = std::move(property_setter)](ObjectHandle* h) mutable {
+          return sr::Value(event.make_inst(h->object, name, getter, setter));
+        });
   }
 
   void Bind() {
@@ -866,7 +863,7 @@ void BindObject(SiglusMachine& runtime) {
     return static_cast<int>(size);
   });
   object.add_gc_root(child);
-  object.def("child", [child](ObjectHandle* h) mutable {
+  object.prop_r("child", [child](ObjectHandle* h) mutable {
     return sr::Value(child.make_inst(h->object));
   });
 
@@ -876,24 +873,24 @@ void BindObject(SiglusMachine& runtime) {
     return sr::Value(object.make_inst(std::move(owner)));
   };
   frame_actions->SetObjectFactory(runtime.make_object);
-  object.def("frame_action", [frame_actions](ObjectHandle* h) {
+  object.prop_r("frame_action", [frame_actions](ObjectHandle* h) {
     return frame_actions->MakeActionValue(
         ActionReference{h->object->GetFrameAction(), h->object});
   });
-  object.def("frame_action_ch", [frame_actions](ObjectHandle* h) {
+  object.prop_r("frame_action_ch", [frame_actions](ObjectHandle* h) {
     return frame_actions->MakeListValue(h->object);
   });
 
   auto ilist_param = [&](const char* name, auto member) {
     object.add_gc_root(*runtime.ilist_cls);
-    object.def(name,
-               [ilist = *runtime.ilist_cls, member](ObjectHandle* h) mutable {
-                 auto getter = [object = h->object,
-                                member](sr::Fiber&) -> std::vector<int>& {
-                   return std::invoke(member, object->Param());
-                 };
-                 return sr::Value(ilist.make_inst(std::move(getter)));
-               });
+    object.prop_r(
+        name, [ilist = *runtime.ilist_cls, member](ObjectHandle* h) mutable {
+          auto getter = [object = h->object,
+                         member](sr::Fiber&) -> std::vector<int>& {
+            return std::invoke(member, object->Param());
+          };
+          return sr::Value(ilist.make_inst(std::move(getter)));
+        });
   };
   ilist_param("F", &ObjectParameter::F);
   ilist_param("x_rep", &ObjectParameter::adjustment_offsets_x);
@@ -925,11 +922,12 @@ void BindObject(SiglusMachine& runtime) {
                                    ObjectRepnoEventHandle::Getter getter,
                                    ObjectRepnoEventHandle::Setter setter) {
     object.add_gc_root(repno_event_list);
-    object.def(name, [list = repno_event_list, name = std::string(name),
-                      getter = std::move(getter),
-                      setter = std::move(setter)](ObjectHandle* h) mutable {
-      return sr::Value(list.make_inst(h->object, name, getter, setter));
-    });
+    object.prop_r(
+        name, [list = repno_event_list, name = std::string(name),
+               getter = std::move(getter),
+               setter = std::move(setter)](ObjectHandle* h) mutable {
+          return sr::Value(list.make_inst(h->object, name, getter, setter));
+        });
   };
   bind_repno_event_list("x_rep_eve",
                         CreateGetter<&ObjectParameter::adjustment_offsets_x>(),

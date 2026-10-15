@@ -97,12 +97,7 @@ expected<AllocationPlan, std::string> resolve_fast_slots(
       if (chain.nodes.empty())
         return;
 
-      std::size_t prefix_count = chain.nodes.size() - 1;
-      const bool assigns_call =
-          std::holds_alternative<elm::Call>(chain.nodes.back().var);
-      if (assigns_call && prefix_count > 0)
-        --prefix_count;
-
+      const std::size_t prefix_count = chain.nodes.size() - 1;
       for (std::size_t i = 0; i < prefix_count; ++i) {
         if (!has_root && i == 0 &&
             std::holds_alternative<elm::Member>(chain.nodes[i].var)) {
@@ -116,8 +111,6 @@ expected<AllocationPlan, std::string> resolve_fast_slots(
             using T = std::decay_t<decltype(nd)>;
             if constexpr (std::same_as<T, elm::Subscript>) {
               (*this)(nd.idx);
-            } else if constexpr (std::same_as<T, elm::Call>) {
-              (*this)(nd);
             }
           },
           chain.nodes.back().var);
@@ -205,6 +198,7 @@ expected<AllocationPlan, std::string> resolve_fast_slots(
         (*this)(arg.second);
     }
     void operator()(const elm::Subscript& t) { (*this)(t.idx); }
+    void operator()(const elm::SetMember& t) { (*this)(t.value); }
   } visitor(reads, writes, subroutine_args);
   for (std::size_t i = 0; i < tokens.size(); ++i) {
     const Parser::ParsedToken& token = tokens[i];
@@ -581,6 +575,10 @@ void Recompiler::Gen(token::Token_t tok, int lineno) {
         void operator()(const elm::Node& n) { std::visit(*this, n.var); }
         void operator()(const elm::Member& t) {
           str("." + std::string(t.name));
+        }
+        void operator()(const elm::SetMember& t) {
+          str("." + std::string(t.name) + " = ");
+          (*this)(t.value);
         }
         void operator()(const elm::Subscript& t) {
           str("[");
@@ -992,6 +990,11 @@ void Recompiler::emit_tok(const token::Eof& tk) { Finish(); }
 
 // element codegen
 void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
+  if (assign && !e.nodes.empty() &&
+      !std::holds_alternative<elm::Member>(e.nodes.back().var) &&
+      !std::holds_alternative<elm::Subscript>(e.nodes.back().var)) {
+    throw std::runtime_error("cannot assign to this element");
+  }
   if (auto* prop = std::get_if<elm::Usrprop>(&e.root.var);
       prop && assign && e.nodes.empty()) {
     emit_load_proplist(prop->scene);  // (prop[])
@@ -1023,11 +1026,6 @@ void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
   size_t n = e.nodes.size();
   if (assign)
     --n;
-  if (assign && std::holds_alternative<elm::Call>(e.nodes.back().var)) {
-    ASSERTX_GE(n, 1);
-    --n;
-  }
-
   for (size_t i = 0; i < n; ++i) {
     if (i == 0 && is_first) {
       if (auto* sym = std::get_if<elm::Member>(&e.nodes.front().var)) {
@@ -1049,22 +1047,6 @@ void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
     } else if (auto* itm = std::get_if<elm::Subscript>(&e.nodes.back().var)) {
       emit_val(itm->idx), emit_val(*assign);
       emit(sr::SetItem{});
-    } else if (auto* call = std::get_if<elm::Call>(&e.nodes.back().var)) {
-      auto* mem = std::get_if<elm::Member>(&e.nodes[e.nodes.size() - 2].var);
-      ASSERTX_NE(mem, nullptr);
-      if (!call->kwargs.empty())
-        throw std::runtime_error(
-            "cannot assign to callable element with keyword arguments");
-
-      std::string fn = call->args.empty() ? "set_" + std::string(mem->name)
-                                          : "write_" + std::string(mem->name);
-      emit(sr::GetField{intern_name(std::move(fn))});  // (setter)
-      for (const auto& arg : call->args)
-        emit_val(arg);
-      emit_val(*assign);
-      emit(sr::Call{.argcnt = static_cast<uint32_t>(call->args.size() + 1),
-                    .kwargcnt = 0});  // (setter, args..., val) -> (nil)
-      emit(sr::Pop{});
     } else
       fail();
   }
@@ -1143,6 +1125,13 @@ void Recompiler::emit_elm_node(const elm::Member& nd) {
   uint32_t slot = intern_name(std::string(nd.name));
   emit(sr::GetField{slot});
   // (member)
+}
+void Recompiler::emit_elm_node(const elm::SetMember& nd) {
+  emit_val(nd.value);
+  emit(sr::SetField{intern_name(std::string(nd.name))});
+  // (inst, val) -> ()
+  emit_const_nil();
+  // (nil)
 }
 void Recompiler::emit_elm_node(const elm::Call& nd) {
   // (fn)

@@ -1029,6 +1029,80 @@ class Klass
 )");
 }
 
+TEST_F(StmtParserTest, PropertyDecl) {
+  auto result = parse(R"(
+class Box {
+  fn method(self) {}
+  property size { set {} get {} }
+  property read_only { get {} }
+  property write_only { set {} }
+}
+)");
+  EXPECT_EQ(result, R"(
+class Box
+   ├─fn method(self)
+   │  └─body
+   │     └─Compound
+   ├─property size
+   │  ├─get
+   │  │  └─Compound
+   │  └─set
+   │     └─Compound
+   ├─property read_only
+   │  └─get
+   │     └─Compound
+   └─property write_only
+      └─set
+         └─Compound
+)");
+  ASSERT_NE(result.ast, nullptr);
+  const auto* klass = result.ast->Get_if<ClassDecl>();
+  ASSERT_NE(klass, nullptr);
+  ASSERT_EQ(klass->properties.size(), 3);
+  const auto& property = klass->properties.front();
+  ASSERT_TRUE(property.getter.has_value());
+  ASSERT_TRUE(property.setter.has_value());
+  EXPECT_EQ(property.getter->params, (std::vector<std::string>{"self"}));
+  EXPECT_EQ(property.setter->params,
+            (std::vector<std::string>{"self", "value"}));
+  EXPECT_EQ(property.getter->name, "<get size>");
+  EXPECT_EQ(property.setter->name, "<set size>");
+}
+
+TEST_F(StmtParserTest, InvalidPropertyDecl) {
+  const std::vector<std::pair<const char*, const char*>> cases = {
+      {"class Box { property {} }", "expected property name"},
+      {"class Box { property size; }", "expected '{' after property name"},
+      {"class Box { property size {} }",
+       "property must declare at least one accessor"},
+      {"class Box { property size { fn get() {} } }",
+       "expected 'get' or 'set' in property body"},
+      {"class Box { property size { get(self) {} } }",
+       "property accessor body must be a block"},
+      {"class Box { property size { set; } }",
+       "property accessor body must be a block"},
+      {"class Box { property size { get {} get {} } }",
+       "duplicate 'get' accessor for property 'size'"},
+      {"class Box { property size { set {} set {} } }",
+       "duplicate 'set' accessor for property 'size'"},
+      {"class Box { property size { get {} } property size { set {} } }",
+       "property 'size' conflicts with another class member"},
+      {"class Box { fn size(self) {} property size { get {} } }",
+       "property 'size' conflicts with another class member"},
+      {"class Box { property size { get {} } fn size() {} }",
+       "property 'size' conflicts with another class member"},
+      {"class Box { property size { get {}",
+       "expected '}' after property body"},
+      {"class Box { property size { get {} }", "expected '}' after class body"},
+      {"property size { get {} }", "Expected ';'."},
+  };
+  for (const auto& [source, diagnostic] : cases) {
+    SCOPED_TRACE(source);
+    auto result = parse(source);
+    EXPECT_NE(result.errors.find(diagnostic), std::string::npos) << result;
+  }
+}
+
 TEST_F(StmtParserTest, Return) {
   {
     auto result = parse("return;");

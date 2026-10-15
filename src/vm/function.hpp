@@ -73,7 +73,11 @@ struct Function : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override;
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override;
 };
 
 }  // namespace serilang

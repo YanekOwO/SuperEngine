@@ -75,7 +75,7 @@ struct StoreUpvalue {
 };  // (value) ->
 struct CloseUpvalues {
   uint8_t from_slot;
-};  // close ≥slot up‑vals
+};  // close ≥slot up-vals
 
 // ––– 4. Control flow ––––––––––––––––––––––––––––––––––––––––––––––
 struct Jump {
@@ -112,7 +112,8 @@ struct MakeDict {
 struct MakeClass {
   uint32_t name_index;
   uint16_t nmemfn, nstaticfn;
-};  // (mem_fn*, static_fn*) -> (class)
+  uint16_t nproperty = 0;
+};  // (mem_fn*, static_fn*, (name, getter, setter)*) -> (class)
 struct GetField {
   uint32_t name_index;
 };  // (inst) -> (value)

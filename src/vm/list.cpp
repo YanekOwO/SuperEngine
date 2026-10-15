@@ -129,12 +129,20 @@ class ListMethod final : public IObject {
     return std::format("<bound method list.{}>", MethodName());
   }
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override {
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override {
     const size_t base = f.op_stack.size() - nargs - 2 * nkwargs - 1;
 
     auto fail = [](std::string msg) { throw RuntimeError(std::move(msg)); };
 
     auto finish = [&](Value result = nil) {
+      if (mode == CallResultMode::Discard) {
+        f.op_stack.resize(base);
+        return;
+      }
       f.op_stack.resize(base + 1);
       f.op_stack.back() = std::move(result);
     };
@@ -370,7 +378,7 @@ class ListMethod final : public IObject {
 
 }  // namespace
 
-TempValue List::Member(std::string_view mem) {
+TempValue List::GetMember(std::string_view mem) {
   if (mem == "append")
     return std::make_unique<ListMethod>(this, ListMethodKind::Append);
   if (mem == "clear")
@@ -396,7 +404,7 @@ TempValue List::Member(std::string_view mem) {
   if (mem == "sort")
     return std::make_unique<ListMethod>(this, ListMethodKind::Sort);
 
-  return IObject::Member(mem);
+  return IObject::GetMember(mem);
 }
 
 std::string List::Str() const {

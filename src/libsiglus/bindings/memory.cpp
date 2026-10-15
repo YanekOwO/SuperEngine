@@ -27,6 +27,7 @@
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/property.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "log/domain_logger.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -50,12 +51,10 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 using namespace serilang;
 
-namespace {
-
 constexpr std::size_t kRootStackBankSize = 2000;
 constexpr std::size_t kMinimumCallStackBankSize = 8;
 
-MemoryHandle& GetFiberMemory(Fiber& fiber, Memory& memory) {
+static MemoryHandle& GetFiberMemory(Fiber& fiber, Memory& memory) {
   auto* handle = std::any_cast<MemoryHandle>(&fiber.usrdata);
   if (!handle) {
     fiber.usrdata = memory.CreateHandle();
@@ -65,61 +64,82 @@ MemoryHandle& GetFiberMemory(Fiber& fiber, Memory& memory) {
   return *handle;
 }
 
-StackMemory MakeRootStackMemory() {
-  return StackMemory{
-      .L = {std::vector<int>(kRootStackBankSize)},
-      .K = {std::vector<std::string>(kRootStackBankSize)},
+struct IntBitView {
+  using reader_t = int (SiglusIntListFacade::*)(Fiber&, int);
+  using writer_t = void (SiglusIntListFacade::*)(Fiber&, int, int);
+
+  SiglusIntListFacade* owner;
+  reader_t reader;
+  writer_t writer;
+};
+
+void BindIntBitProperties(sb::module_& m,
+                          sb::class_<SiglusIntListFacade>& ilist) {
+  sb::class_<IntBitView> view(m, "__SiglusIntBitView");
+  view.def(
+      "__getitem__",
+      +[](IntBitView* self, Fiber& fiber, int index) -> int {
+        return (*self->owner.*self->reader)(fiber, index);
+      },
+      sb::arg("idx"));
+  view.def(
+      "__setitem__",
+      +[](IntBitView* self, Fiber& fiber, int index, int value) {
+        (*self->owner.*self->writer)(fiber, index, value);
+      },
+      sb::arg("idx"), sb::arg("val"));
+
+  struct BitProperty {
+    const char* name;
+    IntBitView::reader_t reader;
+    IntBitView::writer_t writer;
   };
+  constexpr BitProperty properties[] = {
+      {"b1", &SiglusIntListFacade::b1, &SiglusIntListFacade::write_b1},
+      {"b2", &SiglusIntListFacade::b2, &SiglusIntListFacade::write_b2},
+      {"b4", &SiglusIntListFacade::b4, &SiglusIntListFacade::write_b4},
+      {"b8", &SiglusIntListFacade::b8, &SiglusIntListFacade::write_b8},
+      {"b16", &SiglusIntListFacade::b16, &SiglusIntListFacade::write_b16},
+  };
+  for (const auto& [name, reader, writer] : properties) {
+    ilist.prop_r(name,
+                 [view, reader, writer](SiglusIntListFacade* self) mutable {
+                   NativeInstance* inst = view.make_inst(self, reader, writer);
+                   return Value(inst);
+                 });
+  }
 }
 
-void SetIntListValues(SiglusIntListFacade* self,
-                      Fiber& fiber,
-                      int idx,
-                      std::vector<Value> values) {
-  std::vector<int> ints;
-  ints.reserve(values.size());
-  for (Value& value : values)
-    ints.push_back(RequireInt(value, "integer list Set"));
-  self->Set(fiber, idx, std::move(ints));
-}
-
-void BindIntSequenceMethods(sb::class_<SiglusIntListFacade>& klass) {
-  klass.def("__getitem__", &SiglusIntListFacade::get, sb::arg("idx"));
-  klass.def("__setitem__", &SiglusIntListFacade::set, sb::arg("idx"),
+void BindIntSequenceMethods(sb::class_<SiglusIntListFacade>& ilist) {
+  ilist.def("__getitem__", &SiglusIntListFacade::get, sb::arg("idx"));
+  ilist.def("__setitem__", &SiglusIntListFacade::set, sb::arg("idx"),
             sb::arg("val"));
-  klass.def("Set", SetIntListValues, sb::arg("idx"), sb::vararg);
-  klass.def("resize", &SiglusIntListFacade::resize, sb::arg("size"));
-  klass.def("size", &SiglusIntListFacade::size);
-  klass.def("fill", &SiglusIntListFacade::fill, sb::arg("begin"),
-            sb::arg("end"), sb::arg("val"));
-  klass.def("b1", &SiglusIntListFacade::b1, sb::arg("idx"));
-  klass.def("write_b1", &SiglusIntListFacade::write_b1, sb::arg("idx"),
-            sb::arg("val"));
-  klass.def("b2", &SiglusIntListFacade::b2, sb::arg("idx"));
-  klass.def("write_b2", &SiglusIntListFacade::write_b2, sb::arg("idx"),
-            sb::arg("val"));
-  klass.def("b4", &SiglusIntListFacade::b4, sb::arg("idx"));
-  klass.def("write_b4", &SiglusIntListFacade::write_b4, sb::arg("idx"),
-            sb::arg("val"));
-  klass.def("b8", &SiglusIntListFacade::b8, sb::arg("idx"));
-  klass.def("write_b8", &SiglusIntListFacade::write_b8, sb::arg("idx"),
-            sb::arg("val"));
-  klass.def("b16", &SiglusIntListFacade::b16, sb::arg("idx"));
-  klass.def("write_b16", &SiglusIntListFacade::write_b16, sb::arg("idx"),
-            sb::arg("val"));
-}
-
-void BindStrSequenceMethods(sb::class_<SiglusStrListFacade>& klass) {
-  klass.def("__getitem__", &SiglusStrListFacade::get, sb::arg("idx"));
-  klass.def("__setitem__", &SiglusStrListFacade::set, sb::arg("idx"),
-            sb::arg("val"));
-  klass.def("resize", &SiglusStrListFacade::resize, sb::arg("size"));
-  klass.def("size", &SiglusStrListFacade::size);
-  klass.def("fill", &SiglusStrListFacade::fill, sb::arg("begin"),
+  ilist.def(
+      "Set",
+      +[](SiglusIntListFacade* self, Fiber& fib, int idx,
+          std::vector<Value> values) {
+        std::vector<int> vals;
+        vals.reserve(values.size());
+        for (Value v : values)
+          vals.emplace_back(RequireInt(v, "integer list Set"));
+        self->Set(fib, idx, std::move(vals));
+      },
+      sb::arg("idx"), sb::vararg);
+  ilist.def("resize", &SiglusIntListFacade::resize, sb::arg("size"));
+  ilist.def("size", &SiglusIntListFacade::size);
+  ilist.def("fill", &SiglusIntListFacade::fill, sb::arg("begin"),
             sb::arg("end"), sb::arg("val"));
 }
 
-}  // namespace
+void BindStrSequenceMethods(sb::class_<SiglusStrListFacade>& slist) {
+  slist.def("__getitem__", &SiglusStrListFacade::get, sb::arg("idx"));
+  slist.def("__setitem__", &SiglusStrListFacade::set, sb::arg("idx"),
+            sb::arg("val"));
+  slist.def("resize", &SiglusStrListFacade::resize, sb::arg("size"));
+  slist.def("size", &SiglusStrListFacade::size);
+  slist.def("fill", &SiglusStrListFacade::fill, sb::arg("begin"),
+            sb::arg("end"), sb::arg("val"));
+}
 
 void BindMemory(SiglusMachine& rt) {
   VM& vm = *rt.vm;
@@ -132,6 +152,7 @@ void BindMemory(SiglusMachine& rt) {
       std::make_shared<sb::class_<SiglusIntListFacade>>(m, "__SiglusIntList");
   rt.ilist_cls = ilist;
   BindIntSequenceMethods(*ilist);
+  BindIntBitProperties(m, *ilist);
   ilist->def("init", &SiglusIntListFacade::init);
 
   auto slist =
@@ -226,8 +247,11 @@ void BindMemory(SiglusMachine& rt) {
   rt.reset_local_memory.emplace_back([&memory, &vm, gameexe = rt.gameexe]() {
     memory.PartialReset(LocalMemory{});
     for (Fiber* fiber : vm.fibres_) {
-      if (auto* handle = std::any_cast<MemoryHandle>(&fiber->usrdata))
-        handle->ResetStackMemory(MakeRootStackMemory());
+      if (auto* handle = std::any_cast<MemoryHandle>(&fiber->usrdata)) {
+        handle->ResetStackMemory(
+            StackMemory{.L = {std::vector<int>(kRootStackBankSize)},
+                        .K = {std::vector<std::string>(kRootStackBankSize)}});
+      }
     }
     if (gameexe)
       memory.LoadFrom(*gameexe);

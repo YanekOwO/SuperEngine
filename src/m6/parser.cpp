@@ -105,14 +105,25 @@ std::shared_ptr<AST> Parser::ParseStatement(bool requireSemi) {
 
         std::string id = clsNameTok.GetIf<tok::ID>()->id;
         std::vector<FuncDecl> memfn, staticfn;
+        std::vector<PropertyDecl> properties;
+        std::unordered_set<std::string> method_names, property_names;
 
-        require<tok::CurlyL>("expected '{' after class name");
-        while (it_ != end_ && !tryConsume<tok::CurlyR>()) {
+        if (!require<tok::CurlyL>("expected '{' after class name"))
+          return nullptr;
+        while (it_ != end_ && !it_->HoldsAlternative<tok::Eof>() &&
+               !it_->HoldsAlternative<tok::CurlyR>()) {
           // fn
           if (tryConsume<tok::Reserved>(tok::Reserved::Type::_fn)) {
             auto fn = parseFuncDecl(/*alreadyConsumedFn=*/true);
             if (fn && fn->HoldsAlternative<FuncDecl>()) {
               FuncDecl decl = std::move(*fn->Get_if<FuncDecl>());
+              if (property_names.contains(decl.name)) {
+                AddError("property '" + decl.name +
+                             "' conflicts with another class member",
+                         decl.name_loc);
+                return nullptr;
+              }
+              method_names.insert(decl.name);
               if (decl.params.size() >= 1 && decl.params.front() == "self") {
                 memfn.emplace_back(std::move(decl));
               } else {
@@ -126,13 +137,32 @@ std::shared_ptr<AST> Parser::ParseStatement(bool requireSemi) {
             }
           }
 
-          AddError("only function declarations allowed in class body", it_);
+          if (tryConsume<tok::ID>("property")) {
+            auto property = parsePropertyDecl();
+            if (!property)
+              return nullptr;
+            if (method_names.contains(property->name) ||
+                !property_names.insert(property->name).second) {
+              AddError("property '" + property->name +
+                           "' conflicts with another class member",
+                       property->name_loc);
+              return nullptr;
+            }
+            properties.emplace_back(std::move(*property));
+            continue;
+          }
+
+          AddError(
+              "only function and property declarations allowed in class body",
+              it_);
           Synchronize();
           return nullptr;
         }
+        if (!require<tok::CurlyR>("expected '}' after class body"))
+          return nullptr;
 
         ClassDecl cd{std::move(id), std::move(memfn), std::move(staticfn),
-                     clsNameLoc};
+                     clsNameLoc, std::move(properties)};
         return std::make_shared<AST>(std::move(cd));
       }
 
@@ -511,6 +541,60 @@ std::shared_ptr<AST> Parser::parseFuncDecl(bool consumedfn) {
   fn.body = ParseStatement(false);
 
   return std::make_shared<AST>(std::move(fn));
+}
+
+std::optional<PropertyDecl> Parser::parsePropertyDecl() {
+  auto name_tok = it_;
+  if (!require<tok::ID>("expected property name"))
+    return std::nullopt;
+
+  PropertyDecl property;
+  property.name = name_tok->GetIf<tok::ID>()->id;
+  property.name_loc = name_tok->loc_;
+  if (!require<tok::CurlyL>("expected '{' after property name"))
+    return std::nullopt;
+
+  while (it_ != end_ && !it_->HoldsAlternative<tok::Eof>() &&
+         !it_->HoldsAlternative<tok::CurlyR>()) {
+    auto accessor_tok = it_;
+    bool getter = tryConsume<tok::ID>("get");
+    if (!getter && !tryConsume<tok::ID>("set")) {
+      AddError("expected 'get' or 'set' in property body", it_);
+      return std::nullopt;
+    }
+    auto& accessor = getter ? property.getter : property.setter;
+    const std::string kind = getter ? "get" : "set";
+    if (accessor) {
+      AddError("duplicate '" + kind + "' accessor for property '" +
+                   property.name + "'",
+               accessor_tok->loc_);
+      return std::nullopt;
+    }
+    if (it_ == end_ || !it_->HoldsAlternative<tok::CurlyL>()) {
+      AddError("property accessor body must be a block", LocPrevEnd(it_));
+      return std::nullopt;
+    }
+
+    FuncDecl fn;
+    // Slot zero holds the accessor itself, but is not a source-level name.
+    fn.name = "<" + kind + " " + property.name + ">";
+    fn.name_loc = accessor_tok->loc_;
+    fn.params = getter ? std::vector<std::string>{"self"}
+                       : std::vector<std::string>{"self", "value"};
+    fn.param_locs.assign(fn.params.size(), accessor_tok->loc_);
+    fn.body = ParseStatement(false);
+    if (!Ok())
+      return std::nullopt;
+    accessor = std::move(fn);
+  }
+
+  if (!require<tok::CurlyR>("expected '}' after property body"))
+    return std::nullopt;
+  if (!property.getter && !property.setter) {
+    AddError("property must declare at least one accessor", property.name_loc);
+    return std::nullopt;
+  }
+  return property;
 }
 
 std::shared_ptr<ExprAST> Parser::parseLogicalOr() {

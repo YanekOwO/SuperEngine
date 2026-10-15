@@ -146,7 +146,11 @@ void Function::MarkRoots(GCVisitor& visitor) {
     visitor.MarkSub(v);
 }
 
-void Function::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void Function::Call(VM& vm,
+                    Fiber& f,
+                    uint8_t nargs,
+                    uint8_t nkwargs,
+                    CallResultMode mode) {
   std::vector<Value>& op_stack = f.op_stack;
   std::vector<std::optional<Value>> local_stack(chunk->fast_locals.size());
 
@@ -165,6 +169,7 @@ void Function::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
   frame.fn = this;
   frame.ip = entry;
   frame.bp = base;
+  frame.result_mode = mode;
   frame.fast_locals = std::move(local_stack);
 }
 

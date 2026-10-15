@@ -137,17 +137,16 @@ void BindGroup(SiglusMachine& runtime) {
   group.def("get_result_button_no", [](GroupHandle* h) {
     return h->group->result_button_no.value_or(0);
   });
-  group.def("order", [](GroupHandle* h) { return h->group->order; });
-  group.def("set_order",
-            [](GroupHandle* h, int order) { h->group->order = order; });
-  group.def("layer", [](GroupHandle* h) { return h->group->layer; });
-  group.def("set_layer",
-            [](GroupHandle* h, int layer) { h->group->layer = layer; });
-  group.def("cancel_priority",
-            [](GroupHandle* h) { return h->group->cancel_priority; });
-  group.def("set_cancel_priority", [](GroupHandle* h, int cancel_priority) {
-    h->group->cancel_priority = cancel_priority;
-  });
+  group.prop("order", [](GroupHandle* h) { return h->group->order; },
+             [](GroupHandle* h, int order) { h->group->order = order; });
+  group.prop("layer", [](GroupHandle* h) { return h->group->layer; },
+             [](GroupHandle* h, int layer) { h->group->layer = layer; });
+  group.prop(
+      "cancel_priority",
+      [](GroupHandle* h) { return h->group->cancel_priority; },
+      [](GroupHandle* h, int cancel_priority) {
+        h->group->cancel_priority = cancel_priority;
+      });
 
   struct GroupListHandle {
     int layer;

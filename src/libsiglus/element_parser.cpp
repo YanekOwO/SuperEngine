@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <format>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -61,10 +62,36 @@ inline static auto b(Type type, Node::var_t node) {
   });
 }
 
-static Builder b_value_getter(std::string_view member, Type type) {
-  return Builder([member, type](Builder::Ctx& ctx) {
-    ctx.chain.nodes.emplace_back(Type::Callable, Member{member});
-    ctx.chain.nodes.emplace_back(type, Call{});
+static Builder b_prop(std::string_view member,
+                      Type type,
+                      bool writable = false) {
+  return Builder([member, type, writable](Builder::Ctx& ctx) {
+    // A bind on a longer chain belongs to its final command, not this member.
+    if (ctx.elmcode.size() == 1 && ctx.elm.force_bind) {
+      const auto& bind = ctx.elm.bind_ctx;
+      if (!bind.named_arg.empty())
+        throw std::runtime_error(std::format(
+            "property '{}' does not accept tagged arguments", member));
+      if (bind.overload_id == 0) {
+        if (!bind.arg.empty())
+          throw std::runtime_error(
+              std::format("property '{}' getter expects no arguments", member));
+      } else if (bind.overload_id == 1 && writable) {
+        if (bind.arg.size() != 1)
+          throw std::runtime_error(
+              std::format("property '{}' setter expects one argument", member));
+        ctx.chain.nodes.emplace_back(Type::None,
+                                     SetMember{member, bind.arg.front()});
+        ctx.elm.force_bind = false;
+        ctx.elmcode = ctx.elmcode.subspan(1);
+        return;
+      } else {
+        throw std::runtime_error(std::format("property '{}' has no overload {}",
+                                             member, bind.overload_id));
+      }
+      ctx.elm.force_bind = false;
+    }
+    ctx.chain.nodes.emplace_back(type, Member{member});
     ctx.elmcode = ctx.elmcode.subspan(1);
   });
 }
@@ -134,15 +161,10 @@ inline static Builder b_index_array(Type value_type) {
 }
 inline static Builder b_intlist_bit_access(std::string_view mem) {
   return Builder([mem](Builder::Ctx& ctx) {
+    ctx.chain.nodes.emplace_back(Type::IntList, Member{mem});
     auto emit_error = [&](std::string message, std::size_t consume) {
       ctx.Warn(std::move(message));
-
-      ctx.chain.nodes.emplace_back(Type::Callable,
-                                   Member{mem, Type::Int, true});
-      Call call;
-      call.args.emplace_back(Integer(-1));
-      call.is_simple = true;
-      ctx.chain.nodes.emplace_back(Type::Int, std::move(call));
+      ctx.chain.nodes.emplace_back(Type::Int, Subscript{Integer(-1)});
       ctx.elmcode = ctx.elmcode.subspan(std::min(consume, ctx.elmcode.size()));
     };
 
@@ -159,34 +181,8 @@ inline static Builder b_intlist_bit_access(std::string_view mem) {
       return;
     }
 
-    ctx.chain.nodes.emplace_back(Type::Callable, Member{mem, Type::Int, true});
-    Call call;
-    call.args.emplace_back(ctx.elmcode[2]);
-    call.is_simple = true;
-    ctx.chain.nodes.emplace_back(Type::Int, std::move(call));
+    ctx.chain.nodes.emplace_back(Type::Int, Subscript{ctx.elmcode[2]});
     ctx.elmcode = ctx.elmcode.subspan(3);
-  });
-}
-static Builder obj_getset(std::string_view mem,
-                          Type type,
-                          int get_code = 0,
-                          int set_code = 1) {
-  return Builder([getter = std::string(mem), setter = "set_" + std::string(mem),
-                  type, get_code, set_code](Builder::Ctx& ctx) {
-    const int overload_id = ctx.elm.bind_ctx.overload_id;
-    const std::string& name = overload_id == set_code ? setter : getter;
-    const Type return_type = overload_id == set_code ? Type::None : type;
-
-    if (overload_id != get_code && overload_id != set_code) {
-      ctx.Warn(
-          std::format("[ObjectGetSet] overload {} not found while parsing {}",
-                      overload_id, ctx.chain.ToDebugString()));
-    }
-
-    ctx.chain.nodes.emplace_back(
-        Type::Callable, Member{name, return_type, /*implicit_call=*/true,
-                               /*is_simple=*/true});
-    ctx.elmcode = ctx.elmcode.subspan(1);
   });
 }
 
@@ -434,7 +430,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
       static const auto mp = make_flatmap<Builder>(
           {id[1] | b_callable("start"), id[3] | b_callable("start_real"),
            id[2] | b_callable("end", Type::None),
-           id[0] | b_value_getter("counter", Type::Counter),
+           id[0] | b_prop("counter", Type::Counter),
            id[4] | b_callable("is_end_action", Type::Int)});
       return &mp;
     }
@@ -905,9 +901,9 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[3] | b_callable("get_decided_no", Type::Int),
            id[15] | b_callable("get_result", Type::Int),
            id[16] | b_callable("get_result_button_no", Type::Int),
-           id[8] | obj_getset("order", Type::Int),
-           id[13] | obj_getset("layer", Type::Int),
-           id[14] | obj_getset("cancel_priority", Type::Int)});
+           id[8] | b_prop("order", Type::Int, true),
+           id[13] | b_prop("layer", Type::Int, true),
+           id[14] | b_prop("cancel_priority", Type::Int, true)});
       return &mp;
     }
 
@@ -928,22 +924,22 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
     case Type::Effect: {
       static const auto mp = make_flatmap<Builder>(
           {id[30] | b_callable("init"),
-           id[31] | obj_getset("wipe_copy", Type::Int),
-           id[32] | obj_getset("wipe_erase", Type::Int),
-           id[0] | obj_getset("x", Type::Int),
-           id[1] | obj_getset("y", Type::Int),
-           id[2] | obj_getset("z", Type::Int),
-           id[3] | obj_getset("mono", Type::Int),
-           id[4] | obj_getset("reverse", Type::Int),
-           id[5] | obj_getset("bright", Type::Int),
-           id[6] | obj_getset("dark", Type::Int),
-           id[7] | obj_getset("color_r", Type::Int),
-           id[8] | obj_getset("color_g", Type::Int),
-           id[9] | obj_getset("color_b", Type::Int),
-           id[10] | obj_getset("color_rate", Type::Int),
-           id[11] | obj_getset("color_add_r", Type::Int),
-           id[12] | obj_getset("color_add_g", Type::Int),
-           id[13] | obj_getset("color_add_b", Type::Int),
+           id[31] | b_prop("wipe_copy", Type::Int, true),
+           id[32] | b_prop("wipe_erase", Type::Int, true),
+           id[0] | b_prop("x", Type::Int, true),
+           id[1] | b_prop("y", Type::Int, true),
+           id[2] | b_prop("z", Type::Int, true),
+           id[3] | b_prop("mono", Type::Int, true),
+           id[4] | b_prop("reverse", Type::Int, true),
+           id[5] | b_prop("bright", Type::Int, true),
+           id[6] | b_prop("dark", Type::Int, true),
+           id[7] | b_prop("color_r", Type::Int, true),
+           id[8] | b_prop("color_g", Type::Int, true),
+           id[9] | b_prop("color_b", Type::Int, true),
+           id[10] | b_prop("color_rate", Type::Int, true),
+           id[11] | b_prop("color_add_r", Type::Int, true),
+           id[12] | b_prop("color_add_g", Type::Int, true),
+           id[13] | b_prop("color_add_b", Type::Int, true),
            id[14] | b(Type::IntEvent, Member("x_eve")),
            id[15] | b(Type::IntEvent, Member("y_eve")),
            id[16] | b(Type::IntEvent, Member("z_eve")),
@@ -958,10 +954,10 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[25] | b(Type::IntEvent, Member("color_add_r_eve")),
            id[26] | b(Type::IntEvent, Member("color_add_g_eve")),
            id[27] | b(Type::IntEvent, Member("color_add_b_eve")),
-           id[28] | obj_getset("begin_order", Type::Int),
-           id[29] | obj_getset("end_order", Type::Int),
-           id[33] | obj_getset("begin_layer", Type::Int),
-           id[34] | obj_getset("end_layer", Type::Int)});
+           id[28] | b_prop("begin_order", Type::Int, true),
+           id[29] | b_prop("end_order", Type::Int, true),
+           id[33] | b_prop("begin_layer", Type::Int, true),
+           id[34] | b_prop("end_layer", Type::Int, true)});
       return &mp;
     }
 
@@ -1052,110 +1048,110 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
       };
 
       static const auto mp = make_flatmap<Builder>({
-          id[56] | obj_getset("wipe_copy", Type::Int),
-          id[92] | obj_getset("wipe_erase", Type::Int),
-          id[139] | obj_getset("click_disable", Type::Int),
-          id[0] | obj_getset("disp", Type::Int),
-          id[1] | obj_getset("patno", Type::Int),
-          id[44] | obj_getset("world", Type::Int),
-          id[55] | obj_getset("order", Type::Int),
-          id[2] | obj_getset("layer", Type::Int),
-          id[3] | obj_getset("x", Type::Int),
-          id[4] | obj_getset("y", Type::Int),
-          id[5] | obj_getset("z", Type::Int),
-          id[54] | b_value_getter("x_rep", Type::IntList),
-          id[63] | b_value_getter("y_rep", Type::IntList),
-          id[110] | b_value_getter("z_rep", Type::IntList),
+          id[56] | b_prop("wipe_copy", Type::Int, true),
+          id[92] | b_prop("wipe_erase", Type::Int, true),
+          id[139] | b_prop("click_disable", Type::Int, true),
+          id[0] | b_prop("disp", Type::Int, true),
+          id[1] | b_prop("patno", Type::Int, true),
+          id[44] | b_prop("world", Type::Int, true),
+          id[55] | b_prop("order", Type::Int, true),
+          id[2] | b_prop("layer", Type::Int, true),
+          id[3] | b_prop("x", Type::Int, true),
+          id[4] | b_prop("y", Type::Int, true),
+          id[5] | b_prop("z", Type::Int, true),
+          id[54] | b_prop("x_rep", Type::IntList),
+          id[63] | b_prop("y_rep", Type::IntList),
+          id[110] | b_prop("z_rep", Type::IntList),
           id[48] | b(Type::Callable, Member("set_pos")),
-          id[6] | obj_getset("center_x", Type::Int),
-          id[7] | obj_getset("center_y", Type::Int),
-          id[8] | obj_getset("center_z", Type::Int),
+          id[6] | b_prop("center_x", Type::Int, true),
+          id[7] | b_prop("center_y", Type::Int, true),
+          id[8] | b_prop("center_z", Type::Int, true),
           id[158] | b(Type::Callable, Member("set_center")),
-          id[9] | obj_getset("center_rep_x", Type::Int),
-          id[10] | obj_getset("center_rep_y", Type::Int),
-          id[11] | obj_getset("center_rep_z", Type::Int),
+          id[9] | b_prop("center_rep_x", Type::Int, true),
+          id[10] | b_prop("center_rep_y", Type::Int, true),
+          id[11] | b_prop("center_rep_z", Type::Int, true),
           id[159] | b(Type::Callable, Member("set_center_rep")),
-          id[12] | obj_getset("scale_x", Type::Int),
-          id[13] | obj_getset("scale_y", Type::Int),
-          id[14] | obj_getset("scale_z", Type::Int),
+          id[12] | b_prop("scale_x", Type::Int, true),
+          id[13] | b_prop("scale_y", Type::Int, true),
+          id[14] | b_prop("scale_z", Type::Int, true),
           id[49] | b(Type::Callable, Member("set_scale")),
-          id[15] | obj_getset("rotate_x", Type::Int),
-          id[16] | obj_getset("rotate_y", Type::Int),
-          id[17] | obj_getset("rotate_z", Type::Int),
+          id[15] | b_prop("rotate_x", Type::Int, true),
+          id[16] | b_prop("rotate_y", Type::Int, true),
+          id[17] | b_prop("rotate_z", Type::Int, true),
           id[50] | b(Type::Callable, Member("set_rotate")),
-          id[18] | obj_getset("clip_use", Type::Int),
-          id[19] | obj_getset("clip_left", Type::Int),
-          id[20] | obj_getset("clip_top", Type::Int),
-          id[21] | obj_getset("clip_right", Type::Int),
-          id[22] | obj_getset("clip_bottom", Type::Int),
+          id[18] | b_prop("clip_use", Type::Int, true),
+          id[19] | b_prop("clip_left", Type::Int, true),
+          id[20] | b_prop("clip_top", Type::Int, true),
+          id[21] | b_prop("clip_right", Type::Int, true),
+          id[22] | b_prop("clip_bottom", Type::Int, true),
           id[160] | b(Type::Callable, Member("set_clip")),
-          id[149] | obj_getset("src_clip_use", Type::Int),
-          id[150] | obj_getset("src_clip_left", Type::Int),
-          id[151] | obj_getset("src_clip_top", Type::Int),
-          id[152] | obj_getset("src_clip_right", Type::Int),
-          id[153] | obj_getset("src_clip_bottom", Type::Int),
+          id[149] | b_prop("src_clip_use", Type::Int, true),
+          id[150] | b_prop("src_clip_left", Type::Int, true),
+          id[151] | b_prop("src_clip_top", Type::Int, true),
+          id[152] | b_prop("src_clip_right", Type::Int, true),
+          id[153] | b_prop("src_clip_bottom", Type::Int, true),
           id[161] | b(Type::Callable, Member("set_src_clip")),
-          id[27] | obj_getset("tr", Type::Int),
-          id[141] | b_value_getter("tr_rep", Type::IntList),
-          id[28] | obj_getset("mono", Type::Int),
-          id[29] | obj_getset("reverse", Type::Int),
-          id[30] | obj_getset("bright", Type::Int),
-          id[31] | obj_getset("dark", Type::Int),
-          id[32] | obj_getset("color_r", Type::Int),
-          id[33] | obj_getset("color_g", Type::Int),
-          id[34] | obj_getset("color_b", Type::Int),
-          id[23] | obj_getset("color_rate", Type::Int),
-          id[57] | obj_getset("color_add_r", Type::Int),
-          id[58] | obj_getset("color_add_g", Type::Int),
-          id[59] | obj_getset("color_add_b", Type::Int),
-          id[145] | obj_getset("mask_no", Type::Int),
-          id[109] | obj_getset("tonecurve_no", Type::Int),
-          id[146] | obj_getset("culling", Type::Int),
-          id[147] | obj_getset("alpha_test", Type::Int),
-          id[148] | obj_getset("alpha_blend", Type::Int),
-          id[46] | obj_getset("blend", Type::Int),
-          id[168] | obj_getset("light_no", Type::Int),
-          id[144] | obj_getset("fog_use", Type::Int),
-          id[90] | b_value_getter("patno_eve", Type::IntEvent),
-          id[51] | b_value_getter("x_eve", Type::IntEvent),
-          id[64] | b_value_getter("y_eve", Type::IntEvent),
-          id[65] | b_value_getter("z_eve", Type::IntEvent),
-          id[112] | b_value_getter("x_rep_eve", Type::IntEventList),
-          id[113] | b_value_getter("y_rep_eve", Type::IntEventList),
-          id[114] | b_value_getter("z_rep_eve", Type::IntEventList),
-          id[77] | b_value_getter("center_x_eve", Type::IntEvent),
-          id[78] | b_value_getter("center_y_eve", Type::IntEvent),
-          id[79] | b_value_getter("center_z_eve", Type::IntEvent),
-          id[80] | b_value_getter("center_rep_x_eve", Type::IntEvent),
-          id[81] | b_value_getter("center_rep_y_eve", Type::IntEvent),
-          id[82] | b_value_getter("center_rep_z_eve", Type::IntEvent),
-          id[67] | b_value_getter("scale_x_eve", Type::IntEvent),
-          id[68] | b_value_getter("scale_y_eve", Type::IntEvent),
-          id[66] | b_value_getter("scale_z_eve", Type::IntEvent),
-          id[69] | b_value_getter("rotate_x_eve", Type::IntEvent),
-          id[70] | b_value_getter("rotate_y_eve", Type::IntEvent),
-          id[71] | b_value_getter("rotate_z_eve", Type::IntEvent),
-          id[105] | b_value_getter("clip_left_eve", Type::IntEvent),
-          id[106] | b_value_getter("clip_top_eve", Type::IntEvent),
-          id[107] | b_value_getter("clip_right_eve", Type::IntEvent),
-          id[108] | b_value_getter("clip_bottom_eve", Type::IntEvent),
-          id[154] | b_value_getter("src_clip_left_eve", Type::IntEvent),
-          id[155] | b_value_getter("src_clip_top_eve", Type::IntEvent),
-          id[156] | b_value_getter("src_clip_right_eve", Type::IntEvent),
-          id[157] | b_value_getter("src_clip_bottom_eve", Type::IntEvent),
-          id[72] | b_value_getter("tr_eve", Type::IntEvent),
-          id[140] | b_value_getter("tr_rep_eve", Type::IntEventList),
-          id[73] | b_value_getter("mono_eve", Type::IntEvent),
-          id[74] | b_value_getter("reverse_eve", Type::IntEvent),
-          id[75] | b_value_getter("bright_eve", Type::IntEvent),
-          id[76] | b_value_getter("dark_eve", Type::IntEvent),
-          id[87] | b_value_getter("color_r_eve", Type::IntEvent),
-          id[88] | b_value_getter("color_g_eve", Type::IntEvent),
-          id[89] | b_value_getter("color_b_eve", Type::IntEvent),
-          id[83] | b_value_getter("color_rate_eve", Type::IntEvent),
-          id[84] | b_value_getter("color_add_r_eve", Type::IntEvent),
-          id[85] | b_value_getter("color_add_g_eve", Type::IntEvent),
-          id[86] | b_value_getter("color_add_b_eve", Type::IntEvent),
+          id[27] | b_prop("tr", Type::Int, true),
+          id[141] | b_prop("tr_rep", Type::IntList),
+          id[28] | b_prop("mono", Type::Int, true),
+          id[29] | b_prop("reverse", Type::Int, true),
+          id[30] | b_prop("bright", Type::Int, true),
+          id[31] | b_prop("dark", Type::Int, true),
+          id[32] | b_prop("color_r", Type::Int, true),
+          id[33] | b_prop("color_g", Type::Int, true),
+          id[34] | b_prop("color_b", Type::Int, true),
+          id[23] | b_prop("color_rate", Type::Int, true),
+          id[57] | b_prop("color_add_r", Type::Int, true),
+          id[58] | b_prop("color_add_g", Type::Int, true),
+          id[59] | b_prop("color_add_b", Type::Int, true),
+          id[145] | b_prop("mask_no", Type::Int, true),
+          id[109] | b_prop("tonecurve_no", Type::Int, true),
+          id[146] | b_prop("culling", Type::Int, true),
+          id[147] | b_prop("alpha_test", Type::Int, true),
+          id[148] | b_prop("alpha_blend", Type::Int, true),
+          id[46] | b_prop("blend", Type::Int, true),
+          id[168] | b_prop("light_no", Type::Int, true),
+          id[144] | b_prop("fog_use", Type::Int, true),
+          id[90] | b_prop("patno_eve", Type::IntEvent),
+          id[51] | b_prop("x_eve", Type::IntEvent),
+          id[64] | b_prop("y_eve", Type::IntEvent),
+          id[65] | b_prop("z_eve", Type::IntEvent),
+          id[112] | b_prop("x_rep_eve", Type::IntEventList),
+          id[113] | b_prop("y_rep_eve", Type::IntEventList),
+          id[114] | b_prop("z_rep_eve", Type::IntEventList),
+          id[77] | b_prop("center_x_eve", Type::IntEvent),
+          id[78] | b_prop("center_y_eve", Type::IntEvent),
+          id[79] | b_prop("center_z_eve", Type::IntEvent),
+          id[80] | b_prop("center_rep_x_eve", Type::IntEvent),
+          id[81] | b_prop("center_rep_y_eve", Type::IntEvent),
+          id[82] | b_prop("center_rep_z_eve", Type::IntEvent),
+          id[67] | b_prop("scale_x_eve", Type::IntEvent),
+          id[68] | b_prop("scale_y_eve", Type::IntEvent),
+          id[66] | b_prop("scale_z_eve", Type::IntEvent),
+          id[69] | b_prop("rotate_x_eve", Type::IntEvent),
+          id[70] | b_prop("rotate_y_eve", Type::IntEvent),
+          id[71] | b_prop("rotate_z_eve", Type::IntEvent),
+          id[105] | b_prop("clip_left_eve", Type::IntEvent),
+          id[106] | b_prop("clip_top_eve", Type::IntEvent),
+          id[107] | b_prop("clip_right_eve", Type::IntEvent),
+          id[108] | b_prop("clip_bottom_eve", Type::IntEvent),
+          id[154] | b_prop("src_clip_left_eve", Type::IntEvent),
+          id[155] | b_prop("src_clip_top_eve", Type::IntEvent),
+          id[156] | b_prop("src_clip_right_eve", Type::IntEvent),
+          id[157] | b_prop("src_clip_bottom_eve", Type::IntEvent),
+          id[72] | b_prop("tr_eve", Type::IntEvent),
+          id[140] | b_prop("tr_rep_eve", Type::IntEventList),
+          id[73] | b_prop("mono_eve", Type::IntEvent),
+          id[74] | b_prop("reverse_eve", Type::IntEvent),
+          id[75] | b_prop("bright_eve", Type::IntEvent),
+          id[76] | b_prop("dark_eve", Type::IntEvent),
+          id[87] | b_prop("color_r_eve", Type::IntEvent),
+          id[88] | b_prop("color_g_eve", Type::IntEvent),
+          id[89] | b_prop("color_b_eve", Type::IntEvent),
+          id[83] | b_prop("color_rate_eve", Type::IntEvent),
+          id[84] | b_prop("color_add_r_eve", Type::IntEvent),
+          id[85] | b_prop("color_add_g_eve", Type::IntEvent),
+          id[86] | b_prop("color_add_b_eve", Type::IntEvent),
           id[91] | Builder([](Builder::Ctx& ctx) {
             const int peek = AsInt(ctx.elmcode[1]);
             switch (peek) {
@@ -1192,9 +1188,9 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
           id[103] | obj_getter("get_pixel_color_b"),
 
           id[62] | obj_getter("get_file_path", Type::String),
-          id[111] | b_value_getter("F", Type::IntList),
+          id[111] | b_prop("F", Type::IntList),
 
-          id[93] | b_value_getter("child", Type::ObjList),
+          id[93] | b_prop("child", Type::ObjList),
           id[35] | b_callable("init", Type::None),
           id[36] | b_callable("free", Type::None),
           id[37] | b_callable("init_param", Type::None),
@@ -1245,8 +1241,8 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
           id[172] | b(Type::Callable, Member("set_movie_auto_free")),
 
           // frame action
-          id[52] | b_value_getter("frame_action", Type::FrameAction),
-          id[115] | b_value_getter("frame_action_ch", Type::FrameActionList),
+          id[52] | b_prop("frame_action", Type::FrameAction),
+          id[115] | b_prop("frame_action_ch", Type::FrameActionList),
 
           // button
           id[61] | b_callable("clear_button", Type::None),
@@ -1282,10 +1278,10 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
     case Type::Mask: {
       static const auto mp = make_flatmap<Builder>(
           {id[1] | b_callable("init"), id[0] | b_callable("create", Type::None),
-           id[4] | obj_getset("x", Type::Int),
-           id[5] | obj_getset("y", Type::Int),
-           id[2] | b_value_getter("x_eve", Type::IntEvent),
-           id[3] | b_value_getter("y_eve", Type::IntEvent)});
+           id[4] | b_prop("x", Type::Int, true),
+           id[5] | b_prop("y", Type::Int, true),
+           id[2] | b_prop("x_eve", Type::IntEvent),
+           id[3] | b_prop("y_eve", Type::IntEvent)});
       return &mp;
     }
 
@@ -1411,11 +1407,11 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
                b_callable("koe_play_wait_key", Type::Int, NONSIMPLE | AWAIT),
            id[22] | b(Type::None, Member("clear_face")),
            id[21] | b(Type::Callable, Member("set_face")),
-           id[10] | b_callable({{0, "get_layer"}, {1, "set_layer"}}),
-           id[11] | b_callable({{0, "get_world"}, {1, "set_world"}}),
-           id[32] | b_value_getter("button", Type::ObjList),
+           id[10] | b_prop("layer", Type::Int, true),
+           id[11] | b_prop("world", Type::Int, true),
+           id[32] | b_prop("button", Type::ObjList),
            id[53] | b(Type::ObjList, Member("face")),
-           id[30] | b_value_getter("object", Type::ObjList),
+           id[30] | b_prop("object", Type::ObjList),
 
            // parameter
            id[66] | b(Type::None, Member("init_window_pos")),

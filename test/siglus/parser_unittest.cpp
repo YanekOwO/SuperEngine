@@ -192,6 +192,53 @@ TEST_F(SiglusParserTest, AssignElement) {
   EXPECT_EQ(AsInt(tok.src), 7);
 }
 
+TEST_F(SiglusParserTest, AssignObjectPropertyHasMemberTarget) {
+  Parse(Marker{}, Push{Type::Int, 38}, Push{Type::Int, 2}, Push{Type::Int, -1},
+        Push{Type::Int, 0}, Push{Type::Int, 3}, Push{Type::Int, 42},
+        Assign{Type::IntRef, Type::Int, 1});
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto* assign = std::get_if<token::Assign>(&tokens.front().token);
+  ASSERT_NE(assign, nullptr);
+  EXPECT_EQ(assign->dst.ToDebugString(), "stage.front.object[int:0].x");
+  EXPECT_EQ(AsInt(assign->src), 42);
+}
+
+TEST_F(SiglusParserTest, ObjectPropertySetterCommandKeepsNilDestination) {
+  Parse(Marker{}, Push{Type::Int, 38}, Push{Type::Int, 2}, Push{Type::Int, -1},
+        Push{Type::Int, 0}, Push{Type::Int, 3}, Push{Type::Int, 42},
+        lex::Command(elm::Signature{.overload_id = 1,
+                                    .arglist = elm::ArgumentList({Type::Int}),
+                                    .argtags = {},
+                                    .rettype = Type::None}));
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto* command = std::get_if<token::Command>(&tokens.front().token);
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->chain.ToDebugString(),
+            "stage.front.object[int:0].x = int:42");
+  EXPECT_EQ(Typeof(command->dst), Type::None);
+  const auto* setter =
+      std::get_if<elm::SetMember>(&command->chain.nodes.back().var);
+  ASSERT_NE(setter, nullptr);
+  EXPECT_EQ(setter->name, "x");
+  EXPECT_EQ(AsInt(setter->value), 42);
+}
+
+TEST_F(SiglusParserTest, AssignBitPropertyHasSubscriptTarget) {
+  Parse(Marker{}, Push{Type::Int, 26}, Push{Type::Int, 3}, Push{Type::Int, -1},
+        Push{Type::Int, 7}, Push{Type::Int, 1},
+        Assign{Type::IntRef, Type::Int, 1});
+
+  const auto& tokens = parser->ParsedTokens();
+  ASSERT_EQ(tokens.size(), 1u);
+  const auto* assign = std::get_if<token::Assign>(&tokens.front().token);
+  ASSERT_NE(assign, nullptr);
+  EXPECT_EQ(assign->dst.ToDebugString(), "B.b1[int:7]");
+}
+
 TEST_F(SiglusParserTest, ElementAlias) {
   strs = {"bg47"};
   g_cmd = {

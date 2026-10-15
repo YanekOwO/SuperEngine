@@ -514,6 +514,172 @@ catch(e){ print(e); }
   }
 }
 
+TEST_F(CompilerTest, PropertiesReadWriteAndInstanceIsolation) {
+  auto res = Run(R"(
+class Box {
+  fn __init__(self, initial) {
+    self.reads = 0;
+    self.writes = 0;
+    self.size = initial;
+  }
+  property size {
+    get { self.reads += 1; return self._size; }
+    set { self.writes += 1; self._size = value; return 123; }
+  }
+  property doubled { get { return self.size * 2; } }
+  fn peek(self) { return self.size; }
+  fn static_number() { return 9; }
+}
+a = Box(2);
+b = Box(9);
+a.size = 5;
+print(a.size, b.size, a.doubled, a.peek());
+print(a.reads, a.writes, b.reads, b.writes, a.static_number());
+for(i = 0; i < 100; i += 1) a.size = i;
+print(a.size, a.writes);
+)");
+  EXPECT_EQ(res, "5 9 10 5\n3 2 1 1 9\n99 102\n");
+}
+
+TEST_F(CompilerTest, PropertiesMissingAccessors) {
+  auto res = Run(R"(
+class Box {
+  property read_only { get { return 7; } }
+  property write_only { set { self.stored = value; } }
+}
+b = Box();
+b.write_only = 4;
+print(b.read_only, b.stored);
+try { b.read_only = 8; } catch(e) { print(e); }
+try { print(b.write_only); } catch(e) { print(e); }
+try { b.read_only += 1; } catch(e) { print(e); }
+try { b.write_only += 1; } catch(e) { print(e); }
+print(b.read_only, b.stored);
+)");
+  EXPECT_EQ(res, R"(
+7 4
+property 'read_only' has no setter
+property 'write_only' has no getter
+property 'read_only' has no setter
+property 'write_only' has no getter
+7 4
+)");
+}
+
+TEST_F(CompilerTest, PropertyCompoundAssignmentEvaluationOrder) {
+  auto res = Run(R"(
+trace = "";
+class Box {
+  property size {
+    get { global trace; trace += "G"; return self.stored; }
+    set { global trace; trace += "S"; self.stored = value; }
+  }
+}
+b = Box();
+b.stored = 3;
+fn receiver() { global trace; trace += "R"; return b; }
+fn rhs() { global trace; trace += "V"; return 4; }
+receiver().size += rhs();
+print(trace, b.stored);
+)");
+  EXPECT_EQ(res, "RGVS 7\n");
+}
+
+TEST_F(CompilerTest, PropertyGlobalsAndContextualIdentifiers) {
+  auto res = Run(R"(
+global self, value;
+self = 100;
+value = 200;
+size = 7;
+property = 10;
+get = 11;
+set = 12;
+class Box {
+  property size {
+    get { return self.stored + size; }
+    set { self.stored = value; }
+  }
+  fn get(self) { return self.stored; }
+  fn set(self, v) { self.stored = v; }
+  fn property() { return 13; }
+}
+b = Box();
+b.size = 4;
+print(b.size, b.stored, self, value, property, get, set, b.property());
+)");
+  EXPECT_EQ(res, "11 4 100 200 10 11 12 13\n");
+}
+
+TEST_F(CompilerTest, PropertyReturnsCallableAndFallsThrough) {
+  auto res = Run(R"(
+fn twice(x) { return x * 2; }
+class Box {
+  property callback { get { return twice; } }
+  property empty { get {} }
+  property value { get { return self.stored; } set { self.stored = value; } }
+}
+b = Box();
+b.value = 5;
+print(b.callback(4), b.empty, b.value);
+)");
+  EXPECT_EQ(res, "8 nil 5\n");
+}
+
+TEST_F(CompilerTest, PropertyExceptions) {
+  auto res = Run(R"(
+class Box {
+  property value {
+    get { throw "getter failed"; }
+    set { if(value < 0) throw "setter failed"; self.stored = value; }
+  }
+}
+b = Box();
+try { print(1 + b.value); } catch(e) { print(e); }
+try { b.value = -1; print("unreachable"); } catch(e) { print(e); }
+b.value = 6;
+print(b.stored, 10 + 2);
+)");
+  EXPECT_EQ(res, "getter failed\nsetter failed\n6 12\n");
+}
+
+TEST_F(CompilerTest, PropertyAccessorsCanAwait) {
+  auto res = Run(R"(
+class Box {
+  property value {
+    get { return await async.Sleep(1, self.stored); }
+    set { self.stored = await async.Sleep(1, value); return 123; }
+  }
+  property doubled { get { return self.value * 2; } }
+}
+b = Box();
+b.value = 3;
+b.value += 2;
+print(1 + b.value, b.doubled, b.stored);
+)");
+  EXPECT_EQ(res, "6 10 5\n");
+}
+
+TEST_F(CompilerTest, PropertyAccessorsCanYield) {
+  auto res = Run(R"(
+class Box {
+  property value {
+    get { yield "get"; return self.stored; }
+    set { yield "set"; self.stored = value; return 123; }
+  }
+}
+b = Box();
+fn write() { b.value = 6; return b.stored; }
+writer = spawn write();
+print(await writer);
+print(await writer);
+fn read() { return 1 + b.value; }
+reader = spawn read();
+print(await reader);
+print(await reader);
+)");
+  EXPECT_EQ(res, "set\n6\nget\n7\n");
+}
+
 TEST_F(CompilerTest, ClassOperators) {
   auto res = Run(R"(
 class A{

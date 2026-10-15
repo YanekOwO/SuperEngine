@@ -249,7 +249,7 @@ TEST_F(ValueTest, ClassAndInstance) {
   Value inst(Alloc<Instance>(base.Get_if<Class>()));
 
   EXPECT_NO_THROW(inst.SetMember("mem", Value(123)));
-  EXPECT_EQ(gc.TrackValue(inst.Member("mem")), 123);
+  EXPECT_EQ(gc.TrackValue(inst.GetMember("mem")), 123);
 }
 
 TEST_F(ValueTest, Code) {

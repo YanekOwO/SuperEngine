@@ -27,6 +27,7 @@
 #include "m6/source_location.hpp"
 
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -292,11 +293,20 @@ struct FuncDecl {
   std::string DebugString() const;
 };
 
+struct PropertyDecl {
+  std::string name;
+  std::optional<FuncDecl> getter, setter;
+  SourceLocation name_loc;
+
+  std::string DebugString() const;
+};
+
 struct ClassDecl {
   std::string name;
   std::vector<FuncDecl> memfn, staticfn;
 
   SourceLocation name_loc;
+  std::vector<PropertyDecl> properties;
 
   std::string DebugString() const;
 };

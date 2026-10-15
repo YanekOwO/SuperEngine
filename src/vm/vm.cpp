@@ -420,15 +420,16 @@ void VM::Error(Fiber& f, std::string exc) {
 
 void VM::Return(Fiber& f) {
   auto& frame = f.frames.back();
-  Value ret = f.op_stack.empty() ? Value() : std::move(f.op_stack.back());
+  const bool keep_result = frame.result_mode == CallResultMode::Keep;
+  Value ret =
+      keep_result && !f.op_stack.empty() ? std::move(f.op_stack.back()) : nil;
 
-  // shrink stack to base pointer + 1 (for return value)
-  f.op_stack.resize(frame.bp + 1);
+  f.op_stack.resize(frame.bp + (keep_result ? 1 : 0));
   f.frames.pop_back();
 
   if (f.frames.empty()) {
     f.Kill(ret);
-  } else {
+  } else if (keep_result) {
     // push return value back on stack
     f.op_stack.back() = std::move(ret);
   }
@@ -750,6 +751,13 @@ void VM::ExecuteFiber(Fiber* fib) {
           auto klass = gc_->Allocate<Class>();
           klass->name =
               chunk->const_pool[ins.name_index].Get_if<String>()->str_;
+          for (int i = 0; i < ins.nproperty; i++) {
+            Value setter = pop(fib->op_stack);
+            Value getter = pop(fib->op_stack);
+            std::string name = pop(fib->op_stack).Get_if<String>()->str_;
+            klass->properties.try_emplace(std::move(name),
+                                          Property{getter, setter});
+          }
           for (int i = 0; i < ins.nstaticfn; i++) {
             Function* fn = pop(fib->op_stack).template Get<Function*>();
             std::string name = pop(fib->op_stack).Get_if<String>()->str_;
@@ -767,22 +775,19 @@ void VM::ExecuteFiber(Fiber* fib) {
         case OpCode::GetField: {
           const auto ins = chunk->Read<serilang::GetField>(ip);
           ip += sizeof(ins);
-          Value receiver = pop(fib->op_stack);
+          Value receiver = fib->op_stack.back();
           const std::string& name =
               chunk->const_pool[ins.name_index].Get_if<String>()->str_;
-          TempValue result = nil;
-          result = receiver.Member(name);
-          push(fib->op_stack, AddTrack(std::move(result)));
+          receiver.GetMember(*this, *fib, name);
         } break;
 
         case OpCode::SetField: {
           const auto ins = chunk->Read<serilang::SetField>(ip);
           ip += sizeof(ins);
-          Value val = pop(fib->op_stack);
-          Value receiver = pop(fib->op_stack);
+          Value receiver = fib->op_stack.end()[-2];
           std::string const& name =
               chunk->const_pool[ins.name_index].Get_if<String>()->str_;
-          receiver.SetMember(name, std::move(val));
+          receiver.SetMember(*this, *fib, name);
         } break;
 
         case OpCode::GetItem: {

@@ -94,7 +94,11 @@ class StringMethod : public IObject {
     return std::format("<bound method str.{}>", MethodName());
   }
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override {
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override {
     if (nkwargs != 0) {
       vm.Error(f, std::format("str.{} does not accept keyword arguments",
                               MethodName()));
@@ -144,11 +148,19 @@ class StringMethod : public IObject {
     };
 
     auto return_int = [&](int value) {
+      if (mode == CallResultMode::Discard) {
+        f.op_stack.resize(base);
+        return;
+      }
       f.op_stack.resize(base + 1);
       f.op_stack.back() = Value(value);
     };
 
     auto return_string = [&](std::string value) {
+      if (mode == CallResultMode::Discard) {
+        f.op_stack.resize(base);
+        return;
+      }
       f.op_stack.resize(base + 1);
       String* str = vm.gc_->Allocate<String>(std::move(value));
       f.op_stack.back() = Value(str);
@@ -497,7 +509,7 @@ class StringMethod : public IObject {
 
 // -----------------------------------------------------------------------
 
-TempValue String::Member(std::string_view mem) {
+TempValue String::GetMember(std::string_view mem) {
   if (mem == "substr")
     return std::make_unique<StringMethod>(this, StringMethodKind::Substr);
   if (mem == "prefix")
@@ -533,7 +545,7 @@ TempValue String::Member(std::string_view mem) {
   if (mem == "tonum")
     return std::make_unique<StringMethod>(this, StringMethodKind::ToNum);
 
-  return IObject::Member(mem);
+  return IObject::GetMember(mem);
 }
 
 void String::GetItem(VM& vm, Fiber& f) {

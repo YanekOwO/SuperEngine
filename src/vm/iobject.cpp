@@ -32,7 +32,11 @@ namespace serilang {
 std::string IObject::Str() const { return "<str: ?>"; }
 std::string IObject::Desc() const { return "<desc: ?>"; }
 
-void IObject::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void IObject::Call(VM& vm,
+                   Fiber& f,
+                   uint8_t nargs,
+                   uint8_t nkwargs,
+                   CallResultMode mode) {
   vm.Error(f, '\'' + Desc() + "' object is not callable.");
 }
 
@@ -44,7 +48,7 @@ void IObject::SetItem(VM& vm, Fiber& f) {
   vm.Error(f, '\'' + Desc() + "' object does not support item assignment.");
 }
 
-TempValue IObject::Member(std::string_view mem) {
+TempValue IObject::GetMember(std::string_view mem) {
   throw RuntimeError('\'' + Desc() + "' object has no member '" +
                      std::string(mem) + '\'');
 }
@@ -52,6 +56,16 @@ TempValue IObject::Member(std::string_view mem) {
 void IObject::SetMember(std::string_view mem, Value value) {
   throw RuntimeError('\'' + Desc() +
                      "' object does not support member assignment.");
+}
+
+void IObject::GetMember(VM& vm, Fiber& f, std::string_view mem) {
+  Value result = vm.AddTrack(GetMember(mem));
+  f.op_stack.back() = std::move(result);
+}
+
+void IObject::SetMember(VM& vm, Fiber& f, std::string_view mem) {
+  SetMember(mem, f.op_stack.back());
+  f.op_stack.resize(f.op_stack.size() - 2);
 }
 
 std::size_t IObject::Hash() const {

@@ -114,6 +114,7 @@ std::string FuncDecl::DebugString() const {
 std::string ClassDecl::DebugString() const {
   return "class " + std::string(name);
 }
+std::string PropertyDecl::DebugString() const { return "property " + name; }
 std::string ReturnStmt::DebugString() const { return "return"; }
 std::string YieldStmt::DebugString() const { return "yield"; }
 std::string ThrowStmt::DebugString() const { return "throw"; }
@@ -233,14 +234,26 @@ struct Dumper {
     }
     if constexpr (std::same_as<T, ClassDecl>) {
       for (size_t i = 0; i < x.memfn.size(); ++i) {
-        Dumper dumper(childPrefix,
-                      (i + 1 >= x.memfn.size()) && x.staticfn.empty());
+        Dumper dumper(childPrefix, (i + 1 >= x.memfn.size()) &&
+                                       x.staticfn.empty() &&
+                                       x.properties.empty());
         oss << dumper(x.memfn[i]);
       }
       for (size_t i = 0; i < x.staticfn.size(); ++i) {
-        Dumper dumper(childPrefix, i + 1 >= x.staticfn.size());
+        Dumper dumper(childPrefix,
+                      i + 1 >= x.staticfn.size() && x.properties.empty());
         oss << dumper(x.staticfn[i]);
       }
+      for (size_t i = 0; i < x.properties.size(); ++i) {
+        Dumper dumper(childPrefix, i + 1 >= x.properties.size());
+        oss << dumper(x.properties[i]);
+      }
+    }
+    if constexpr (std::same_as<T, PropertyDecl>) {
+      if (x.getter)
+        oss << x.getter->body->DumpAST("get", childPrefix, !x.setter);
+      if (x.setter)
+        oss << x.setter->body->DumpAST("set", childPrefix, true);
     }
     if constexpr (std::same_as<T, ReturnStmt>) {
       if (x.value)

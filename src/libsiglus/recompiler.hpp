@@ -185,6 +185,7 @@ class Recompiler {
   void emit_elm_node(const elm::Member& nd);
   void emit_elm_node(const elm::Call& nd);
   void emit_elm_node(const elm::Subscript& nd);
+  void emit_elm_node(const elm::SetMember& nd);
 };
 
 }  // namespace libsiglus

@@ -47,18 +47,48 @@ void Code::MarkRoots(GCVisitor& visitor) {
 }
 
 // -----------------------------------------------------------------------
+void Property::MarkRoots(GCVisitor& visitor) {
+  visitor.MarkSub(getter);
+  visitor.MarkSub(setter);
+}
+
+void Property::Get(VM& vm, Fiber& f, std::string_view name) const {
+  if (getter == std::monostate())
+    throw RuntimeError(std::format("property '{}' has no getter", name));
+
+  Value callee = getter;
+  f.op_stack.insert(f.op_stack.end() - 1, callee);
+  callee.Call(vm, f, 1, 0);
+}
+
+void Property::Set(VM& vm, Fiber& f, std::string_view name) const {
+  if (setter == std::monostate())
+    throw RuntimeError(std::format("property '{}' has no setter", name));
+
+  Value callee = setter;
+  f.op_stack.insert(f.op_stack.end() - 2, callee);
+  callee.Call(vm, f, 2, 0, CallResultMode::Discard);
+}
+
+// -----------------------------------------------------------------------
 void Class::MarkRoots(GCVisitor& visitor) {
   for (auto& [k, it] : memfns)
     visitor.MarkSub(it);
   for (auto& [k, it] : fields)
     visitor.MarkSub(it);
+  for (auto& [k, property] : properties)
+    property.MarkRoots(visitor);
 }
 
 std::string Class::Str() const { return Desc(); }
 
 std::string Class::Desc() const { return "<class " + name + '>'; }
 
-void Class::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void Class::Call(VM& vm,
+                 Fiber& f,
+                 uint8_t nargs,
+                 uint8_t nkwargs,
+                 CallResultMode mode) {
   Instance* inst = vm.gc_->Allocate<Instance>(this);
   auto init_it = memfns.find("__init__");
   if (init_it != memfns.cend()) {
@@ -70,12 +100,15 @@ void Class::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
     f.op_stack.insert(base, Value(init_fn));
     // (init, inst, args..., kwargs...)
     // here, we do a manual tail-call
-    init_fn->Call(vm, f, nargs + 1, nkwargs);
+    init_fn->Call(vm, f, nargs + 1, nkwargs, mode);
     // ctors are guaranteed to return the instance
   } else {
     if (nargs != 0 || nkwargs != 0)
       throw RuntimeError(Str() + " takes no arguments");
-    f.op_stack.back() = Value(inst);
+    if (mode == CallResultMode::Keep)
+      f.op_stack.back() = Value(inst);
+    else
+      f.op_stack.pop_back();
   }
 }
 
@@ -92,7 +125,10 @@ std::string Instance::Str() const { return Desc(); }
 
 std::string Instance::Desc() const { return '<' + klass->name + " object>"; }
 
-TempValue Instance::Member(std::string_view mem) {
+TempValue Instance::GetMember(std::string_view mem) {
+  if (klass->properties.contains(mem))
+    throw RuntimeError(
+        std::format("property '{}' requires VM member access", mem));
   {
     auto it = fields.find(mem);
     if (it != fields.cend())
@@ -114,7 +150,24 @@ TempValue Instance::Member(std::string_view mem) {
 }
 
 void Instance::SetMember(std::string_view mem, Value val) {
+  if (klass->properties.contains(mem))
+    throw RuntimeError(
+        std::format("property '{}' requires VM member access", mem));
   fields[std::string(mem)] = std::move(val);
+}
+
+void Instance::GetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto it = klass->properties.find(mem); it != klass->properties.end())
+    it->second.Get(vm, f, mem);
+  else
+    IObject::GetMember(vm, f, mem);
+}
+
+void Instance::SetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto it = klass->properties.find(mem); it != klass->properties.end())
+    it->second.Set(vm, f, mem);
+  else
+    IObject::SetMember(vm, f, mem);
 }
 
 void Instance::GetItem(VM& vm, Fiber& f) {
@@ -142,7 +195,7 @@ void Instance::SetItem(VM& vm, Fiber& f) {
   }
 
   f.op_stack.insert(f.op_stack.end() - 3, Value(it->second));
-  it->second->Call(vm, f, 3, 0);
+  it->second->Call(vm, f, 3, 0, CallResultMode::Discard);
   // (..., __setitem__, inst, idx, val) -> (...)
 }
 
@@ -152,13 +205,19 @@ void NativeClass::MarkRoots(GCVisitor& visitor) {
     visitor.MarkSub(it);
   for (auto& it : gc_roots)
     visitor.MarkSub(it);
+  for (auto& [k, property] : properties)
+    property.MarkRoots(visitor);
 }
 
 std::string NativeClass::Str() const { return Desc(); }
 
 std::string NativeClass::Desc() const { return "<native class " + name + '>'; }
 
-void NativeClass::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void NativeClass::Call(VM& vm,
+                       Fiber& f,
+                       uint8_t nargs,
+                       uint8_t nkwargs,
+                       CallResultMode mode) {
   NativeInstance* inst = vm.gc_->Allocate<NativeInstance>(this);
 
   auto init_it = methods.find("__init__");
@@ -169,14 +228,19 @@ void NativeClass::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
     *base = Value(inst);
     f.op_stack.insert(base, init_fn);
     // (__init__, inst, args, ...)
-    init_fn.Call(vm, f, nargs + 1, nkwargs);
+    init_fn.Call(vm, f, nargs + 1, nkwargs, mode);
+    if (mode == CallResultMode::Discard)
+      return;
     // -> (nil)
   } else {
     if (nargs != 0 || nkwargs != 0)
       throw RuntimeError(Str() + " takes no arguments");
   }
 
-  f.op_stack.back() = Value(inst);  // -> (inst)
+  if (mode == CallResultMode::Keep)
+    f.op_stack.back() = Value(inst);  // -> (inst)
+  else
+    f.op_stack.pop_back();
 }
 
 // -----------------------------------------------------------------------
@@ -199,7 +263,10 @@ std::string NativeInstance::Desc() const {
   return "<" + klass->name + " object>";
 }
 
-TempValue NativeInstance::Member(std::string_view mem) {
+TempValue NativeInstance::GetMember(std::string_view mem) {
+  if (klass->properties.contains(mem))
+    throw RuntimeError(
+        std::format("property '{}' requires VM member access", mem));
   if (auto it = klass->methods.find(mem); it != klass->methods.cend()) {
     Value val = it->second;
     if (IObject* obj = val.Get_if<IObject>()) {
@@ -212,6 +279,27 @@ TempValue NativeInstance::Member(std::string_view mem) {
 
   throw RuntimeError('\'' + Desc() + "' object has no member '" +
                      std::string(mem) + '\'');
+}
+
+void NativeInstance::SetMember(std::string_view mem, Value value) {
+  if (klass->properties.contains(mem))
+    throw RuntimeError(
+        std::format("property '{}' requires VM member access", mem));
+  IObject::SetMember(mem, std::move(value));
+}
+
+void NativeInstance::GetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto it = klass->properties.find(mem); it != klass->properties.end())
+    it->second.Get(vm, f, mem);
+  else
+    IObject::GetMember(vm, f, mem);
+}
+
+void NativeInstance::SetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto it = klass->properties.find(mem); it != klass->properties.end())
+    it->second.Set(vm, f, mem);
+  else
+    IObject::SetMember(vm, f, mem);
 }
 
 void NativeInstance::GetItem(VM& vm, Fiber& f) {
@@ -236,7 +324,7 @@ void NativeInstance::SetItem(VM& vm, Fiber& f) {
   }
 
   f.op_stack.insert(f.op_stack.end() - 3, callee->second);
-  f.op_stack.end()[-4].Call(vm, f, 3, 0);
+  f.op_stack.end()[-4].Call(vm, f, 3, 0, CallResultMode::Discard);
 }
 
 // -----------------------------------------------------------------------
@@ -251,6 +339,8 @@ void Fiber::MarkRoots(GCVisitor& visitor) {
     visitor.MarkSub(it);
 
   for (auto& it : op_stack)
+    visitor.MarkSub(it);
+  for (auto& it : native_call_roots)
     visitor.MarkSub(it);
   for (auto& it : frames) {
     visitor.MarkSub(it.fn);
@@ -346,7 +436,7 @@ std::string Module::Str() const { return "<module " + name + ">"; }
 
 std::string Module::Desc() const { return "<module " + name + ">"; }
 
-TempValue Module::Member(std::string_view mem) {
+TempValue Module::GetMember(std::string_view mem) {
   std::string mem_str(mem);
   auto it = globals->find(mem_str);
   if (it == globals->cend())
@@ -374,7 +464,22 @@ std::string NativeFunction::Desc() const {
 
 void NativeFunction::MarkRoots(GCVisitor& visitor) {}
 
-void NativeFunction::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void NativeFunction::Call(VM& vm,
+                          Fiber& f,
+                          uint8_t nargs,
+                          uint8_t nkwargs,
+                          CallResultMode mode) {
+  const size_t base = f.op_stack.size() - nargs - 2 * nkwargs - 1;
+  // Bindings consume self and arguments before entering C++ code. Retain them
+  // through the callback, including callbacks that explicitly collect garbage.
+  struct NativeRoots {
+    Fiber& fiber;
+    size_t previous_size;
+    ~NativeRoots() { fiber.native_call_roots.resize(previous_size); }
+  } roots{f, f.native_call_roots.size()};
+  f.native_call_roots.insert(f.native_call_roots.end(),
+                             f.op_stack.begin() + base, f.op_stack.end());
+
   TempValue retval;
   try {
     retval = std::invoke(fn_, vm, f, nargs, nkwargs);
@@ -385,7 +490,10 @@ void NativeFunction::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
   } catch (...) {
     throw RuntimeError("native function failed with a non-standard exception");
   }
-  f.op_stack.back() = vm.AddTrack(std::move(retval));
+  if (mode == CallResultMode::Keep)
+    f.op_stack.back() = vm.AddTrack(std::move(retval));
+  else
+    f.op_stack.resize(base);
 }
 
 // -----------------------------------------------------------------------
@@ -405,12 +513,16 @@ std::string BoundMethod::Str() const { return Desc(); }
 
 std::string BoundMethod::Desc() const { return "<bound method>"; }
 
-void BoundMethod::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void BoundMethod::Call(VM& vm,
+                       Fiber& f,
+                       uint8_t nargs,
+                       uint8_t nkwargs,
+                       CallResultMode mode) {
   size_t base = f.op_stack.size() - nargs - 2 * nkwargs - 1;
   f.op_stack[base] = method;
   f.op_stack.insert(f.op_stack.begin() + base + 1, additional_args.cbegin(),
                     additional_args.cend());
-  method.Call(vm, f, nargs + additional_args.size(), nkwargs);
+  method.Call(vm, f, nargs + additional_args.size(), nkwargs, mode);
 }
 
 }  // namespace serilang

@@ -202,7 +202,11 @@ bool Value::IsTruthy() const {
 
 ObjType Value::Type() const { return TypeOf(*this); }
 
-void Value::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
+void Value::Call(VM& vm,
+                 Fiber& f,
+                 uint8_t nargs,
+                 uint8_t nkwargs,
+                 CallResultMode mode) {
   std::visit(
       [&](auto& x) {
         using T = std::decay_t<decltype(x)>;
@@ -211,7 +215,7 @@ void Value::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
           ;
 
         else if constexpr (std::same_as<T, IObject*>)
-          x->Call(vm, f, nargs, nkwargs);
+          x->Call(vm, f, nargs, nkwargs, mode);
 
         else
           throw RuntimeError('\'' + Desc() + "' object is not callable.");
@@ -219,7 +223,7 @@ void Value::Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) {
       val_);
 }
 
-TempValue Value::Member(std::string_view mem) {
+TempValue Value::GetMember(std::string_view mem) {
   return std::visit(
       [&](auto& x) -> TempValue {
         using T = std::decay_t<decltype(x)>;
@@ -228,7 +232,7 @@ TempValue Value::Member(std::string_view mem) {
           ;
 
         else if constexpr (std::same_as<T, IObject*>)
-          return x->Member(mem);
+          return x->GetMember(mem);
 
         else
           throw RuntimeError('\'' + Desc() + "' object has no member '" +
@@ -253,6 +257,24 @@ void Value::SetMember(std::string_view mem, Value value) {
                              "' object does not support member assignment.");
       },
       val_);
+}
+
+void Value::GetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto* object = Get_if<IObject>()) {
+    object->GetMember(vm, f, mem);
+    return;
+  }
+  throw RuntimeError('\'' + Desc() + "' object has no member '" +
+                     std::string(mem) + '\'');
+}
+
+void Value::SetMember(VM& vm, Fiber& f, std::string_view mem) {
+  if (auto* object = Get_if<IObject>()) {
+    object->SetMember(vm, f, mem);
+    return;
+  }
+  throw RuntimeError('\'' + Desc() +
+                     "' object does not support member assignment.");
 }
 
 void Value::GetItem(VM& vm, Fiber& f) {

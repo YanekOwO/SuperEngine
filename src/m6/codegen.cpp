@@ -212,7 +212,7 @@ void CodeGenerator::emit_expr(std::shared_ptr<ExprAST> n) {
     n->Apply([&](auto&& x) { emit_expr_node(x); });
 }
 
-void CodeGenerator::emit_expr_node(const NilLiteral& m) {
+void CodeGenerator::emit_expr_node(const NilLiteral&) {
   emit_const(std::monostate());
 }
 
@@ -435,38 +435,42 @@ void CodeGenerator::emit_stmt_node(const BlockStmt& s) {
   --scope_depth_;
 }
 
-bool CodeGenerator::emit_function(const FuncDecl& fn, CompileMode nested_mode) {
+bool CodeGenerator::emit_function(const FuncDecl& fn,
+                                  CompileMode nested_mode,
+                                  bool implicit_parameters) {
   // compile body with a fresh compiler
   CodeGenerator nested(gc_, repl_mode_);
   nested.SetChunk(gc_->Allocate<serilang::Code>());
   nested.scope_heuristic_ = scope_heuristic_;
   nested.mode_ = nested_mode;
 
-  const auto propagate_nested_errors = [&]() {
+  const auto propagate_nested_errors = [&] {
     errors_.insert(errors_.end(), nested.errors_.begin(), nested.errors_.end());
-    return false;
   };
 
   if (!nested.add_local(fn.name))
-    return propagate_nested_errors();
-  for (auto& p : fn.params)
+    return propagate_nested_errors(), false;
+  for (auto& p : fn.params) {
+    if (implicit_parameters)
+      nested.scope_heuristic_.erase(p);
     if (!nested.add_local(p))
-      return propagate_nested_errors();
+      return propagate_nested_errors(), false;
+  }
   for (auto& p : fn.default_params)
     if (!nested.add_local(p.first))
-      return propagate_nested_errors();
+      return propagate_nested_errors(), false;
   if (!fn.var_arg.empty())
     if (!nested.add_local(fn.var_arg))
-      return propagate_nested_errors();
+      return propagate_nested_errors(), false;
   if (!fn.kw_arg.empty())
     if (!nested.add_local(fn.kw_arg))
-      return propagate_nested_errors();
+      return propagate_nested_errors(), false;
 
   nested.emit_stmt(fn.body);
   nested.emit_return();
 
   if (!nested.Ok())
-    return propagate_nested_errors();
+    return propagate_nested_errors(), false;
 
   emit_const(nested.GetChunk());
   for (auto& p : fn.default_params) {
@@ -513,6 +517,23 @@ void CodeGenerator::emit_stmt_node(const FuncDecl& fn) {
 }
 
 void CodeGenerator::emit_stmt_node(const ClassDecl& cd) {
+  bool ok = true;
+  if (cd.memfn.size() > std::numeric_limits<uint16_t>::max()) {
+    AddError("too many member functions in class", cd.name_loc);
+    ok = false;
+  }
+  if (cd.staticfn.size() > std::numeric_limits<uint16_t>::max()) {
+    AddError("too many static functions in class", cd.name_loc);
+    ok = false;
+  }
+  if (cd.properties.size() > std::numeric_limits<uint16_t>::max()) {
+    AddError("too many properties in class", cd.name_loc);
+    ok = false;
+  }
+  if (!ok)
+    return;
+
+  // class member functions
   for (auto& m : cd.memfn) {
     std::string const& name = m.name;
     emit(sr::Push{constant(name)});
@@ -520,14 +541,39 @@ void CodeGenerator::emit_stmt_node(const ClassDecl& cd) {
             m, name == "__init__" ? CompileMode::Ctor : CompileMode::Function))
       return;
   }
+
+  // class static functions
   for (auto& m : cd.staticfn) {
     emit(sr::Push{constant(m.name)});
     if (!emit_function(m))
       return;
   }
+
+  // class properties
+  for (const auto& property : cd.properties) {
+    emit_const(property.name);
+
+    if (property.getter) {
+      if (!emit_function(*property.getter, CompileMode::Function,
+                         /*implicit_parameters=*/true))
+        return;
+    } else {
+      emit_const(std::monostate());
+    }
+
+    if (property.setter) {
+      if (!emit_function(*property.setter, CompileMode::Function,
+                         /*implicit_parameters=*/true))
+        return;
+    } else {
+      emit_const(std::monostate());
+    }
+  }
+
   emit(sr::MakeClass{intern_name(cd.name),
                      static_cast<uint16_t>(cd.memfn.size()),
-                     static_cast<uint16_t>(cd.staticfn.size())});
+                     static_cast<uint16_t>(cd.staticfn.size()),
+                     static_cast<uint16_t>(cd.properties.size())});
   emit(sr::StoreGlobal{intern_name(cd.name)});
 }
 

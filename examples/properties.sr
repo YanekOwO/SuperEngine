@@ -1,0 +1,25 @@
+// A property is accessed like a field. Its accessors receive self implicitly;
+// the setter also receives the assigned value as value.
+class Counter {
+  fn __init__(self, initial = 0) { self.count = initial; }
+
+  property count {
+    get { return self._count; }
+    set {
+      if(value < 0) throw "count must be nonnegative";
+      self._count = value;
+    }
+  }
+
+  // A getter-only property is read-only.
+  property doubled { get { return self.count * 2; } }
+
+  // A setter-only property is write-only.
+  property reset { set { self.count = value; } }
+}
+
+counter = Counter(2);
+counter.count += 3;
+print(counter.count, counter.doubled); // 5 10
+counter.reset = 1;
+print(counter.count); // 1

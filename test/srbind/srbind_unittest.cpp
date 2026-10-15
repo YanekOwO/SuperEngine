@@ -24,6 +24,8 @@
 
 #include <gtest/gtest.h>
 
+#include "m6/compiler_pipeline.hpp"
+#include "m6/source_buffer.hpp"
 #include "srbind/srbind.hpp"
 
 #include "utilities/string_utilities.hpp"
@@ -70,6 +72,15 @@ class SrbindTest : public ::testing::Test {
     return Value(str);
   }
 
+  void RunScript(std::string source) {
+    m6::CompilerPipeline pipeline(gc, false);
+    pipeline.compile(
+        m6::SourceBuffer::Create(std::move(source), "<SrbindTest>"));
+    if (!pipeline.Ok())
+      throw std::runtime_error(pipeline.FormatErrors());
+    std::ignore = vm.Evaluate(pipeline.Get());
+  }
+
   // Helper: push a callee and args on the fiber stack and invoke the callee.
   // Layout: [callee, pos0, pos1, ..., k1, v1, k2, v2, ...]
   Value CallCallee(
@@ -102,13 +113,13 @@ class SrbindTest : public ::testing::Test {
 
   // Helper: get a member value
   Value GetMember(IObject* receiver, std::string_view item) {
-    TempValue tval = receiver->Member(item);
+    TempValue tval = receiver->GetMember(item);
     return gc->TrackValue(std::move(tval));
   }
 
   template <typename T>
   auto get_as(NativeInstance* inst, const char* item) -> std::add_pointer_t<T> {
-    TempValue tval = inst->Member(item);
+    TempValue tval = inst->GetMember(item);
     Value val = gc->TrackValue(std::move(tval));
     auto* r = val.template Get_if<T>();
     if (!r)
@@ -887,6 +898,215 @@ TEST_F(SrbindTest, Module_BindInstance_UniquePtrTransfersOwnership) {
 
   vm.globals_->clear();
   vm.last_ = Value();
+  vm.CollectGarbage();
+  EXPECT_EQ(LifetimeTracked::aliveCount(), 0);
+}
+
+TEST_F(SrbindTest, ClassPropertiesUseOrdinaryMemberAccess) {
+  module_ globals_mod(gc.get(), vm.globals_.get());
+  class_<B1> counter(globals_mod, "Counter");
+  counter.def(init<int>())
+      .prop("value", &B1::val, &B1::set)
+      .prop_r("readonly", &B1::val)
+      .prop_w("writeonly", &B1::set);
+
+  ASSERT_NO_THROW(RunScript(R"(
+    counter = Counter(7);
+    initial = counter.value;
+    counter.value = 19;
+    updated = counter.readonly;
+    counter.writeonly = 23;
+    final_value = counter.value;
+    try { counter.readonly = 30; } catch (e) { write_error = e; }
+    try { ignored = counter.writeonly; } catch (e) { read_error = e; }
+    after_errors = counter.value;
+  )"));
+  EXPECT_EQ(vm.globals_->at("initial"), 7);
+  EXPECT_EQ(vm.globals_->at("updated"), 19);
+  EXPECT_EQ(vm.globals_->at("final_value"), 23);
+  EXPECT_EQ(vm.globals_->at("after_errors"), 23);
+  EXPECT_EQ(vm.globals_->at("write_error").Str(),
+            "property 'readonly' has no setter");
+  EXPECT_EQ(vm.globals_->at("read_error").Str(),
+            "property 'writeonly' has no getter");
+}
+
+TEST_F(SrbindTest, BoundInstancePropertiesUseSelfFirstCallables) {
+  SingletonCounter counter{.value = 5};
+  int reads = 0;
+  int writes = 0;
+  module_ globals_mod(gc.get(), vm.globals_.get());
+  globals_mod.bind_instance("counter", counter)
+      .prop(
+          "value",
+          [&](const SingletonCounter* self) {
+            ++reads;
+            return self->value;
+          },
+          [&](SingletonCounter* self, int value) {
+            ++writes;
+            self->value = value;
+            return -999;  // Assignment discards an accessor's return value.
+          })
+      .prop_r("readonly", &SingletonCounter::get)
+      .prop_w(
+          "writeonly",
+          [](SingletonCounter* self, int value) { self->value = value; });
+  globals_mod.def("stack_size", [](Fiber& fiber) {
+    return static_cast<int>(fiber.op_stack.size());
+  });
+
+  ASSERT_NO_THROW(RunScript(R"(
+    stack_before = stack_size();
+    initial = counter.value;
+    counter.value = 11;
+    counter.value = counter.value + 3;
+    updated = counter.readonly;
+    counter.writeonly = 17;
+    final_value = counter.value;
+    stack_after = stack_size();
+  )"));
+  EXPECT_EQ(vm.globals_->at("initial"), 5);
+  EXPECT_EQ(vm.globals_->at("updated"), 14);
+  EXPECT_EQ(vm.globals_->at("final_value"), 17);
+  EXPECT_EQ(vm.globals_->at("stack_before"), vm.globals_->at("stack_after"));
+  EXPECT_EQ(counter.value, 17);
+  EXPECT_EQ(reads, 3);
+  EXPECT_EQ(writes, 2);
+}
+
+TEST_F(SrbindTest, NativePropertiesInjectVmAndFiber) {
+  SingletonCounter counter{.value = 8};
+  Fiber* accessor_fiber = nullptr;
+  module_ globals_mod(gc.get(), vm.globals_.get());
+  globals_mod.bind_instance("counter", counter)
+      .prop(
+          "value",
+          [&](const SingletonCounter* self, VM& got_vm, Fiber& got_fiber) {
+            EXPECT_EQ(&got_vm, &vm);
+            EXPECT_EQ(&got_fiber, accessor_fiber);
+            return self->value;
+          },
+          [&](SingletonCounter* self, VM& got_vm, Fiber& got_fiber, int value) {
+            EXPECT_EQ(&got_vm, &vm);
+            accessor_fiber = &got_fiber;
+            self->value = value;
+          });
+
+  ASSERT_NO_THROW(RunScript("counter.value = 42; result = counter.value;"));
+  EXPECT_NE(accessor_fiber, nullptr);
+  EXPECT_EQ(vm.globals_->at("result"), 42);
+}
+
+TEST_F(SrbindTest, NativePropertyErrorsCanBeCaughtAndAccessCanResume) {
+  SingletonCounter counter{.value = 6};
+  module_ globals_mod(gc.get(), vm.globals_.get());
+  globals_mod.bind_instance("counter", counter)
+      .prop("value", &SingletonCounter::get,
+                    [](SingletonCounter* self, int value) {
+                      if (value < 0)
+                        throw std::runtime_error("negative value rejected");
+                      self->value = value;
+                    })
+      .prop_r("failure", [](const SingletonCounter*) -> int {
+        throw std::runtime_error("getter failed");
+      });
+
+  ASSERT_NO_THROW(RunScript(R"(
+    try { counter.value = "wrong type"; } catch (e) { type_error = e; }
+    try { counter.value = -1; } catch (e) { setter_error = e; }
+    try { ignored = counter.failure; } catch (e) { getter_error = e; }
+    counter.value = 24;
+    result = counter.value;
+  )"));
+  EXPECT_FALSE(vm.globals_->at("type_error").Str().empty());
+  EXPECT_EQ(vm.globals_->at("setter_error").Str(), "negative value rejected");
+  EXPECT_EQ(vm.globals_->at("getter_error").Str(), "getter failed");
+  EXPECT_EQ(vm.globals_->at("result"), 24);
+}
+
+TEST_F(SrbindTest, PropertyBindingsRejectInvalidAccessors) {
+  class_<SingletonCounter> counter(mod, "Counter");
+  auto getter = &SingletonCounter::get;
+  auto setter = [](SingletonCounter* self, int value) { self->value = value; };
+  auto variadic_getter = [](const SingletonCounter*, std::vector<Value>) {
+    return 0;
+  };
+  auto keyword_setter = [](SingletonCounter*, int,
+                           std::unordered_map<std::string, Value>) {};
+
+  EXPECT_THROW(counter.prop("empty", nullptr, nullptr), type_error);
+  EXPECT_THROW(counter.prop_r("getter_with_value", setter),
+               type_error);
+  EXPECT_THROW(counter.prop_w("setter_without_value", getter),
+               type_error);
+  EXPECT_THROW(counter.prop_r("variadic", variadic_getter),
+               type_error);
+  EXPECT_THROW(counter.prop_w("keywords", keyword_setter),
+               type_error);
+  int (SingletonCounter::*null_getter)() const = nullptr;
+  EXPECT_THROW(counter.prop_r("null_getter", null_getter),
+               type_error);
+  EXPECT_TRUE(counter.native_class()->properties.empty());
+
+  EXPECT_NO_THROW(counter.prop("read", getter, nullptr));
+  EXPECT_NO_THROW(counter.prop("write", nullptr, setter));
+}
+
+TEST_F(SrbindTest, PropertyBindingsRejectMemberNameCollisions) {
+  class_<SingletonCounter> counter(mod, "Counter");
+  auto getter = &SingletonCounter::get;
+  counter.def("method", getter).prop_r("value", getter);
+
+  EXPECT_THROW(counter.prop_r("method", getter), type_error);
+  EXPECT_THROW(counter.prop_r("value", getter), type_error);
+  EXPECT_THROW(counter.def("value", getter), type_error);
+  EXPECT_THROW(counter.def_static("value", [] { return 0; }), type_error);
+  EXPECT_NO_THROW(counter.def("method", getter));
+
+  SingletonCounter value;
+  auto instance = mod.bind_instance("instance", value);
+  instance.prop_r("value", getter).def("method", getter);
+  EXPECT_THROW(instance.def("value", getter), type_error);
+  EXPECT_THROW(instance.prop_r("method", getter), type_error);
+  EXPECT_THROW(instance.prop_r("value", getter), type_error);
+  EXPECT_NO_THROW(instance.def("method", getter));
+
+  class_<SingletonCounter> constructor(mod, "Constructor");
+  constructor.prop_r("__init__", getter);
+  EXPECT_THROW(constructor.def(init<>()), type_error);
+  EXPECT_THROW(constructor.def(init([] { return new SingletonCounter; })),
+               type_error);
+}
+
+TEST_F(SrbindTest, PropertyAccessorsRootTemporaryReceiversAndValuesDuringGc) {
+  LifetimeTracked::aliveCount() = 0;
+  int assigned_value = 0;
+  module_ globals_mod(gc.get(), vm.globals_.get());
+  class_<LifetimeTracked> tracked(globals_mod, "Tracked");
+  tracked.def(init<int>())
+      .prop(
+          "value",
+          [](const LifetimeTracked* self, VM& got_vm) {
+            got_vm.CollectGarbage();
+            EXPECT_EQ(LifetimeTracked::aliveCount(), 1);
+            return self->value;
+          },
+          [&](LifetimeTracked* self, VM& got_vm, Value source) {
+            got_vm.CollectGarbage();
+            EXPECT_EQ(LifetimeTracked::aliveCount(), 2);
+            auto* instance = source.Get_if<NativeInstance>();
+            ASSERT_NE(instance, nullptr);
+            self->value = instance->GetForeign<LifetimeTracked>()->value;
+            assigned_value = self->value;
+          });
+
+  ASSERT_NO_THROW(RunScript(R"(
+    result = Tracked(21).value;
+    Tracked(0).value = Tracked(37);
+  )"));
+  EXPECT_EQ(vm.globals_->at("result"), 21);
+  EXPECT_EQ(assigned_value, 37);
   vm.CollectGarbage();
   EXPECT_EQ(LifetimeTracked::aliveCount(), 0);
 }

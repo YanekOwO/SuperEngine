@@ -389,10 +389,11 @@ void BindFrameActions(SiglusMachine& runtime) {
       sb::vararg);
   action_class.def("end", &FrameActionHandle::End);
   action_class.def("is_end_action", &FrameActionHandle::IsEndAction);
-  action_class.def("counter", [make_counter = runtime.make_counter](
-                                  FrameActionHandle* action) {
-    return make_counter(action->Resolve().GetCounter());
-  });
+  action_class.prop_r(
+      "counter",
+      [make_counter = runtime.make_counter](FrameActionHandle* action) {
+        return make_counter(action->Resolve().GetCounter());
+      });
   list_class.def("__getitem__", &FrameActionListHandle::Get, sb::arg("index"));
   list_class.def("size", &FrameActionListHandle::Size);
   list_class.def("resize", &FrameActionListHandle::Resize, sb::arg("size"));

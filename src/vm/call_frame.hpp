@@ -44,6 +44,7 @@ struct CallFrame {
   Function* fn = nullptr;
   uint32_t ip = 0;  // index into chunk->code
   size_t bp = 0;    // base pointer into fiber stack
+  CallResultMode result_mode = CallResultMode::Keep;
   std::vector<ExceptionHandler> handlers;
   std::vector<std::optional<Value>> fast_locals;
 };

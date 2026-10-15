@@ -162,21 +162,17 @@ void BindMask(SiglusMachine& runtime) {
         mask->Get().Create(std::move(filename), std::move(surface));
       },
       sb::arg("filename"));
-  mask_class.def("x",
-                 [](const MaskHandle* mask) { return mask->Get().Param().x; });
-  mask_class.def("set_x", [](MaskHandle* mask, int value) {
-    mask->Get().Param().x = value;
-  });
-  mask_class.def("y",
-                 [](const MaskHandle* mask) { return mask->Get().Param().y; });
-  mask_class.def("set_y", [](MaskHandle* mask, int value) {
-    mask->Get().Param().y = value;
-  });
+  mask_class.prop(
+      "x", [](const MaskHandle* mask) { return mask->Get().Param().x; },
+      [](MaskHandle* mask, int value) { mask->Get().Param().x = value; });
+  mask_class.prop(
+      "y", [](const MaskHandle* mask) { return mask->Get().Param().y; },
+      [](MaskHandle* mask, int value) { mask->Get().Param().y = value; });
   mask_class.add_gc_root(event_class);
-  mask_class.def("x_eve", [event_class, event](MaskHandle* mask) mutable {
+  mask_class.prop_r("x_eve", [event_class, event](MaskHandle* mask) mutable {
     return sr::Value(event_class.make_inst(*mask, &Mask::Parameters::x, event));
   });
-  mask_class.def("y_eve", [event_class, event](MaskHandle* mask) mutable {
+  mask_class.prop_r("y_eve", [event_class, event](MaskHandle* mask) mutable {
     return sr::Value(event_class.make_inst(*mask, &Mask::Parameters::y, event));
   });
 

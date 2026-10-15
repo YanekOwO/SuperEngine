@@ -27,7 +27,6 @@
 #include "mock_clock.hpp"
 
 #include "vm/dict.hpp"
-#include "vm/disassembler.hpp"
 #include "vm/function.hpp"
 #include "vm/future.hpp"
 #include "vm/instruction.hpp"
@@ -77,7 +76,7 @@ class VMTest : public ::testing::Test {
       std::string_view item,
       const std::vector<Value>& pos = {},
       const std::vector<std::pair<std::string, Value>>& kwargs = {}) {
-    TempValue method = receiver->Member(item);
+    TempValue method = receiver->GetMember(item);
     Value callee = gc->TrackValue(std::move(method));
 
     auto* fiber = gc->Allocate<Fiber>();
@@ -97,6 +96,26 @@ class VMTest : public ::testing::Test {
   }
 
   Value run_and_get(Code* chunk) { return vm.Evaluate(chunk); }
+
+  Code* CatchPropertyAccess(Value receiver, bool assign = true) {
+    auto* code = gc->Allocate<Code>();
+    code->const_pool = value_vector(receiver, 5, "value", 77, 0);
+    code->Append(Push{3});
+    const size_t try_begin = code->code.size();
+    code->Append(TryBegin{});
+    code->Append(Push{0});
+    if (assign)
+      append_ins(code, {Push{1}, SetField{2}});
+    else
+      append_ins(code, {GetField{2}, Pop{}});
+    append_ins(code, {TryEnd{}, Push{4}, Return{}});
+    const size_t handler = code->code.size();
+    append_ins(code, {Pop{}, Return{}});
+    const size_t try_body = try_begin + 1 + sizeof(TryBegin);
+    code->Write<int32_t>(try_begin + 1,
+                         static_cast<int32_t>(handler - try_body));
+    return code;
+  }
 };
 
 TEST_F(VMTest, BinaryAdd) {
@@ -182,9 +201,9 @@ TEST_F(VMTest, ConditionalJump) {
   chunk->const_pool = value_vector(1.0, 2.0, 111.0, 222.0);
 
   //  0 1 < 2 ?
-  //  if‑true  +2   (skip the ‘else’ push)
+  //  if-true  +2   (skip the ‘else’ push)
   //  push 222
-  //  jump +1 (skip then‑push)
+  //  jump +1 (skip then-push)
   //  push 111
   //  return
   append_ins(chunk, {Push{0}, Push{1}, BinaryOp{Op::Less}, JumpIfFalse{10},
@@ -228,6 +247,262 @@ TEST_F(VMTest, CallNative) {
   Value out = run_and_get(chunk);
   EXPECT_EQ(call_count, 1);
   EXPECT_EQ(out, std::monostate());
+}
+
+TEST_F(VMTest, BuiltinCallsDiscardTheirResults) {
+  auto* text = gc->Allocate<String>("abc");
+  auto* list = gc->Allocate<List>(value_vector(1));
+  auto* dict = gc->Allocate<Dict>();
+  struct CallCase {
+    IObject* receiver;
+    std::string_view member;
+    std::vector<Value> args;
+  };
+  for (const auto& call :
+       std::vector<CallCase>{{text, "upper", {}},
+                             {text, "len", {}},
+                             {list, "append", value_vector(2)},
+                             {dict, "setdefault", value_vector("a", 3)}}) {
+    Value callee = gc->TrackValue(call.receiver->GetMember(call.member));
+    auto* fiber = gc->Allocate<Fiber>();
+    fiber->op_stack = value_vector(17, callee);
+    fiber->op_stack.insert(fiber->op_stack.end(), call.args.begin(),
+                           call.args.end());
+    callee.Call(vm, *fiber, call.args.size(), 0, CallResultMode::Discard);
+    ASSERT_EQ(fiber->op_stack.size(), 1u);
+    EXPECT_EQ(fiber->op_stack.front(), 17);
+  }
+  ASSERT_EQ(list->items.size(), 2u);
+  EXPECT_EQ(list->items.back(), 2);
+  EXPECT_EQ(dict->map.at(to_value("a")), 3);
+}
+
+TEST_F(VMTest, ScriptPropertyUsesReceiverAndDiscardsSetterReturn) {
+  auto* getter_code = gc->Allocate<Code>();
+  getter_code->fast_locals = {"getter", "self"};
+  getter_code->const_pool = value_vector("_value", 3);
+  append_ins(getter_code,
+             {LoadFast{1}, GetField{0}, Push{1}, BinaryOp{Op::Mul}, Return{}});
+  auto* getter = gc->Allocate<Function>(getter_code);
+  getter->arglist.nparam = 1;
+
+  auto* setter_code = gc->Allocate<Code>();
+  setter_code->fast_locals = {"setter", "self", "value"};
+  setter_code->const_pool = value_vector("_value", 999);
+  append_ins(setter_code,
+             {LoadFast{1}, LoadFast{2}, SetField{0}, Push{1}, Return{}});
+  auto* setter = gc->Allocate<Function>(setter_code);
+  setter->arglist.nparam = 2;
+
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector("Example", "value", getter, setter, 5, 100);
+  append_ins(code, {Push{5}, Push{1}, Push{2}, Push{3}, MakeClass{0, 0, 0, 1},
+                    Call{0, 0}, Dup{}, Push{4}, SetField{1}, GetField{1},
+                    BinaryOp{Op::Add}, Return{}});
+  EXPECT_EQ(run_and_get(code), 115);
+}
+
+TEST_F(VMTest, PropertyAccessorsCannotBeShadowedByInstanceFields) {
+  auto* klass = gc->Allocate<Class>();
+  auto* getter = gc->Allocate<NativeFunction>(
+      "getter", [](VM&, Fiber& fiber, uint8_t nargs, uint8_t) -> Value {
+        EXPECT_EQ(nargs, 1);
+        fiber.op_stack.pop_back();
+        return 42;
+      });
+  klass->properties["value"] = Property{Value(getter), nil};
+  auto* instance = gc->Allocate<Instance>(klass);
+  instance->fields["value"] = 99;
+
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(instance, "value");
+  append_ins(code, {Push{0}, GetField{1}, Return{}});
+  EXPECT_EQ(run_and_get(code), 42);
+  EXPECT_EQ(run_and_get(CatchPropertyAccess(Value(instance))), 77);
+  EXPECT_EQ(instance->fields.at("value"), 99);
+}
+
+TEST_F(VMTest, MissingPropertyGetterIsCatchable) {
+  auto* klass = gc->Allocate<Class>();
+  auto* setter = gc->Allocate<NativeFunction>(
+      "setter", [](VM&, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        fiber.op_stack.resize(fiber.op_stack.size() - 2);
+        return nil;
+      });
+  klass->properties["value"] = Property{nil, Value(setter)};
+  auto* instance = gc->Allocate<Instance>(klass);
+  EXPECT_EQ(run_and_get(CatchPropertyAccess(Value(instance), false)), 77);
+}
+
+TEST_F(VMTest, SetterArgumentFailurePreservesCallerHandlerStack) {
+  auto* setter_code = gc->Allocate<Code>();
+  setter_code->fast_locals = {"setter", "self", "value", "extra"};
+  auto* setter = gc->Allocate<Function>(setter_code);
+  setter->arglist.nparam = 3;
+  auto* klass = gc->Allocate<Class>();
+  klass->properties["value"] = Property{nil, Value(setter)};
+  auto* instance = gc->Allocate<Instance>(klass);
+  EXPECT_EQ(run_and_get(CatchPropertyAccess(Value(instance))), 77);
+}
+
+TEST_F(VMTest, SetterExceptionsPreserveCallerHandlerStack) {
+  auto* setter_code = gc->Allocate<Code>();
+  setter_code->fast_locals = {"setter", "self", "value"};
+  setter_code->const_pool = value_vector("script setter failed");
+  append_ins(setter_code, {Push{0}, Throw{}});
+  auto* script_setter = gc->Allocate<Function>(setter_code);
+  script_setter->arglist.nparam = 2;
+  auto* native_setter = gc->Allocate<NativeFunction>(
+      "setter", [](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        throw RuntimeError("native setter failed");
+      });
+
+  for (Value setter : value_vector(script_setter, native_setter)) {
+    auto* klass = gc->Allocate<Class>();
+    klass->properties["value"] = Property{nil, setter};
+    auto* instance = gc->Allocate<Instance>(klass);
+    EXPECT_EQ(run_and_get(CatchPropertyAccess(Value(instance))), 77);
+  }
+}
+
+TEST_F(VMTest, SuspendedSetterDiscardsResultAfterResuming) {
+  auto* pending = gc->Allocate<Future>();
+  auto gate = pending->promise;
+  auto* setter_code = gc->Allocate<Code>();
+  setter_code->fast_locals = {"setter", "self", "value"};
+  setter_code->const_pool = value_vector(pending, "_value", 999);
+  append_ins(setter_code, {Push{0}, Await{}, Pop{}, LoadFast{1}, LoadFast{2},
+                           SetField{1}, Push{2}, Return{}});
+  auto* setter = gc->Allocate<Function>(setter_code);
+  setter->arglist.nparam = 2;
+  auto* klass = gc->Allocate<Class>();
+  klass->properties["value"] = Property{nil, Value(setter)};
+  auto* instance = gc->Allocate<Instance>(klass);
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(instance, "value", "_value", 7, 3);
+  append_ins(code, {Push{4}, Push{0}, Push{3}, SetField{1}, Push{0},
+                    GetField{2}, BinaryOp{Op::Add}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  auto completion = fiber->completion_promise;
+
+  EXPECT_EQ(vm.Run(std::chrono::milliseconds(1)), nil);
+  ASSERT_EQ(fiber->state, FiberState::Suspended);
+  EXPECT_FALSE(completion->HasResult());
+  vm.CollectGarbage();
+  gate->Resolve(nil);
+  EXPECT_EQ(vm.Run(), 10);
+}
+
+TEST_F(VMTest, NativePropertiesDispatchGettersAndSetters) {
+  auto* klass = gc->Allocate<NativeClass>();
+  auto* instance = gc->Allocate<NativeInstance>(klass);
+  int stored = 0;
+  instance->SetForeign(&stored);
+  auto* getter = gc->Allocate<NativeFunction>(
+      "getter", [](VM&, Fiber& fiber, uint8_t nargs, uint8_t) -> Value {
+        EXPECT_EQ(nargs, 1);
+        auto* self = fiber.op_stack.back().Get_if<NativeInstance>();
+        fiber.op_stack.pop_back();
+        return *self->GetForeign<int>();
+      });
+  auto* setter = gc->Allocate<NativeFunction>(
+      "setter", [](VM&, Fiber& fiber, uint8_t nargs, uint8_t) -> Value {
+        EXPECT_EQ(nargs, 2);
+        int value = fiber.op_stack.back().Get<int>();
+        fiber.op_stack.pop_back();
+        auto* self = fiber.op_stack.back().Get_if<NativeInstance>();
+        fiber.op_stack.pop_back();
+        *self->GetForeign<int>() = value;
+        return 999;
+      });
+  klass->properties["value"] = Property{Value(getter), Value(setter)};
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(instance, "value", 8, 10);
+  append_ins(code, {Push{3}, Push{0}, Push{2}, SetField{1}, Push{0},
+                    GetField{1}, BinaryOp{Op::Add}, Return{}});
+  EXPECT_EQ(run_and_get(code), 18);
+  EXPECT_EQ(stored, 8);
+}
+
+TEST_F(VMTest, ScriptItemAssignmentDiscardsSetterReturn) {
+  auto* setter_code = gc->Allocate<Code>();
+  setter_code->fast_locals = {"setter", "self", "index", "value"};
+  setter_code->const_pool = value_vector("stored", 999);
+  append_ins(setter_code,
+             {LoadFast{1}, LoadFast{3}, SetField{0}, Push{1}, Return{}});
+  auto* setter = gc->Allocate<Function>(setter_code);
+  setter->arglist.nparam = 3;
+  auto* klass = gc->Allocate<Class>();
+  klass->memfns["__setitem__"] = setter;
+  auto* instance = gc->Allocate<Instance>(klass);
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(instance, 0, 8, 42, "stored");
+  append_ins(code, {Push{3}, Push{0}, Push{1}, Push{2}, SetItem{}, Push{0},
+                    GetField{4}, BinaryOp{Op::Add}, Return{}});
+  EXPECT_EQ(run_and_get(code), 50);
+  EXPECT_EQ(instance->fields.at("stored"), 8);
+
+  auto* explicit_call = gc->Allocate<Code>();
+  explicit_call->const_pool = value_vector(instance, "__setitem__", 0, 9);
+  append_ins(explicit_call,
+             {Push{0}, GetField{1}, Push{2}, Push{3}, Call{2, 0}, Return{}});
+  EXPECT_EQ(run_and_get(explicit_call), 999);
+}
+
+TEST_F(VMTest, NativeItemAssignmentDiscardsSetterReturn) {
+  int stored = 0;
+  auto* klass = gc->Allocate<NativeClass>();
+  auto* instance = gc->Allocate<NativeInstance>(klass);
+  auto* setter = gc->Allocate<NativeFunction>(
+      "__setitem__",
+      [&stored, instance](VM&, Fiber& fiber, uint8_t nargs, uint8_t) -> Value {
+        EXPECT_EQ(nargs, 3);
+        stored = fiber.op_stack.back().Get<int>();
+        fiber.op_stack.pop_back();
+        EXPECT_EQ(fiber.op_stack.back(), 0);
+        fiber.op_stack.pop_back();
+        EXPECT_EQ(fiber.op_stack.back(), Value(instance));
+        fiber.op_stack.pop_back();
+        return 999;
+      });
+  klass->methods["__setitem__"] = Value(setter);
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(instance, 0, 8, 42);
+  append_ins(code, {Push{3}, Push{0}, Push{1}, Push{2}, SetItem{}, Return{}});
+  EXPECT_EQ(run_and_get(code), 42);
+  EXPECT_EQ(stored, 8);
+  EXPECT_EQ(CallMember(instance, "__setitem__", value_vector(0, 9)), 999);
+  EXPECT_EQ(stored, 9);
+}
+
+TEST_F(VMTest, NativePropertyRootsTemporaryReceiverDuringGc) {
+  struct Payload {
+    std::shared_ptr<bool> destroyed;
+    ~Payload() { *destroyed = true; }
+  };
+  auto destroyed = std::make_shared<bool>(false);
+  auto* klass = gc->Allocate<NativeClass>();
+  klass->finalize = [](void* ptr) { delete static_cast<Payload*>(ptr); };
+  auto* getter = gc->Allocate<NativeFunction>(
+      "getter", [destroyed](VM& vm, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        fiber.op_stack.pop_back();
+        vm.CollectGarbage();
+        EXPECT_FALSE(*destroyed);
+        return 42;
+      });
+  klass->properties["value"] = Property{Value(getter), nil};
+  auto* create = gc->Allocate<NativeFunction>(
+      "create", [klass, destroyed](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
+        auto* instance = vm.gc_->Allocate<NativeInstance>(klass);
+        instance->SetForeign(new Payload{destroyed});
+        return Value(instance);
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(create, klass, "value");
+  append_ins(code, {Push{0}, Call{0, 0}, GetField{2}, Return{}});
+  EXPECT_EQ(run_and_get(code), 42);
+  vm.CollectGarbage();
+  EXPECT_TRUE(*destroyed);
 }
 
 TEST_F(VMTest, InlineCallbackCompletesFullPrefixWithoutRunningOtherFibers) {

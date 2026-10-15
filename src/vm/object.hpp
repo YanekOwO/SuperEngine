@@ -102,12 +102,22 @@ struct Code final : public IObject {
   }
 };
 
+struct Property {
+  Value getter = nil;
+  Value setter = nil;
+
+  void MarkRoots(GCVisitor& visitor);
+  void Get(VM& vm, Fiber& f, std::string_view name) const;
+  void Set(VM& vm, Fiber& f, std::string_view name) const;
+};
+
 struct Class : public IObject {
   static constexpr inline ObjType objtype = ObjType::Class;
 
   std::string name;
   transparent_hashmap<Function*> memfns;
   transparent_hashmap<Value> fields;
+  transparent_hashmap<Property> properties;
 
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
@@ -117,7 +127,11 @@ struct Class : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override;
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override;
 };
 
 struct Instance : public IObject {
@@ -135,8 +149,10 @@ struct Instance : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  TempValue Member(std::string_view mem) override;
+  TempValue GetMember(std::string_view mem) override;
   void SetMember(std::string_view mem, Value val) override;
+  void GetMember(VM& vm, Fiber& f, std::string_view mem) override;
+  void SetMember(VM& vm, Fiber& f, std::string_view mem) override;
   void GetItem(VM& vm, Fiber& f) override;
   void SetItem(VM& vm, Fiber& f) override;
 };
@@ -159,6 +175,7 @@ struct NativeClass : public IObject {
 
   std::string name;
   transparent_hashmap<Value> methods;
+  transparent_hashmap<Property> properties;
 
   std::vector<Value> gc_roots;
   finalize_fn finalize = nullptr;
@@ -174,7 +191,11 @@ struct NativeClass : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override;
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override;
 };
 
 struct NativeInstance : public IObject {
@@ -203,7 +224,10 @@ struct NativeInstance : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  TempValue Member(std::string_view mem) override;
+  TempValue GetMember(std::string_view mem) override;
+  void SetMember(std::string_view mem, Value value) override;
+  void GetMember(VM& vm, Fiber& f, std::string_view mem) override;
+  void SetMember(VM& vm, Fiber& f, std::string_view mem) override;
   void GetItem(VM& vm, Fiber& f) override;
   void SetItem(VM& vm, Fiber& f) override;
 };
@@ -219,6 +243,8 @@ struct Fiber : public IObject {
 
   std::vector<Value> op_stack;
   std::vector<CallFrame> frames;
+  // Native argument conversion can remove operands before C++ code runs.
+  std::vector<Value> native_call_roots;
   FiberState state;
 
   // Internal promise that represents this fiber's completion.
@@ -274,7 +300,7 @@ struct Module : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  TempValue Member(std::string_view mem) override;
+  TempValue GetMember(std::string_view mem) override;
   void SetMember(std::string_view mem, Value value) override;
 };
 
@@ -299,7 +325,11 @@ class NativeFunction : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) final;
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) final;
 
  private:
   std::string name_;
@@ -323,7 +353,11 @@ struct BoundMethod : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs) override;
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep) override;
 };
 
 }  // namespace serilang

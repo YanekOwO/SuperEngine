@@ -43,7 +43,7 @@ struct String : public IObject {
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
 
-  TempValue Member(std::string_view mem) override;
+  TempValue GetMember(std::string_view mem) override;
   void GetItem(VM& vm, Fiber& f) override;
 
   void MarkRoots(GCVisitor& visitor) override;

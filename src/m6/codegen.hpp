@@ -146,7 +146,8 @@ class CodeGenerator {
   void emit_stmt_node(const std::shared_ptr<ExprAST>& s);
 
   bool emit_function(const FuncDecl& fn,
-                     CompileMode nested_mode = CompileMode::Function);
+                     CompileMode nested_mode = CompileMode::Function,
+                     bool implicit_parameters = false);
   void emit_return(std::shared_ptr<ExprAST> expr = nullptr);
 
   // -- Jump-patching --------------------------------------------------

@@ -25,6 +25,11 @@
 #include <gtest/gtest.h>
 
 #include "libsiglus/recompiler.hpp"
+#include "srbind/module.hpp"
+#include "vm/disassembler.hpp"
+#include "vm/function.hpp"
+#include "vm/list.hpp"
+#include "vm/vm.hpp"
 
 #include <utility>
 #include <variant>
@@ -32,9 +37,11 @@
 
 namespace siglus_test {
 using namespace libsiglus;
+using ::testing::ContainsRegex;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
+using ::testing::Not;
 
 namespace {
 
@@ -102,6 +109,13 @@ elm::AccessChain IndexedProperty(int idx_tmp) {
           {
               elm::Node(Type::IntRef, elm::Subscript{.idx = TmpVal(idx_tmp)}),
           },
+  };
+}
+
+elm::AccessChain ObjectMember(elm::Node member) {
+  return elm::AccessChain{
+      .root = elm::Root(Type::None, std::monostate{}),
+      .nodes = {elm::Node(Type::Object, elm::Member{"obj"}), std::move(member)},
   };
 }
 
@@ -236,6 +250,55 @@ TEST(ResolveFastSlotsTest, AssignmentTargetReadsSubscriptIndexAndSource) {
   ASSERT_TRUE(plan.has_value()) << plan.error();
   EXPECT_THAT(plan->slots, ElementsAre(1, 2, 1));
   EXPECT_EQ(plan->total_fast_locals, 3);
+}
+
+TEST(ResolveFastSlotsTest, PropertySetterCommandReadsValueBeforeWritingResult) {
+  const std::vector<Parser::ParsedToken> tokens = {
+      WriteTemp(0),
+      Tok(token::Command{
+          .elmcode = elm::ElementCode{},
+          .chain = ObjectMember(
+              elm::Node(Type::None, elm::SetMember{"value", TmpVal(0)})),
+          .dst = Tmp(1, Type::None),
+      }),
+      WriteTemp(2),
+  };
+  auto plan = resolve_fast_slots(tokens);
+  ASSERT_TRUE(plan.has_value()) << plan.error();
+  EXPECT_THAT(plan->slots, ElementsAre(1, 2, 1));
+  EXPECT_EQ(plan->total_fast_locals, 3);
+}
+
+TEST(ResolveFastSlotsTest, PropertySetterCommandRejectsUninitializedValue) {
+  const std::vector<Parser::ParsedToken> tokens = {
+      Tok(token::Command{
+          .elmcode = elm::ElementCode{},
+          .chain = ObjectMember(
+              elm::Node(Type::None, elm::SetMember{"value", TmpVal(0)})),
+          .dst = Tmp(1, Type::None),
+      }),
+  };
+  auto plan = resolve_fast_slots(tokens);
+  ASSERT_FALSE(plan.has_value());
+  EXPECT_THAT(plan.error(), HasSubstr("t0 is uninitialized"));
+}
+
+TEST(ResolveFastSlotsTest, BitPropertyAssignmentReadsIndexAndValue) {
+  auto target = ObjectMember(elm::Node(Type::IntList, elm::Member{"b4"}));
+  target.nodes.emplace_back(Type::Int, elm::Subscript{TmpVal(0)});
+  const std::vector<Parser::ParsedToken> tokens = {
+      WriteTemp(0),
+      WriteTemp(1),
+      Tok(token::Assign{
+          .dst_elmcode = elm::ElementCode{},
+          .dst = std::move(target),
+          .src = TmpVal(1),
+      }),
+      WriteTemp(2),
+  };
+  auto plan = resolve_fast_slots(tokens);
+  ASSERT_TRUE(plan.has_value()) << plan.error();
+  EXPECT_THAT(plan->slots, ElementsAre(1, 2, 1));
 }
 
 TEST(RecompilerTest, ExposesUserCommandMetadataAfterCompilation) {

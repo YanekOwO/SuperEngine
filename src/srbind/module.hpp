@@ -107,6 +107,57 @@ constexpr init_factory_t<std::decay_t<F>> init(F&& f) {
 }
 
 namespace detail {
+inline void check_method_name(const serilang::NativeClass* cls,
+                              std::string_view name) {
+  if (cls->properties.contains(name))
+    throw type_error("member '" + std::string(name) +
+                     "' is already registered as a property");
+}
+
+template <class T, class M>
+Value make_property_accessor(serilang::GarbageCollector* gc,
+                             const std::string& name,
+                             M method,
+                             uint32_t arity) {
+  if constexpr (std::same_as<M, std::nullptr_t>) {
+    return serilang::nil;
+  } else {
+    if constexpr (std::is_pointer_v<M> ||
+                  std::is_member_function_pointer_v<M>) {
+      if (method == nullptr)
+        throw type_error("property accessor '" + name + "' is null");
+    }
+    auto spec = parse_method_spec<T, M>();
+    if (spec.nparam != arity || spec.npos != arity || spec.has_vararg ||
+        spec.has_kwarg)
+      throw type_error("property accessor '" + name + "' must take " +
+                       std::to_string(arity) + " value argument(s)");
+    return Value(make_method<T>(gc, name, std::move(method), std::move(spec)));
+  }
+}
+
+template <class T, class Getter, class Setter>
+void register_property(serilang::GarbageCollector* gc,
+                       serilang::NativeClass* cls,
+                       const char* name,
+                       Getter getter,
+                       Setter setter) {
+  if (cls->methods.contains(name) || cls->properties.contains(name))
+    throw type_error("member '" + std::string(name) +
+                     "' is already registered");
+  if constexpr (std::same_as<Getter, std::nullptr_t> &&
+                std::same_as<Setter, std::nullptr_t>)
+    throw type_error("property '" + std::string(name) +
+                     "' requires a getter or setter");
+
+  serilang::Property property{
+      make_property_accessor<T>(gc, std::string(name) + ".get",
+                                std::move(getter), 0),
+      make_property_accessor<T>(gc, std::string(name) + ".set",
+                                std::move(setter), 1)};
+  cls->properties.emplace(name, std::move(property));
+}
+
 // pointer conversion helper
 template <class T, class R>
 static T* convert_factory_return(R&& r) {
@@ -159,11 +210,29 @@ class instance_ {
 
   template <class M, class... A>
   instance_& def(const char* name, M pmf, A&&... a) {
+    detail::check_method_name(cls_, name);
     arglist_spec spec = detail::parse_method_spec<T, M>(std::forward<A>(a)...);
 
     cls_->methods[name] =
         Value(make_method<T>(gc_, name, pmf, std::move(spec)));
     return *this;
+  }
+
+  template <class Getter, class Setter>
+  instance_& prop(const char* name, Getter getter, Setter setter) {
+    detail::register_property<T>(gc_, cls_, name, std::move(getter),
+                                 std::move(setter));
+    return *this;
+  }
+
+  template <class Getter>
+  instance_& prop_r(const char* name, Getter getter) {
+    return prop(name, std::move(getter), nullptr);
+  }
+
+  template <class Setter>
+  instance_& prop_w(const char* name, Setter setter) {
+    return prop(name, nullptr, std::move(setter));
   }
 };
 
@@ -212,6 +281,7 @@ class class_ {
   // __init__ via operator new
   template <class... Args, class... A>
   class_& def(init_t<Args...>, A&&... a) {
+    detail::check_method_name(cls_, "__init__");
     arglist_spec spec = parse_spec<T*(Args...)>(std::forward<A>(a)...);
 
     auto* nf = gc_->Allocate<serilang::NativeFunction>(
@@ -252,6 +322,7 @@ class class_ {
   // Factory signature:  R(Args...) where R is T* or std::unique_ptr<T/Derived>
   template <class F, class... A>
   class_& def(init_factory_t<F> tag, A&&... a) {
+    detail::check_method_name(cls_, "__init__");
     arglist_spec spec = parse_spec<F>(std::forward<A>(a)...);
 
     auto* nf = gc_->Allocate<serilang::NativeFunction>(
@@ -290,6 +361,7 @@ class class_ {
 
   template <class M, class... A>
   class_& def(const char* name, M pmf, A&&... a) {
+    detail::check_method_name(cls_, name);
     arglist_spec spec = detail::parse_method_spec<T, M>(std::forward<A>(a)...);
 
     cls_->methods[name] =
@@ -297,8 +369,28 @@ class class_ {
     return *this;
   }
 
+  // Accessors use the same member-pointer or self-first callable convention
+  // as def(). A getter takes no value arguments; a setter takes one.
+  template <class Getter, class Setter>
+  class_& prop(const char* name, Getter getter, Setter setter) {
+    detail::register_property<T>(gc_, cls_, name, std::move(getter),
+                                 std::move(setter));
+    return *this;
+  }
+
+  template <class Getter>
+  class_& prop_r(const char* name, Getter getter) {
+    return prop(name, std::move(getter), nullptr);
+  }
+
+  template <class Setter>
+  class_& prop_w(const char* name, Setter setter) {
+    return prop(name, nullptr, std::move(setter));
+  }
+
   template <class F, class... A>
   class_& def_static(const char* name, F&& f, A&&... a) {
+    detail::check_method_name(cls_, name);
     cls_->methods[name] = Value(
         make_function(gc_, name, std::forward<F>(f), std::forward<A>(a)...));
     return *this;
@@ -312,6 +404,7 @@ class class_ {
     inst_->SetForeign<T>(obj);
     return inst_;
   }
+
   template <class... A>
   auto inst(std::string_view name, A&&... a) -> instance_<T> {
     auto inst_ = make_inst(std::forward<A>(a)...);

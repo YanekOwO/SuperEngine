@@ -29,6 +29,8 @@
 
 namespace serilang {
 
+enum class CallResultMode { Keep, Discard };
+
 struct Code;
 struct Class;
 struct Instance;

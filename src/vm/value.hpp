@@ -65,11 +65,20 @@ class Value {
 
   ObjType Type() const;
 
-  void Call(VM& vm, Fiber& f, uint8_t nargs, uint8_t nkwargs);
+  void Call(VM& vm,
+            Fiber& f,
+            uint8_t nargs,
+            uint8_t nkwargs,
+            CallResultMode mode = CallResultMode::Keep);
+
   void GetItem(VM& vm, Fiber& f);
   void SetItem(VM& vm, Fiber& f);
-  TempValue Member(std::string_view mem);
+
+  TempValue GetMember(std::string_view mem);
   void SetMember(std::string_view mem, Value value);
+
+  void GetMember(VM& vm, Fiber& f, std::string_view mem);
+  void SetMember(VM& vm, Fiber& f, std::string_view mem);
 
   template <typename T>
   auto Get_if() -> std::add_pointer_t<T> {
