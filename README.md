@@ -83,6 +83,7 @@ Before you begin, ensure you have the following libraries and utilities installe
 - **OpenGL** and **GLEW**.
 - **FreeType**:
   [https://www.freetype.org/](https://www.freetype.org/)
+- **Fontconfig**
 - **GNU gettext**
 - **zlib**
 - **vorbisfile** (part of the Ogg Vorbis audio codec):

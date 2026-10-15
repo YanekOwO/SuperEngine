@@ -1,7 +1,7 @@
 libgtest-dev libgmock-dev libboost-all-dev
 libgl1-mesa-dev libglu1-mesa-dev libglew-dev
 libvorbis-dev libtheora-dev libavformat-dev libavcodec-dev libavutil-dev
-libswscale-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev gettext libtbb-dev
+libswscale-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev libfontconfig1-dev gettext libtbb-dev
 clang-tidy clang-format
 ninja-build ccache
 libjpeg-dev
