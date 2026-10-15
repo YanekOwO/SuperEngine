@@ -53,8 +53,6 @@ namespace fs = std::filesystem;
 
 static const std::set<std::string> HIK_FILETYPES = {"hik", "g00", "pdt"};
 
-std::string default_bgr_name = "";
-
 // Working theory of how this module works: The haikei module is one backing
 // surface and (optionally) a HIK script. Games like AIR and the Maiden Halo
 // demo use just the surface with a combination of bgrMulti and
@@ -68,7 +66,7 @@ struct bgrLoadHaikei_blank : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int sel) {
     GraphicsSystem& graphics = machine.GetSystem().graphics();
     Haikei& haikei = machine.haikei();
-    default_bgr_name = "";
+    machine.GetLocalConfig().reallive.default_bgr_name = "";
     haikei.ClearHikRenderer();
     haikei.set_graphics_background(BACKGROUND_HIK);
 
@@ -91,7 +89,7 @@ struct bgrLoadHaikei_main : RLOpcode<StrConstant_T, IntConstant_T> {
     System& system = machine.GetSystem();
     GraphicsSystem& graphics = system.graphics();
     Haikei& haikei = machine.haikei();
-    default_bgr_name = filename;
+    machine.GetLocalConfig().reallive.default_bgr_name = filename;
     haikei.set_graphics_background(BACKGROUND_HIK);
 
     // bgrLoadHaikei clears the stack.
@@ -199,7 +197,7 @@ struct bgrMulti_1
 
     // May need to use current background.
     if (filename == "???")
-      filename = default_bgr_name;
+      filename = machine.GetLocalConfig().reallive.default_bgr_name;
 
     // Load "filename" as the background.
     std::shared_ptr<const SDLSurface> surface(

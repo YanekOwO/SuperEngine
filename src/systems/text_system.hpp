@@ -26,6 +26,7 @@
 #pragma once
 
 #include "core/event_listener.hpp"
+#include "core/game_config.hpp"
 #include "core/mwnd_config.hpp"
 #include "machine/long_operation.hpp"
 
@@ -40,7 +41,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 class Gameexe;
@@ -59,35 +59,6 @@ class TextWaku;
 class GraphicsObject;
 class ITextSystem;
 class IFont;
-
-// Global variables written to disk.
-struct TextSystemGlobals {
-  TextSystemGlobals();
-  TextSystemGlobals(Gameexe& gexe, const MwndConfig& mwnd_config);
-
-  int auto_mode_base_time;
-  int auto_mode_char_time;
-
-  // Message speed; range from 0 to 255
-  char message_speed;
-
-  std::string font_name;
-  bool font_bold;
-  bool font_shadow;
-  bool font_futidoru;
-
-  // The default #WINDOW_ATTR. This is what is changed by the
-  std::vector<int> window_attr;
-
-  // boost::serialization support
-  template <class Archive>
-  void serialize(Archive& ar, const unsigned int /* version */) {
-    ar & auto_mode_base_time & auto_mode_char_time & message_speed & font_name &
-        font_bold & font_shadow & font_futidoru & window_attr;
-  }
-};
-
-// -----------------------------------------------------------------------
 
 class TextSystem final : public EventListener {
  public:
@@ -180,28 +151,6 @@ class TextSystem final : public EventListener {
   void PlayMwndButtonSound(const MwndConfig::Button& button,
                            MwndButtonSound event);
 
-  void SetMwndButtonsEnabled(bool enabled) { mwnd_buttons_enabled_ = enabled; }
-  bool mwnd_buttons_enabled() const { return mwnd_buttons_enabled_; }
-  void SetMwndButtonEnabled(int slot, bool enabled);
-  bool IsMwndButtonSlotEnabled(int slot) const;
-  void SetMwndButtonTouchEnabled(bool enabled) {
-    mwnd_button_touch_enabled_ = enabled;
-  }
-  bool mwnd_button_touch_enabled() const { return mwnd_button_touch_enabled_; }
-  void SetReadSkipButtonAvailable(bool exists, bool enabled) {
-    readskip_button_exists_ = exists;
-    readskip_button_enabled_ = enabled;
-  }
-  void SetAutoModeButtonAvailable(bool exists, bool enabled) {
-    automode_button_exists_ = exists;
-    automode_button_enabled_ = enabled;
-  }
-  bool readskip_button_exists() const { return readskip_button_exists_; }
-  bool readskip_button_enabled() const { return readskip_button_enabled_; }
-  bool automode_button_exists() const { return automode_button_exists_; }
-  bool automode_button_enabled() const { return automode_button_enabled_; }
-  void ResetMwndButtonPolicy();
-
   void set_in_pause_state(bool in) { in_pause_state_ = in; }
 
   int active_window() const { return active_window_; }
@@ -234,77 +183,10 @@ class TextSystem final : public EventListener {
   // Performs #NAMAE replacement; used in the English Edition of Clannad.
   std::string InterpretName(const std::string& utf8name);
 
-  // A temporary version of |message_no_wait_| controllable by the script.
-  void set_script_message_nowait(const int in) { script_message_no_wait_ = in; }
-  int script_message_nowait() const { return script_message_no_wait_; }
-
-  // It is possible to set the interpreter up to advance text
-  // automatically instead of waiting for player input after each
-  // screen is displayed; the `auto mode' controls permit this
-  // behavior to be customized.
-  int auto_mode() const { return (int)auto_mode_; }
-  void SetAutoMode(int i);
-
-  int auto_base_time() const { return globals_.auto_mode_base_time; }
-  void set_auto_base_time(int i) { globals_.auto_mode_base_time = i; }
-
-  void set_auto_char_time(int i) { globals_.auto_mode_char_time = i; }
-  int autoCharTime() const { return globals_.auto_mode_char_time; }
-
-  int GetAutoTime(int num_chars);
-
   void SetKeyCursor(int new_cursor);
 
   // Returns the key cursor index. (or -1 if no key cursor).
   int GetCursorNumber() const;
-
-  int ctrl_key_skip() const { return ctrl_key_skip_; }
-  void set_ctrl_key_skip(int i) { ctrl_key_skip_ = i; }
-
-  int fast_text_mode() const { return fast_text_mode_; }
-  void set_fast_text_mode(int i) { fast_text_mode_ = i; }
-
-  int message_no_wait() const { return message_no_wait_; }
-  void set_message_no_wait(int i) { message_no_wait_ = i; }
-
-  int message_speed() const { return globals_.message_speed; }
-  void set_message_speed(int i) { globals_.message_speed = i; }
-
-  int font_weight() const { return globals_.font_bold; }
-  void set_font_weight(int i) { globals_.font_bold = i; }
-
-  // Script decoration mode: bit 0 enables shadow, bit 1 enables futidoru.
-  int font_shadow() const {
-    return (globals_.font_shadow ? 1 : 0) | (globals_.font_futidoru ? 2 : 0);
-  }
-  void set_font_shadow(int i) {
-    globals_.font_shadow = (i & 1) != 0;
-    globals_.font_futidoru = (i & 2) != 0;
-  }
-
-  const std::vector<int>& window_attr() const { return globals_.window_attr; }
-  void SetDefaultWindowAttr(const std::vector<int>& attr);
-
-  int window_attr_r() const { return globals_.window_attr.at(0); }
-  int window_attr_g() const { return globals_.window_attr.at(1); }
-  int window_attr_b() const { return globals_.window_attr.at(2); }
-  int window_attr_a() const { return globals_.window_attr.at(3); }
-  int window_attr_f() const { return globals_.window_attr.at(4); }
-
-  void SetWindowAttrR(int i);
-  void SetWindowAttrG(int i);
-  void SetWindowAttrB(int i);
-  void SetWindowAttrA(int i);
-  void SetWindowAttrF(int i);
-
-  bool window_move_use() const { return move_use_; }
-  bool window_clear_use() const { return clear_use_; }
-  bool window_read_jump_use() const { return read_jump_use_; }
-  bool window_automode_use() const { return automode_use_; }
-  bool window_msgbk_use() const { return msgbk_use_; }
-  bool window_msgbkleft_use() const { return msgbkleft_use_; }
-  bool window_msgbkright_use() const { return msgbkright_use_; }
-  bool window_exbtn_use() const { return exbtn_use_; }
 
   // Update the mouse cursor.
   void SetMousePosition(const Point& pos);
@@ -324,10 +206,9 @@ class TextSystem final : public EventListener {
                                          RGBColour* shadow_colour,
                                          int max_chars_in_line);
 
-  TextSystemGlobals& globals() { return globals_; }
-
   // Resets non-configuration values (so we can load games).
   virtual void Reset();
+  void ApplyConfiguration();
 
   bool kidoku_read() const { return kidoku_read_; }
   void SetKidokuRead(const int in);
@@ -354,8 +235,6 @@ class TextSystem final : public EventListener {
  private:
   void UpdateWindowsForChangeToWindowAttr();
 
-  void CheckAndSetBool(Gameexe& gexe, const std::string& key, bool& out);
-
   // Reduces the number of page snapshots in previous_page_sets_ down to a
   // manageable constant number.
   void ExpireOldPages();
@@ -367,24 +246,13 @@ class TextSystem final : public EventListener {
   // the work while we hold state.
   friend class TextPage;
 
-  // Whether Auto mode is enabled
-  bool auto_mode_;
-
-  // Whether holding down the control key will skip text.
-  bool ctrl_key_skip_;
-
-  // Fast text mode
-  bool fast_text_mode_;
-
-  // Internal 'no wait' flag (user customization)
-  bool message_no_wait_;
-
-  // 'No wait' flag under script control.
-  bool script_message_no_wait_;
+  LocalConfig& local_config_;
+  GlobalConfig& global_config_;
 
   // Sets which window is the current active window.
   int active_window_;
 
+ public:
   // The stage owns the active text windows.
   Stage& stage_;
   MwndConfig mwnd_config_;
@@ -392,15 +260,9 @@ class TextSystem final : public EventListener {
   MwndActionHandler mwnd_action_handler_;
   MwndActionStatusHandler mwnd_action_status_handler_;
   MwndFrameActionHandler mwnd_frame_action_handler_;
-  bool mwnd_buttons_enabled_ = true;
-  bool mwnd_button_touch_enabled_ = true;
-  std::map<int, bool> mwnd_button_slot_enabled_;
   std::optional<std::weak_ptr<TextWindow>> mwnd_capture_window_;
-  bool readskip_button_exists_ = true;
-  bool readskip_button_enabled_ = true;
-  bool automode_button_exists_ = true;
-  bool automode_button_enabled_ = true;
 
+ private:
   // Whether we are reading the backlog
   bool is_reading_backlog_;
 
@@ -426,11 +288,6 @@ class TextSystem final : public EventListener {
   bool in_pause_state_;
 
   std::shared_ptr<TextKeyCursor> text_key_cursor_;
-
-  bool move_use_, clear_use_, read_jump_use_, automode_use_, msgbk_use_,
-      msgbkleft_use_, msgbkright_use_, exbtn_use_;
-
-  TextSystemGlobals globals_;
 
   bool system_visible_;
 

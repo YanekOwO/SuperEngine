@@ -52,9 +52,10 @@
 #include "machine/rloperation/special_t.hpp"
 #include "machine/save_game_header.hpp"
 #include "machine/serialization.hpp"
+#include "modules/config_operations.hpp"
 #include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
 #include "utf8.h"
 
 using boost::ends_with;
@@ -349,9 +350,14 @@ void AddSysSaveOpcodes(RLModule& m) {
   m.AddUnsupportedOpcode(1452, 0, "ClearSaveComment");
 
   m.AddOpcode(2053, 0, "SetConfirmSaveLoad",
-              CallFunction(&System::set_confirm_save_load));
+              new ConfigIntSetter([](RLMachine& machine, int value) {
+                machine.GetGlobalConfig().system.alert_saveload =
+                    value != 0;
+              }));
   m.AddOpcode(2003, 0, "ConfirmSaveLoad",
-              ReturnIntValue(&System::confirm_save_load));
+              new ConfigIntGetter([](RLMachine& machine) {
+                return machine.GetGlobalConfig().system.alert_saveload;
+              }));
 
   m.AddOpcode(3000, 0, "menu_save", new InvokeSyscomAsOp(0));
   m.AddOpcode(3001, 0, "menu_load", new InvokeSyscomAsOp(1));
@@ -367,7 +373,11 @@ void AddSysSaveOpcodes(RLModule& m) {
 
   m.AddOpcode(3500, 0, "Savepoint", CallFunction(&RLMachine::MarkSavepoint));
   m.AddOpcode(3501, 0, "EnableAutoSavepoints",
-              CallFunctionWith(&RLMachine::SetMarkSavepoints, 1));
+              new ConfigAction([](RLMachine& machine) {
+                machine.GetLocalConfig().dont_set_save_point = false;
+              }));
   m.AddOpcode(3502, 0, "DisableAutoSavepoints",
-              CallFunctionWith(&RLMachine::SetMarkSavepoints, 0));
+              new ConfigAction([](RLMachine& machine) {
+                machine.GetLocalConfig().dont_set_save_point = true;
+              }));
 }

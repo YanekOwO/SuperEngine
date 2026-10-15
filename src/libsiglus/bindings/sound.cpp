@@ -342,9 +342,8 @@ class SiglusBgm {
     if (!params.has_volume)
       return;
 
-    volume_ = params.volume;
     if (system_)
-      system_->sound().SetBgmVolumeScript(volume_, params.fade_ms);
+      system_->sound().SetBgmVolumeScript(params.volume, params.fade_ms);
   }
 
   std::string GetRegistName() const {
@@ -371,9 +370,9 @@ class SiglusBgm {
   System* system_;
   std::shared_ptr<BgmTable> bgm_table_;
   PlaybackState playback_;
-  int volume_ = 255;
-  int volume_max_ = 255;
-  int volume_min_ = 0;
+  int Volume() const {
+    return system_ ? system_->sound().GetBgmVolumeScript() : 255;
+  }
   std::string registered_name_;
 };
 
@@ -444,14 +443,13 @@ class SiglusPcmch {
   }
 
   void SetVolume(int volume, int fade_ms) {
-    volume_ = volume;
     if (!system_ || !IsValidChannel())
       return;
 
     if (fade_ms > 0)
-      system_->sound().SetChannelVolume(channel_, volume_, fade_ms);
+      system_->sound().SetChannelVolume(channel_, volume, fade_ms);
     else
-      system_->sound().SetChannelVolume(channel_, volume_);
+      system_->sound().SetChannelVolume(channel_, volume);
   }
 
   bool IsValidChannel() const {
@@ -471,7 +469,11 @@ class SiglusPcmch {
   System* system_;
   int channel_;
   PlaybackState playback_;
-  int volume_ = kVolumeMax;
+  int Volume() const {
+    return system_ && IsValidChannel()
+               ? system_->sound().GetChannelVolume(channel_)
+               : kVolumeMax;
+  }
   int fade_in_ms_ = 0;
   bool loop_ = false;
   bool ready_ = false;
@@ -619,31 +621,27 @@ void BindSound(SiglusMachine& runtime) {
       "set_volume",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
         bgm->SetVolume(
-            BgmSetVolumeParams::ParseFrom(std::move(args), bgm->volume_));
+            BgmSetVolumeParams::ParseFrom(std::move(args), bgm->Volume()));
       },
       sb::vararg);
   bgm.def(
       "set_volume_max",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
-        if (args.empty())
-          return;
-        const int value = AsInt(args[0]).value_or(bgm->volume_max_);
-        bgm->volume_max_ = value;
+        const int fade_ms = args.empty() ? 0 : AsInt(args[0]).value_or(0);
+        bgm->SetVolume({.volume = 255, .fade_ms = fade_ms, .has_volume = true});
       },
       sb::vararg);
   bgm.def(
       "set_volume_min",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
-        if (args.empty())
-          return;
-        const int value = AsInt(args[0]).value_or(bgm->volume_max_);
-        bgm->volume_min_ = value;
+        const int fade_ms = args.empty() ? 0 : AsInt(args[0]).value_or(0);
+        bgm->SetVolume({.volume = 0, .fade_ms = fade_ms, .has_volume = true});
       },
       sb::vararg);
   bgm.def(
       "get_volume",
       [](SiglusBgm* bgm, std::vector<sr::Value>) -> int {
-        return bgm->volume_;
+        return bgm->Volume();
       },
       sb::vararg);
   bgm.def(
@@ -756,7 +754,7 @@ void BindSound(SiglusMachine& runtime) {
       "set_volume",
       [](SiglusPcmch* pcmch, std::vector<sr::Value> args) {
         pcmch->SetVolume(
-            PcmVolumeParams::ParseFrom(std::move(args), pcmch->volume_));
+            PcmVolumeParams::ParseFrom(std::move(args), pcmch->Volume()));
       },
       sb::vararg);
   pcmch.def(
@@ -776,7 +774,7 @@ void BindSound(SiglusMachine& runtime) {
   pcmch.def(
       "get_volume",
       [](SiglusPcmch* pcmch, std::vector<sr::Value>) -> int {
-        return pcmch->volume_;
+        return pcmch->Volume();
       },
       sb::vararg);
 

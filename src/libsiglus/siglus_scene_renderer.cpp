@@ -23,7 +23,7 @@
 
 #include "libsiglus/siglus_scene_renderer.hpp"
 
-#include "core/gameexe.hpp"
+#include "core/game_config.hpp"
 #include "core/mask.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/objdrawer.hpp"
@@ -106,12 +106,12 @@ SiglusSceneRenderer::SiglusSceneRenderer(
     System& system,
     std::shared_ptr<MaskList> mask_list,
     std::shared_ptr<QuakeList> screen_quakes,
-    std::shared_ptr<Gameexe> local_config)
+    LocalConfig& local_config)
     : stage_(stage),
       system_(system),
       mask_list_(std::move(mask_list)),
       screen_quakes_(std::move(screen_quakes)),
-      local_config_(std::move(local_config)) {}
+      local_config_(local_config) {}
 
 void SiglusSceneRenderer::ExecuteFrame() {
   stage_.Execute();
@@ -228,7 +228,7 @@ QuakeTransform SiglusSceneRenderer::TransformForOrder(int order,
 }
 
 bool SiglusSceneRenderer::QuakeRenderingStopped() const {
-  return local_config_ && (*local_config_)("quake_stop").Int().value_or(0) != 0;
+  return local_config_.quake_stop;
 }
 
 void SiglusSceneRenderer::RenderObject(GraphicsObject& root,

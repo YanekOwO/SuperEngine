@@ -401,6 +401,14 @@ GexeVal& GameexeInterpretObject::operator[](std::size_t idx) {
 
 GexeExpected<int> GameexeInterpretObject::Int() const { return IntAt(0); }
 
+int GameexeInterpretObject::ReadInt(int fallback) const {
+  return Int().value_or(fallback);
+}
+
+bool GameexeInterpretObject::ReadBool(bool fallback) const {
+  return !!ReadInt(fallback);
+}
+
 GexeExpected<int> GameexeInterpretObject::IntAt(std::size_t index) const {
   auto values = FetchValues();
   if (!values)

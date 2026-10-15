@@ -52,7 +52,8 @@ PauseLongOperation::PauseLongOperation(RLMachine& machine)
   // Initialize Auto Mode (in case it's activated, or in case it gets
   // activated)
   int numChars = text.GetCurrentPage().number_of_chars_on_page();
-  automode_time_ = text.GetAutoTime(numChars);
+  automode_time_ = EffectiveAutoTime(machine_.GetLocalConfig(),
+                                     machine_.GetGlobalConfig(), numChars);
   time_at_last_pass_ = event.GetTicks();
   total_time_ = 0;
 
@@ -161,7 +162,7 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
       handled = true;
     } else {
       TextSystem& text = machine_.GetSystem().text();
-      bool ctrl_key_skips = text.ctrl_key_skip();
+      bool ctrl_key_skips = !machine_.GetLocalConfig().disable_ctrl;
 
       if (ctrl_key_skips &&
           (keyCode == KeyCode::RCTRL || keyCode == KeyCode::LCTRL)) {
@@ -192,7 +193,8 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
 
 bool PauseLongOperation::operator()(RLMachine& machine) {
   // Check to see if we're done because of the auto mode timer
-  if (machine_.GetSystem().text().auto_mode()) {
+  if (EffectiveAutoMode(machine_.GetLocalConfig(),
+                        machine_.GetGlobalConfig())) {
     if (AutomodeTimerFired() && !machine_.GetSystem().sound().KoePlaying())
       is_done_ = true;
   }

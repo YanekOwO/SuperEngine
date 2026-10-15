@@ -122,8 +122,7 @@ struct bgmSetVolume_0 : public RLOpcode<IntConstant_T> {
 
 struct bgmGetVolume : public RLStoreOpcode<> {
   int operator()(RLMachine& machine) {
-    const auto& settings = machine.GetSystem().sound().GetSettings();
-    return settings.bgm_volume;
+    return machine.GetSystem().sound().GetBgmVolumeScript();
   }
 };
 

@@ -98,6 +98,8 @@ class GameexeInterpretObject {
 
   int ToInt() const;
   GexeExpected<int> Int() const;
+  int ReadInt(int fallback) const;
+  bool ReadBool(bool fallback) const;
   GexeExpected<int> IntAt(std::size_t index) const;
 
   std::string ToStr() const;

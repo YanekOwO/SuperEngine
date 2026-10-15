@@ -230,7 +230,8 @@ bool TextoutLongOperation::operator()(RLMachine& machine) {
     next_character_countdown_ -= time_since_last_pass;
     if (next_character_countdown_ <= 0) {
       bool paused = false;
-      next_character_countdown_ = machine.GetSystem().text().message_speed();
+      next_character_countdown_ = EffectiveMessageSpeed(
+          machine.GetLocalConfig(), machine.GetGlobalConfig());
       return DisplayOneMoreCharacter(machine, paused);
     } else {
       // Let's sleep a bit and then try again.

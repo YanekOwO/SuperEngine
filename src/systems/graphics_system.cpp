@@ -148,29 +148,6 @@ GraphicsSystem::GraphicsObjectSettings::GetObjectSettingsFor(int obj_num) {
 }
 
 // -----------------------------------------------------------------------
-// GraphicsSystemGlobals
-// -----------------------------------------------------------------------
-GraphicsSystemGlobals::GraphicsSystemGlobals()
-    : show_object_1(false),
-      show_object_2(false),
-      show_weather(false),
-      skip_animations(0),
-      screen_mode(1),
-      cg_table(),
-      tone_curves() {}
-
-GraphicsSystemGlobals::GraphicsSystemGlobals(Gameexe& gameexe)
-    : show_object_1(gameexe("INIT_OBJECT1_ONOFF_MOD").Int().value_or(0) ? 0
-                                                                        : 1),
-      show_object_2(gameexe("INIT_OBJECT2_ONOFF_MOD").Int().value_or(0) ? 0
-                                                                        : 1),
-      show_weather(gameexe("INIT_WEATHER_ONOFF_MOD").Int().value_or(0) ? 0 : 1),
-      skip_animations(0),
-      screen_mode(1),
-      cg_table(CreateCGMTable(gameexe)),
-      tone_curves(CreateToneCurve(gameexe)) {}
-
-// -----------------------------------------------------------------------
 // GraphicsSystem
 // -----------------------------------------------------------------------
 GraphicsSystem::GraphicsSystem(System& system,
@@ -179,22 +156,21 @@ GraphicsSystem::GraphicsSystem(System& system,
     : screen_update_mode_(SCREENUPDATEMODE_AUTOMATIC),
       screen_needs_refresh_(false),
       is_responsible_for_update_(true),
-      display_subtitle_(gameexe("SUBTITLE").Int().value_or(0)),
       interface_hidden_(false),
-      globals_(gameexe),
+      local_config_(system.local_config()),
+      global_config_(system.global_config()),
+      cg_table_(CreateCGMTable(gameexe)),
+      tone_curves_(CreateToneCurve(gameexe)),
       time_at_last_queue_change_(0),
       graphics_object_settings_(
           std::make_unique<GraphicsObjectSettings>(gameexe)),
-      use_custom_mouse_cursor_(gameexe("MOUSE_CURSOR").Exists()),
-      show_cursor_from_bytecode_(true),
-      cursor_(gameexe("MOUSE_CURSOR").Int().value_or(0)),
       system_(system),
       impl_(backend),
       asset_scanner_(system.GetAssetScanner()),
       preloaded_g00_(256),
       image_cache_(64) {
   Size screen_size = GetScreenSize(gameexe);
-  bool is_fullscreen = screen_mode() == 0;
+  bool is_fullscreen = global_config_.screen_size_mode == 1;
   impl_->InitSystem(screen_size, is_fullscreen);
   SetScreenSize(screen_size);
   Resize(screen_size);
@@ -295,19 +271,10 @@ int GraphicsSystem::CurrentShakingFrameTime() const {
 // -----------------------------------------------------------------------
 
 int GraphicsSystem::ShouldUseCustomCursor() {
-  return use_custom_mouse_cursor_ &&
-         system().gameexe()("MOUSE_CURSOR", cursor_, "NAME")
+  return global_config_.reallive.use_custom_mouse_cursor &&
+         system().gameexe()("MOUSE_CURSOR", local_config_.cursor_no, "NAME")
                  .Str()
                  .value_or("") != "";
-}
-
-// -----------------------------------------------------------------------
-
-void GraphicsSystem::SetCursor(int cursor) {
-  cursor_ = cursor;
-  mouse_cursor_.reset();
-  if (impl_)
-    impl_->ShowSystemCursor(!ShouldUseCustomCursor());
 }
 
 // -----------------------------------------------------------------------
@@ -331,7 +298,8 @@ void GraphicsSystem::SetWindowSubtitle(std::string utf8str) {
 void GraphicsSystem::Resize(Size display_size) {
   display_size_ = display_size;
   if (impl_)
-    display_size_ = impl_->Resize(display_size_, screen_mode() == 0);
+    display_size_ =
+        impl_->Resize(display_size_, global_config_.screen_size_mode == 1);
   ForceRefresh();
 }
 
@@ -348,16 +316,10 @@ Point GraphicsSystem::DisplayToScreenPoint(const Point& display_pos) const {
 
 // -----------------------------------------------------------------------
 
-void GraphicsSystem::SetScreenMode(const int in) {
-  globals_.screen_mode = in;
-
-  Resize(screen_size());
-}
-
-// -----------------------------------------------------------------------
-
 void GraphicsSystem::ToggleFullscreen() {
-  SetScreenMode(screen_mode() ? 0 : 1);
+  global_config_.screen_size_mode =
+      global_config_.screen_size_mode == 1 ? 0 : 1;
+  ApplyConfiguration();
 }
 
 // -----------------------------------------------------------------------
@@ -513,7 +475,7 @@ void GraphicsSystem::UpdateWindowTitle() {
 
 std::string GraphicsSystem::ComposeWindowTitle() const {
   std::string result = caption_title_utf8_;
-  if (should_display_subtitle() && !subtitle_utf8_.empty()) {
+  if (global_config_.reallive.display_subtitle && !subtitle_utf8_.empty()) {
     if (!result.empty())
       result += ": ";
     result += subtitle_utf8_;
@@ -570,8 +532,6 @@ void GraphicsSystem::Reset() {
   preloaded_g00_.Clear();
 
   // Reset the cursor
-  show_cursor_from_bytecode_ = true;
-  cursor_ = system().gameexe()("MOUSE_CURSOR").Int().value_or(0);
   mouse_cursor_.reset();
   if (impl_)
     impl_->ShowSystemCursor(!ShouldUseCustomCursor());
@@ -584,6 +544,15 @@ void GraphicsSystem::Reset() {
       window_title_clock_.GetTime() - window_title_update_interval_;
   UpdateWindowTitle();
   interface_hidden_ = false;
+}
+
+void GraphicsSystem::ApplyConfiguration() {
+  Resize(screen_size());
+  mouse_cursor_.reset();
+  if (impl_)
+    impl_->ShowSystemCursor(!ShouldUseCustomCursor());
+  UpdateWindowTitle();
+  ForceRefresh();
 }
 
 std::shared_ptr<SDLSurface> GraphicsSystem::GetEmojiSurface() {
@@ -651,18 +620,17 @@ std::shared_ptr<SDLSurface> GraphicsSystem::LoadSurfaceFromFile(
 
     // the effect number is an index that goes from 10 to GetEffectCount() * 10,
     // so keep that in mind here
-    if ((effect_no / 10) > globals().tone_curves.GetEffectCount() ||
-        effect_no < 10)
+    if ((effect_no / 10) > tone_curves_.GetEffectCount() || effect_no < 10)
       throw std::runtime_error(
           std::format("Tone curve index {} is invalid.", effect_no));
 
-    result->Apply([effect = globals().tone_curves.GetEffect(effect_no / 10 -
-                                                            1)](RGBAColour c) {
-      c.set_red(effect[0][c.r()]);
-      c.set_green(effect[1][c.g()]);
-      c.set_blue(effect[2][c.b()]);
-      return c;
-    });
+    result->Apply(
+        [effect = tone_curves_.GetEffect(effect_no / 10 - 1)](RGBAColour c) {
+          c.set_red(effect[0][c.r()]);
+          c.set_green(effect[1][c.g()]);
+          c.set_blue(effect[2][c.b()]);
+          return c;
+        });
   }
 
   return result;
@@ -724,17 +692,18 @@ int GraphicsSystem::GetObjectLayerSize() {
 // -----------------------------------------------------------------------
 
 std::shared_ptr<MouseCursor> GraphicsSystem::GetCurrentCursor() {
-  if (!use_custom_mouse_cursor_ || !show_cursor_from_bytecode_)
+  if (!global_config_.reallive.use_custom_mouse_cursor ||
+      local_config_.cursor_disp_off)
     return std::shared_ptr<MouseCursor>();
 
-  if (use_custom_mouse_cursor_ && !mouse_cursor_) {
-    MouseCursorCache::iterator it = cursor_cache_.find(cursor_);
+  if (global_config_.reallive.use_custom_mouse_cursor && !mouse_cursor_) {
+    MouseCursorCache::iterator it = cursor_cache_.find(local_config_.cursor_no);
     if (it != cursor_cache_.end()) {
       mouse_cursor_ = it->second;
     } else {
       std::shared_ptr<SDLSurface> cursor_surface;
       GameexeInterpretObject cursor =
-          system().gameexe()("MOUSE_CURSOR", cursor_);
+          system().gameexe()("MOUSE_CURSOR", local_config_.cursor_no);
 
       if (auto name = cursor("NAME").Str()) {
         int count = cursor("CONT").Int().value_or(1);
@@ -743,7 +712,7 @@ std::shared_ptr<MouseCursor> GraphicsSystem::GetCurrentCursor() {
         cursor_surface = GetSurfaceNamed(*name);
         mouse_cursor_ = std::make_shared<MouseCursor>(
             system().event().GetClock(), cursor_surface, count, speed);
-        cursor_cache_[cursor_] = mouse_cursor_;
+        cursor_cache_[local_config_.cursor_no] = mouse_cursor_;
       } else {
         mouse_cursor_.reset();
       }

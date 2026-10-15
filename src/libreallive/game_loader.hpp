@@ -46,8 +46,6 @@ class GameLoader {
 
   std::shared_ptr<Gameexe> gameexe_;
 
-  std::shared_ptr<System> system_;
-
   std::shared_ptr<RLMachine> machine_;
 
   std::shared_ptr<EventListener> longop_listener_adapter_, system_listener_;

@@ -690,10 +690,12 @@ bool TextWindow::DisplayCharacter(const std::string& current,
 
     std::shared_ptr<IFont> font =
         system_.text().LoadFont(font_size_in_pixels());
+    const int decoration =
+        EffectiveFontShadow(system_.local_config(), system_.global_config());
     FontFace font_face{.font = font,
                        .is_italic = std::exchange(next_char_italic_, false),
-                       .is_shadow = system_.text().globals().font_shadow,
-                       .is_futidoru = system_.text().globals().font_futidoru};
+                       .is_shadow = (decoration & 1) != 0,
+                       .is_futidoru = (decoration & 2) != 0};
     if (system_.text().mwnd_config().layered_windows()) {
       // Siglus fixes the baseline at 86% of the character cell height,
       // independently of font line metrics.

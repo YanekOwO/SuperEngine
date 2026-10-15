@@ -44,7 +44,7 @@ WaitLongOperation::WaitLongOperation(RLMachine& machine)
       break_on_clicks_(false),
       button_pressed_(0),
       break_on_event_(false),
-      break_on_ctrl_pressed_(machine.GetSystem().text().ctrl_key_skip()),
+      break_on_ctrl_pressed_(!machine.GetLocalConfig().disable_ctrl),
       ctrl_pressed_(false),
       mouse_moved_(false),
       save_click_location_(false) {}

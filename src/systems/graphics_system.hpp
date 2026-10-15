@@ -30,18 +30,17 @@
 #include <filesystem>
 
 #include <cstdint>
-#include <iosfwd>
 #include <map>
 #include <memory>
 #include <optional>
 #include <queue>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core/cgm_table.hpp"
 #include "core/event_listener.hpp"
+#include "core/game_config.hpp"
 #include "core/rect.hpp"
 #include "core/tone_curve.hpp"
 
@@ -70,45 +69,6 @@ class Album;
 
 template <typename T>
 class LazyArray;
-
-// Variables and configuration data that are global across all save
-// game files in a game.
-struct GraphicsSystemGlobals {
-  GraphicsSystemGlobals();
-  explicit GraphicsSystemGlobals(Gameexe& gameexe);
-
-  // ShowObject flags
-  int show_object_1, show_object_2;
-
-  int show_weather;
-
-  // Whether we should skip animations (such as those made by
-  // EffectLongOperation)
-  int skip_animations;
-
-  // screen mode. 1 is windowed (default), 0 is full-screen.
-  int screen_mode;
-
-  // CG Table
-  CGMTable cg_table;
-
-  // tone curve table
-  ToneCurve tone_curves;
-
-  // boost::serialization support
-  template <class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar & show_object_1 & show_object_2 & show_weather;
-
-    if (version > 0)
-      ar & cg_table;
-
-    if (version > 1)
-      ar & screen_mode;
-  }
-};
-
-BOOST_CLASS_VERSION(GraphicsSystemGlobals, 2)
 
 // When marking the screen as dirty, we need to know what kind of
 // operation was done
@@ -207,17 +167,6 @@ class GraphicsSystem : public EventListener {
   // selected cursor exists.
   int ShouldUseCustomCursor();
 
-  // Sets the cursor to the incoming cursor index.
-  virtual void SetCursor(int cursor);
-
-  // Returns the current index.
-  int cursor() const { return cursor_; }
-
-  // Whether we display a cursor at all.
-  void set_show_cursor_from_bytecode(const int in) {
-    show_cursor_from_bytecode_ = in;
-  }
-
   // -----------------------------------------------------------------------
 
   // Individual LongOperations can also hook into the end of the rendering
@@ -241,42 +190,13 @@ class GraphicsSystem : public EventListener {
   // Returns the current window subtitle, in native encoding.
   std::string window_subtitle() const { return subtitle_; }
 
-  // Wether we should display the subtitle.
-  bool should_display_subtitle() const { return display_subtitle_; }
-
-  // Access to the GrapihcsSystem global variables.
-  GraphicsSystemGlobals& globals() { return globals_; }
-
-  // The `show object' flags are used to provide a way of enabling or
-  // disabling interface elements from the menu. If an object's
-  // `ObjectOnOff' property is set to 1 or 2, it will be shown or
-  // hidden depending on the corresponding `show object' flag. This is
-  // one of the properties controlled by the \#OBJECT variables in
-  // gameexe.ini.
-  int should_show_object1() const { return globals_.show_object_1; }
-  void set_should_show_object1(const int in) { globals_.show_object_1 = in; }
-  int should_show_object2() const { return globals_.show_object_2; }
-  void set_should_show_object2(const int in) { globals_.show_object_2 = in; }
-  int should_show_weather() const { return globals_.show_weather; }
-  void set_should_show_weather(const int in) { globals_.show_weather = in; }
-
-  // Sets whether we're in fullscreen mode. SetScreenMode() is virtual so we
-  // can tell SDL to switch the screen mode.
-  int screen_mode() const { return globals_.screen_mode; }
-  virtual void SetScreenMode(const int in);
+  // Toggles the fullscreen preference and applies it to the backend.
   void ToggleFullscreen();
 
   // Toggles whether the interface is shown. Called by
   // PauseLongOperation and related functors.
   void ToggleInterfaceHidden();
   bool is_interface_hidden() { return interface_hidden_; }
-
-  // Whether we should skip animations (such as all EffectLongOperation
-  // subclasses).
-  int should_skip_animations() const { return globals_.skip_animations; }
-  void set_should_skip_animations(const int in) {
-    globals_.skip_animations = in;
-  }
 
   // Returns the ObjectSettings from the Gameexe for obj_num. The data
   // from this method should be used by all subclasses of
@@ -335,12 +255,13 @@ class GraphicsSystem : public EventListener {
 
   // Reset the system. Should clear all state for when a user loads a game.
   void Reset();
+  void ApplyConfiguration();
 
   // Access to the cgtable for the cg* functions.
-  CGMTable& cg_table() { return globals_.cg_table; }
+  CGMTable& cg_table() { return cg_table_; }
 
   // Access to the tone curve effects file
-  ToneCurve& tone_curve() { return globals_.tone_curves; }
+  ToneCurve& tone_curve() { return tone_curves_; }
 
   // Gets the emoji surface, if any.
   std::shared_ptr<SDLSurface> GetEmojiSurface();
@@ -359,8 +280,7 @@ class GraphicsSystem : public EventListener {
                                                 std::span<char> data,
                                                 bool is_alpha_mask = false);
 
- protected:
-  const Point& cursor_pos() const { return cursor_pos_; }
+  inline const Point& cursor_pos() const { return cursor_pos_; }
 
   std::shared_ptr<MouseCursor> GetCurrentCursor();
 
@@ -385,10 +305,6 @@ class GraphicsSystem : public EventListener {
   // to implement pretty fades and wipes
   bool is_responsible_for_update_;
 
-  // Whether we should try to append subtitle_ in the window
-  // titlebar
-  bool display_subtitle_;
-
   // cp932 encoded subtitle string
   std::string subtitle_;
   std::string subtitle_utf8_;
@@ -397,8 +313,12 @@ class GraphicsSystem : public EventListener {
   // temporarily toggled by the user at runtime)
   bool interface_hidden_;
 
-  // Mutable global data to be saved in the globals file
-  GraphicsSystemGlobals globals_;
+  LocalConfig& local_config_;
+  GlobalConfig& global_config_;
+
+  // Persistent unlock progress and immutable image-effect assets.
+  CGMTable cg_table_;
+  ToneCurve tone_curves_;
 
   // Size of our screen and display window.
   Size screen_size_;
@@ -418,17 +338,6 @@ class GraphicsSystem : public EventListener {
   struct GraphicsObjectSettings;
   // Immutable global data that's constructed from the Gameexe.ini file.
   std::unique_ptr<GraphicsObjectSettings> graphics_object_settings_;
-
-  // Whether we should use a custom mouse cursor. Set while parsing the Gameexe
-  // file, and then left unchanged. We only use a custom mouse cursor if
-  // \#MOUSE_CURSOR is set in the Gameexe
-  bool use_custom_mouse_cursor_;
-
-  // Whether we should render any cursor. Controller by the bytecode.
-  bool show_cursor_from_bytecode_;
-
-  // Current cursor id. Initially set to \#MOUSE_CURSOR if the key exists.
-  int cursor_;
 
   // Location of the cursor's hotspot
   Point cursor_pos_;

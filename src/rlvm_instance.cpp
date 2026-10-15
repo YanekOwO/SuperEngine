@@ -63,8 +63,8 @@ int RLVMInstance::Main(const std::filesystem::path& gameroot) {
     loader = std::make_unique<libreallive::GameLoader>(gameroot, start_scene_,
                                                        fast_forward_);
     machine_ = loader->machine_;
-    system_ = loader->system_;
-    system_->graphics().SetDebugFrameDumpConfig(debug_frame_dump_config_);
+    machine_->GetSystem().graphics().SetDebugFrameDumpConfig(
+        debug_frame_dump_config_);
   } catch (std::exception& e) {
     static DomainLogger logger("Main");
     logger(Severity::Error) << "Failed to load game:\n" << e.what();
@@ -79,7 +79,7 @@ int RLVMInstance::Main(const std::filesystem::path& gameroot) {
       // Give SDL a chance to respond to events, redraw the screen,
       // etc.
       machine_->Update();
-      if (machine_->IsHalted() || system_->IsQuitRequested())
+      if (machine_->IsHalted() || machine_->GetSystem().IsQuitRequested())
         break;
 
       constexpr auto frame_time = std::chrono::seconds(1) / 144.0;
@@ -95,14 +95,14 @@ int RLVMInstance::Main(const std::filesystem::path& gameroot) {
 
         end = clock.GetTime();
 
-        if (machine_->IsHalted() || system_->IsQuitRequested() ||
-            system_->force_wait() || (end - start) >= frame_time)
+        if (machine_->IsHalted() || machine_->GetSystem().IsQuitRequested() ||
+            machine_->GetSystem().force_wait() || (end - start) >= frame_time)
           should_continue = false;
       }
 
       // Sleep to be nice to the processor and to give the GPU a chance to
       // catch up.
-      if (!system_->ShouldFastForward()) {
+      if (!machine_->GetSystem().ShouldFastForward()) {
         auto real_sleep_time = frame_time - (end - start);
         using std::chrono_literals::operator""ms;
         if (real_sleep_time < 1ms)
@@ -111,7 +111,7 @@ int RLVMInstance::Main(const std::filesystem::path& gameroot) {
         std::this_thread::sleep_for(real_sleep_time);
       }
 
-      system_->set_force_wait(false);
+      machine_->GetSystem().set_force_wait(false);
     }
 
     Serialization::saveGlobalMemory(*machine_);

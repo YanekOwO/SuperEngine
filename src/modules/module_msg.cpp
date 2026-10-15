@@ -38,6 +38,7 @@
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
+#include "modules/config_operations.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
@@ -219,10 +220,12 @@ MsgModule::MsgModule() : RLModule("Msg", 0, 003) {
   AddOpcode(102, 0, "TextWindow", new Msg_TextWindow);
   AddOpcode(102, 1, "TextWindow", new Msg_TextWindow);
 
-  AddOpcode(103, 0, "FastText",
-            CallFunctionWith(&TextSystem::set_fast_text_mode, 1));
-  AddOpcode(104, 0, "NormalText",
-            CallFunctionWith(&TextSystem::set_fast_text_mode, 0));
+  AddOpcode(103, 0, "FastText", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().reallive.fast_text_mode = true;
+            }));
+  AddOpcode(104, 0, "NormalText", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().reallive.fast_text_mode = false;
+            }));
 
   AddOpcode(105, 0, "FontColor", new FontColour);
   AddOpcode(105, 1, "FontColor", new FontColour);
@@ -235,9 +238,13 @@ MsgModule::MsgModule() : RLModule("Msg", 0, 003) {
   AddUnsupportedOpcode(107, 0, "FontSizeAll");
 
   AddOpcode(109, 0, "message_no_waitOn",
-            CallFunctionWith(&TextSystem::set_script_message_nowait, 1));
+            new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().msg_nowait = true;
+            }));
   AddOpcode(110, 0, "message_no_waitOff",
-            CallFunctionWith(&TextSystem::set_script_message_nowait, 0));
+            new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().msg_nowait = false;
+            }));
 
   AddOpcode(111, 0, "activeWindow", ReturnIntValue(&TextSystem::active_window));
 

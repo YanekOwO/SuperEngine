@@ -27,6 +27,7 @@
 #include "core/asset_scanner.hpp"
 #include "core/counter.hpp"
 #include "core/event_listener.hpp"
+#include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
@@ -73,15 +74,16 @@ struct SiglusMachine {
   std::shared_ptr<Gameexe> gameexe;
   std::shared_ptr<Archive> archive;
   std::unique_ptr<Memory> memory;
+  LocalConfig local_config;
+  GlobalConfig global_config;
   std::unique_ptr<serilang::VM> vm;
   std::unique_ptr<binding::Loader> loader;
   std::shared_ptr<AssetScanner> asset_scanner;
 
-  std::unique_ptr<System> system;
   std::unique_ptr<Stage> stage;
+  std::unique_ptr<System> system;
   std::unique_ptr<InteractionManager> interaction_manager;
 
-  std::shared_ptr<Gameexe> local_config, global_config;
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
@@ -97,8 +99,6 @@ struct SiglusMachine {
   std::shared_ptr<SiglusWipeEndHook> finish_active_wipe =
       std::make_shared<SiglusWipeEndHook>();
   std::function<void()> update_wipe_after_frame_actions;
-  std::shared_ptr<bool> no_wipe_animation = std::make_shared<bool>(false);
-  std::shared_ptr<bool> skip_wipe_animation = std::make_shared<bool>(true);
   std::shared_ptr<IPlatformImplementor> platform_implementor;
 
   std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;

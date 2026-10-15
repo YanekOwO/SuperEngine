@@ -100,29 +100,24 @@ class QuitEventListener : public EventListener {
   System& system_;
 };
 
-// -----------------------------------------------------------------------
-// SystemGlobals
-// -----------------------------------------------------------------------
-
-SystemGlobals::SystemGlobals()
-    : confirm_save_load_(true), low_priority_(false) {}
-
-// -----------------------------------------------------------------------
-// System
-// -----------------------------------------------------------------------
-
 System::System(Gameexe& gameexe,
                Stage& stage,
+               LocalConfig& local_config,
+               GlobalConfig& global_config,
                std::shared_ptr<AssetScanner> scanner,
                SystemOptions options)
     : System(gameexe,
              stage,
+             local_config,
+             global_config,
              std::move(scanner),
              MwndConfig::ParseReallive(gameexe),
              options) {}
 
 System::System(Gameexe& gameexe,
                Stage& stage,
+               LocalConfig& local_config,
+               GlobalConfig& global_config,
                std::shared_ptr<AssetScanner> scanner,
                MwndConfig mwnd_config,
                SystemOptions options)
@@ -131,10 +126,9 @@ System::System(Gameexe& gameexe,
       force_fast_forward_(false),
       force_wait_(false),
       use_western_font_(false),
-      assets_(scanner) {
-  std::fill(syscom_status_, syscom_status_ + NUM_SYSCOM_ENTRIES,
-            SYSCOM_VISIBLE);
-
+      assets_(scanner),
+      local_config_(local_config),
+      global_config_(global_config) {
   rlevent_handler_ = std::make_shared<RLEventListener>();
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -215,44 +209,44 @@ int System::IsSyscomEnabled(int syscom) {
   // programmatically set (or user set) values.
   if (syscom == SYSCOM_SET_SKIP_MODE && !text().kidoku_read()) {
     // Skip mode should be grayed out when there's no text to read
-    if (syscom_status_[syscom] == SYSCOM_VISIBLE)
+    if (local_config_.reallive.syscom_status[syscom] == SYSCOM_VISIBLE)
       return SYSCOM_GREYED_OUT;
   } else if (syscom == SYSCOM_RETURN_TO_PREVIOUS_SELECTION) {
-    if (syscom_status_[syscom] == SYSCOM_VISIBLE)
+    if (local_config_.reallive.syscom_status[syscom] == SYSCOM_VISIBLE)
       return previous_selection_.get() ? SYSCOM_VISIBLE : SYSCOM_GREYED_OUT;
   }
 
-  return syscom_status_[syscom];
+  return local_config_.reallive.syscom_status[syscom];
 }
 
 void System::HideSyscom() {
-  std::fill(syscom_status_, syscom_status_ + NUM_SYSCOM_ENTRIES,
-            SYSCOM_INVISIBLE);
+  std::fill(local_config_.reallive.syscom_status.begin(),
+            local_config_.reallive.syscom_status.end(), SYSCOM_INVISIBLE);
 }
 
 void System::HideSyscomEntry(int syscom) {
   CheckSyscomIndex(syscom, "System::hide_system");
-  syscom_status_[syscom] = SYSCOM_INVISIBLE;
+  local_config_.reallive.syscom_status[syscom] = SYSCOM_INVISIBLE;
 }
 
 void System::EnableSyscom() {
-  std::fill(syscom_status_, syscom_status_ + NUM_SYSCOM_ENTRIES,
-            SYSCOM_VISIBLE);
+  std::fill(local_config_.reallive.syscom_status.begin(),
+            local_config_.reallive.syscom_status.end(), SYSCOM_VISIBLE);
 }
 
 void System::EnableSyscomEntry(int syscom) {
   CheckSyscomIndex(syscom, "System::enable_system");
-  syscom_status_[syscom] = SYSCOM_VISIBLE;
+  local_config_.reallive.syscom_status[syscom] = SYSCOM_VISIBLE;
 }
 
 void System::DisableSyscom() {
-  std::fill(syscom_status_, syscom_status_ + NUM_SYSCOM_ENTRIES,
-            SYSCOM_GREYED_OUT);
+  std::fill(local_config_.reallive.syscom_status.begin(),
+            local_config_.reallive.syscom_status.end(), SYSCOM_GREYED_OUT);
 }
 
 void System::DisableSyscomEntry(int syscom) {
   CheckSyscomIndex(syscom, "System::disable_system");
-  syscom_status_[syscom] = SYSCOM_GREYED_OUT;
+  local_config_.reallive.syscom_status[syscom] = SYSCOM_GREYED_OUT;
 }
 
 int System::ReadSyscom(int syscom) {
@@ -305,13 +299,16 @@ void System::InvokeSyscom(RLMachine& machine, int syscom) {
       RestoreSelectionSnapshot(machine);
       break;
     case SYSCOM_SHOW_WEATHER:
-      graphics().set_should_show_weather(!graphics().should_show_weather());
+      global_config_.object_disp_flag.at(2) =
+          !global_config_.object_disp_flag.at(2);
       break;
     case SYSCOM_SHOW_OBJECT_1:
-      graphics().set_should_show_object1(!graphics().should_show_object1());
+      global_config_.object_disp_flag.at(0) =
+          !global_config_.object_disp_flag.at(0);
       break;
     case SYSCOM_SHOW_OBJECT_2:
-      graphics().set_should_show_object2(!graphics().should_show_object2());
+      global_config_.object_disp_flag.at(1) =
+          !global_config_.object_disp_flag.at(1);
       break;
     case SYSCOM_CLASSIFY_TEXT:
       std::cerr << "We have no idea what classifying text even means!"
@@ -324,7 +321,8 @@ void System::InvokeSyscom(RLMachine& machine, int syscom) {
       text().SetSkipMode(!text().skip_mode());
       break;
     case SYSCOM_AUTO_MODE:
-      text().SetAutoMode(!text().auto_mode());
+      global_config_.enable_auto_mode =
+          !EffectiveAutoMode(local_config_, global_config_);
       break;
     case SYSCOM_MENU_RETURN:
       // This is a hack since we probably have a bunch of crap on the stack.
@@ -355,11 +353,15 @@ void System::Reset() {
   in_menu_ = false;
   previous_selection_.reset();
 
-  EnableSyscom();
-
   sound().Reset();
   graphics().Reset();
   text().Reset();
+}
+
+void System::ApplyConfiguration() {
+  graphics().ApplyConfiguration();
+  text().ApplyConfiguration();
+  sound().ApplyConfiguration();
 }
 
 std::string System::Regname() {
@@ -380,7 +382,7 @@ std::filesystem::path System::GameSaveDirectory() {
 }
 
 bool System::ShouldFastForward() {
-  return (rlEvent().CtrlPressed() && text().ctrl_key_skip()) ||
+  return (rlEvent().CtrlPressed() && !local_config_.disable_ctrl) ||
          text().CurrentlySkipping() || force_fast_forward_;
 }
 

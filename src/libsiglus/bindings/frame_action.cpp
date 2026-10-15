@@ -23,7 +23,7 @@
 
 #include "libsiglus/bindings/frame_action.hpp"
 
-#include "core/gameexe.hpp"
+#include "core/game_config.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
@@ -209,11 +209,11 @@ class FrameActionListHandle {
 
 FrameActionManager::FrameActionManager(sr::VM& vm,
                                        Stage& stage,
-                                       std::shared_ptr<Gameexe> local_config,
+                                       LocalConfig& local_config,
                                        std::size_t global_channel_count)
     : vm_(vm),
       stage_(stage),
-      local_config_(std::move(local_config)),
+      local_config_(local_config),
       global_channels_(global_channel_count) {}
 
 void FrameActionManager::SetBindingClasses(sr::NativeClass* action_class,
@@ -310,10 +310,6 @@ void FrameActionManager::StartConfiguredButton(
   Start({owner->GetFrameAction(), owner}, -1, false, *command.function, {});
 }
 
-bool FrameActionManager::ConfigFlag(std::string_view name) const {
-  return local_config_ && (*local_config_)(name).Int().value_or(0) != 0;
-}
-
 void FrameActionManager::AdvanceAndDispatch(
     std::chrono::milliseconds real_delta,
     bool fast_forward) {
@@ -324,9 +320,9 @@ void FrameActionManager::AdvanceAndDispatch(
                            ? std::numeric_limits<std::int64_t>::max()
                            : real_ms * 32);
   const bool globals_stopped =
-      ConfigFlag("time_stop") || ConfigFlag("frame_action_time_stop");
+      local_config_.time_stop || local_config_.frame_action_time_stop;
   const bool objects_stopped =
-      ConfigFlag("time_stop") || ConfigFlag("stage_time_stop");
+      local_config_.time_stop || local_config_.stage_time_stop;
   VisitActions(global_action_, global_channels_, stage_,
                [&](const ActionReference& reference, bool) {
                  auto& action = *reference.action;

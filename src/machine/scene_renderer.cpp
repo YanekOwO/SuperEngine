@@ -127,11 +127,12 @@ bool rlSceneRenderer::ShouldRenderObject(size_t obj_number,
   GraphicsSystem& graphics = machine_.GetSystem().graphics();
   const ObjectSettings& settings =
       graphics.GetObjectSettings(static_cast<int>(obj_number));
-  if (settings.obj_on_off == 1 && graphics.should_show_object1() == false)
+  const auto& display_flags = machine_.GetGlobalConfig().object_disp_flag;
+  if (settings.obj_on_off == 1 && display_flags.at(0) == 0)
     return false;
-  if (settings.obj_on_off == 2 && graphics.should_show_object2() == false)
+  if (settings.obj_on_off == 2 && display_flags.at(1) == 0)
     return false;
-  if (settings.weather_on_off && graphics.should_show_weather() == false)
+  if (settings.weather_on_off && display_flags.at(2) == 0)
     return false;
   if (settings.space_key && graphics.is_interface_hidden())
     return false;

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2007 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,6 +25,7 @@
 
 #pragma once
 
+#include <array>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/serialization.hpp>
 #include <boost/serialization/split_member.hpp>
@@ -34,11 +33,10 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 
 #include "core/audio_player.hpp"
 #include "core/audio_table.hpp"
-#include "core/sound_settings.hpp"
+#include "core/game_config.hpp"
 #include "core/voice_factory.hpp"
 #include "systems/isound_system.hpp"
 
@@ -66,8 +64,12 @@ class SoundSystem {
 
   void ExecuteSoundSystem();
 
-  rlSoundSettings const& GetSettings() const;
-  void SetSettings(const rlSoundSettings& settings);
+  // Configuration is owned by the machine and borrowed through System.
+  int GetUserVolume(SoundCategory category) const;
+  void SetUserVolume(SoundCategory category, int volume);
+  bool IsSoundEnabled(SoundCategory category) const;
+  void SetSoundEnabled(SoundCategory category, bool enabled);
+  void ApplyConfiguration();
 
   void SetUseKoeForCharacter(const int usekoe_id, const int enabled);
   int ShouldUseKoeForCharacter(const int usekoe_id) const;
@@ -75,6 +77,7 @@ class SoundSystem {
   void SetBgmEnabled(const int in);
   void SetBgmVolumeMod(const int in);
   void SetBgmVolumeScript(const int level, const int fade_in_ms);
+  int GetBgmVolumeScript() const;
 
   player_t GetBgm() const;
 
@@ -142,7 +145,10 @@ class SoundSystem {
   System& system();
 
  private:
-  void KoePlayImpl(int id);
+  void KoePlayImpl(int id, int character_volume = 255);
+  int EffectiveUserVolume(SoundCategory category) const;
+  void ApplyBgmVolume();
+  CharacterVoiceConfig VoicePreference(int character) const;
 
   // Implementation to play a wave file. Two wavPlay() versions use this
   // underlying implementation, which is split out so the one that takes a raw
@@ -160,8 +166,8 @@ class SoundSystem {
 
   // Computes the actual volume for a channel based on the per channel
   // and the per system volume.
-  int compute_channel_volume(const int channel_volume,
-                             const int system_volume) {
+  static int compute_channel_volume(const int channel_volume,
+                                    const int system_volume) {
     return (channel_volume * system_volume) / 255;
   }
 
@@ -187,12 +193,15 @@ class SoundSystem {
 
   System& system_;
 
-  rlSoundSettings settings_;
-
   AudioTable audio_table_;
 
   // Per channel volume
-  unsigned char channel_volume_[NUM_TOTAL_CHANNELS];
+  std::array<int, NUM_TOTAL_CHANNELS> channel_volume_;
+  std::array<SoundCategory, NUM_TOTAL_CHANNELS> channel_categories_;
+
+  // Script playback gains are runtime state, separate from user preferences.
+  int bgm_script_volume_ = 255;
+  int movie_script_volume_ = 255;
 
   // Open tasks that adjust the volume of a wave channel. We do this
   // because the audio backend doesn't provide this functionality and
@@ -203,6 +212,10 @@ class SoundSystem {
 
   // Maps each UseKoe id to one or more koePlay ids.
   std::multimap<int, int> usekoe_to_koeplay_mapping_;
+
+  // Immutable Siglus character-number associations from CHRKOE definitions.
+  std::multimap<int, int> character_voice_groups_;
+  bool uses_character_voice_groups_ = false;
 
   std::shared_ptr<IAssetScanner> voice_assets_;
 

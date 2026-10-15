@@ -30,7 +30,6 @@
 #include <chrono>
 #include <map>
 #include <memory>
-#include <set>
 
 class IEventBackend;
 class EventListener;

@@ -81,8 +81,6 @@ class RLVMInstance {
                      const std::string& true_button,
                      const std::string& false_button);
 
-  std::shared_ptr<System> system_;
-
   std::shared_ptr<RLMachine> machine_;
 
   std::shared_ptr<Debugger> debugger_;

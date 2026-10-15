@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 
+#include "core/game_config.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
@@ -117,7 +118,8 @@ TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
 TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionUsesTypedSceneCommand) {
   AddCallbackScene({Type::FrameAction, Type::Object});
   Stage stage;
-  FrameActionManager manager(vm, stage, {}, 0);
+  LocalConfig config;
+  FrameActionManager manager(vm, stage, config, 0);
   auto object = std::make_shared<GraphicsObject>();
   manager.StartConfiguredButton(
       loader, object,
@@ -133,13 +135,42 @@ TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionUsesTypedSceneCommand) {
 TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionRejectsWrongSignature) {
   AddCallbackScene({Type::Int, Type::Object});
   Stage stage;
-  FrameActionManager manager(vm, stage, {}, 0);
+  LocalConfig config;
+  FrameActionManager manager(vm, stage, config, 0);
   auto object = std::make_shared<GraphicsObject>();
   EXPECT_THROW(manager.StartConfiguredButton(
                    loader, object,
                    MwndConfig::CallTarget{.scene = "ui", .command = "animate"}),
                sr::RuntimeError);
   EXPECT_FALSE(object->GetFrameAction()->IsActive());
+}
+
+TEST_F(SiglusSceneEntryTest, FrameActionClocksBorrowLiveLocalConfiguration) {
+  Stage stage(1);
+  LocalConfig config;
+  FrameActionManager manager(vm, stage, config, 0);
+  auto global_counter = manager.global_action()->GetCounter();
+  global_counter->Start(false);
+  auto object = std::make_shared<GraphicsObject>();
+  stage.objects[kLayerFg][0] = object;
+  auto object_counter = object->GetFrameAction()->GetCounter();
+  object_counter->Start(false);
+
+  config.frame_action_time_stop = true;
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(10), false);
+  EXPECT_EQ(global_counter->Get(), 0);
+  EXPECT_EQ(object_counter->Get(), 10);
+
+  config.frame_action_time_stop = false;
+  config.stage_time_stop = true;
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(10), false);
+  EXPECT_EQ(global_counter->Get(), 10);
+  EXPECT_EQ(object_counter->Get(), 10);
+
+  config = LocalConfig{};
+  manager.AdvanceAndDispatch(std::chrono::milliseconds(5), true);
+  EXPECT_EQ(global_counter->Get(), 170);
+  EXPECT_EQ(object_counter->Get(), 170);
 }
 
 TEST_F(SiglusSceneEntryTest, MissingNamedCommandDoesNotFallBackToScript) {

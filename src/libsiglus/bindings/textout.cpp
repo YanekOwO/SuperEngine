@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "core/game_config.hpp"
 #include "core/kidoku_table.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/wait_helpers.hpp"
@@ -46,14 +47,11 @@ namespace sr = serilang;
 
 class SiglusTextout {
  public:
-  SiglusTextout(sr::VM& vm, System* sys, std::shared_ptr<Gameexe> localcfg)
+  SiglusTextout(sr::VM& vm, System* sys, LocalConfig& localcfg)
       : vm_(vm), sys_(sys), localcfg_(localcfg) {}
 
   struct Textout : public CoroutineTask {
-    Textout(sr::VM& vm,
-            System* system,
-            std::shared_ptr<Gameexe> localcfg,
-            std::string text)
+    Textout(sr::VM& vm, System* system, LocalConfig& localcfg, std::string text)
         : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
           system_(system),
           local_config_(localcfg),
@@ -63,11 +61,10 @@ class SiglusTextout {
       for (std::string::const_iterator cur = text_.cbegin(), next;
            cur != text_.cend(); cur = next) {
         if (!ShouldFlushText()) {
-          int speed = system_ ? system_->text().message_speed() : 0;
-          if (local_config_) {
-            if (auto val = (*local_config_)("message_speed").Int())
-              speed = val.value();
-          }
+          const int speed = system_
+                                ? EffectiveMessageSpeed(
+                                      local_config_, system_->global_config())
+                                : 0;
 
           const std::chrono::milliseconds duration(std::max(1, speed));
           if ((co_await WaitFor(duration, true)) ==
@@ -93,20 +90,15 @@ class SiglusTextout {
         return true;
       if (flush_)
         return true;
-      TextSystem& text = system_->text();
       if (system_->ShouldFastForward())
         return true;
-      if (text.message_no_wait() || text.script_message_nowait())
+      if (EffectiveMessageNowait(local_config_, system_->global_config()))
         return true;
-      if (local_config_) {
-        if ((*local_config_)("message_nowait").Int().value_or(0))
-          return true;
-      }
       return false;
     }
 
     System* system_;
-    std::shared_ptr<Gameexe> local_config_;
+    LocalConfig& local_config_;
     std::string text_;
     bool flush_ = false;
   };
@@ -114,7 +106,7 @@ class SiglusTextout {
   PendingCoroutineTasks pending_;
   sr::VM& vm_;
   System* sys_;
-  std::shared_ptr<Gameexe> localcfg_;
+  LocalConfig& localcfg_;
 };
 
 void BindTextout(SiglusMachine& runtime) {

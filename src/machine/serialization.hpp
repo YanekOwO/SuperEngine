@@ -37,6 +37,11 @@ class System;
 
 namespace Serialization {
 
+inline constexpr int CURRENT_GLOBAL_VERSION = 3;
+inline constexpr int CURRENT_LOCAL_VERSION = 2;
+inline constexpr char GLOBAL_FORMAT_SIGNATURE[] = "RLVM_GLOBAL_GAME_CONFIG";
+inline constexpr char LOCAL_FORMAT_SIGNATURE[] = "RLVM_LOCAL_GAME_CONFIG";
+
 // Pointer to the machine that is having its data
 // serialized. boost::serialization doesn't allow passing something
 // like a closure around, which is frustrating because many pieces of

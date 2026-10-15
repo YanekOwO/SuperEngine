@@ -74,9 +74,6 @@ void SiglusMachine::Run() {
           std::max(now - last_frame_tick, Clock::duration_t::zero());
       last_frame_tick = now;
 
-      const auto flag = [this](std::string_view name) {
-        return local_config && (*local_config)(name).Int().value_or(0) != 0;
-      };
       const std::int64_t real_ms = real_delta.count();
       const bool fast_forward = system->ShouldFastForward();
       const std::int64_t game_ms =
@@ -85,16 +82,16 @@ void SiglusMachine::Run() {
                      ? std::numeric_limits<std::int64_t>::max()
                      : real_ms * 32)
               : real_ms;
-      if (!flag("time_stop") && !flag("counter_time_stop"))
+      if (!local_config.time_stop && !local_config.counter_time_stop)
         counter_list->Advance(game_ms, real_ms);
 
-      const bool time_stopped = flag("time_stop");
+      const bool time_stopped = local_config.time_stop;
       const bool quakes_were_active =
           (screen_quakes && screen_quakes->IsActive()) ||
           (stage && stage->HasActiveQuakes());
       if (!time_stopped && screen_quakes)
         screen_quakes->Advance(game_ms);
-      if (!time_stopped && !flag("stage_time_stop") && stage)
+      if (!time_stopped && !local_config.stage_time_stop && stage)
         stage->AdvanceQuakes(game_ms);
       const bool quakes_are_active =
           (screen_quakes && screen_quakes->IsActive()) ||

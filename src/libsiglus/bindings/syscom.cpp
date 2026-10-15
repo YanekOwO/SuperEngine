@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
 #include "core/mask.hpp"
@@ -43,10 +44,13 @@
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <format>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -93,248 +97,175 @@ std::pair<std::string, int> ReadMenuScene(Gameexe& gameexe) {
   return {std::move(scene), zlabel};
 }
 
-std::string LocalSyscomKey(std::string_view root, int id) {
-  return std::format("{}.{:03}", root, id);
-}
-
-void ApplyMwndSyscomDefaults(System* sys,
-                             const std::shared_ptr<Gameexe>& gameexe) {
-  if (!sys || !gameexe)
-    return;
-  TextSystem& text = sys->text();
-  auto readskip = (*gameexe)("SYSCOMMENU.READ_SKIP");
-  text.SetReadSkipButtonAvailable(readskip.IntAt(0).value_or(1) != 0,
-                                  readskip.IntAt(1).value_or(1) != 0);
-  auto automode = (*gameexe)("SYSCOMMENU.AUTO_MODE");
-  text.SetAutoModeButtonAvailable(automode.IntAt(0).value_or(1) != 0,
-                                  automode.IntAt(1).value_or(1) != 0);
-  text.ResetMwndButtonPolicy();
-}
-
 void ResetLocalSyscomState(System* sys,
                            const std::shared_ptr<Gameexe>& gameexe,
-                           const std::shared_ptr<Gameexe>& local) {
-  ApplyMwndSyscomDefaults(sys, gameexe);
-  if (!gameexe || !local)
-    return;
-  for (int id = 0; id < 256; ++id) {
-    auto switch_source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_SWITCH", id);
-    if (switch_source.Exists()) {
-      const std::string key = LocalSyscomKey("LOCAL_EXTRA_SWITCH", id);
-      local->SetIntAt(key, switch_source.IntAt(2).value_or(0));
-      local->SetIntAt(key + ".EXIST", switch_source.IntAt(0).value_or(1));
-      local->SetIntAt(key + ".ENABLE", switch_source.IntAt(1).value_or(1));
-    }
-    auto mode_source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_MODE", id);
-    if (mode_source.Exists()) {
-      const std::string key = LocalSyscomKey("LOCAL_EXTRA_MODE", id);
-      local->SetIntAt(key, mode_source.IntAt(2).value_or(0));
-      local->SetIntAt(key + ".EXIST", mode_source.IntAt(0).value_or(1));
-      local->SetIntAt(key + ".ENABLE", mode_source.IntAt(1).value_or(1));
-    }
-  }
+                           LocalConfig& local) {
+  local.syscommenu =
+      gameexe ? MakeSiglusLocalConfig(*gameexe).syscommenu : SyscomMenuConfig{};
+  local.mwnd_btn_disable_all = false;
+  local.disable_mwnd_btn_touch = false;
+  std::fill(local.mwnd_btn_disable.begin(), local.mwnd_btn_disable.end(),
+            false);
+  sys->text().mwnd_capture_window_.reset();
 }
 
 }  // namespace
 
 void BindSyscom(SiglusMachine& runtime) {
   auto* sys = runtime.system.get();
+  if (!sys)
+    throw std::runtime_error("syscom bindings require a System");
   auto* stage = runtime.stage.get();
   auto* loader = runtime.loader.get();
   auto gameexe = runtime.gameexe;
-  auto local_config = runtime.local_config;
-  auto input = runtime.input_event_listener;
-  auto mask_list = runtime.mask_list;
-  auto platform = runtime.platform_implementor;
-  ResetLocalSyscomState(sys, gameexe, local_config);
+  auto* local_config = &runtime.local_config;
+  auto* global_config = &runtime.global_config;
+  ResetLocalSyscomState(sys, gameexe, *local_config);
   runtime.reset_local_memory.emplace_back([sys, gameexe, local_config] {
-    ResetLocalSyscomState(sys, gameexe, local_config);
-    if (sys)
-      sys->text().SetSkipMode(false);
+    ResetLocalSyscomState(sys, gameexe, *local_config);
+    sys->text().SetSkipMode(false);
   });
-  auto reset_local_memory = runtime.reset_local_memory;
-  auto frame_actions = runtime.frame_action_manager;
-  auto finish_active_wipe = runtime.finish_active_wipe;
-  auto no_wipe_animation = runtime.no_wipe_animation;
-  auto skip_wipe_animation = runtime.skip_wipe_animation;
-  const bool default_no_wipe_animation =
-      gameexe && (*gameexe)("SYSTEM.NO_WIPE_ANIME").Int().value_or(0) != 0;
-  const bool default_skip_wipe_animation =
-      !gameexe || (*gameexe)("SYSTEM.SKIP_WIPE_ANIME").Int().value_or(1) != 0;
-  *no_wipe_animation = default_no_wipe_animation;
-  *skip_wipe_animation = default_skip_wipe_animation;
+  const GlobalConfig defaults =
+      gameexe ? MakeSiglusGlobalConfig(*gameexe) : GlobalConfig{};
 
   VM& vm = *runtime.vm;
   sb::module_ m(vm, "syscom");
   m.def("menu_enable", [sys] { sys->EnableSyscom(); });
   m.def("menu_disable", [sys] { sys->DisableSyscom(); });
-  m.def("btn_enable_all", [sys] {
-    if (sys)
-      sys->text().SetMwndButtonsEnabled(true);
+  m.def("btn_enable_all",
+        [&cfg = runtime.local_config] { cfg.mwnd_btn_disable_all = false; });
+  m.def("btn_enable", [&cfg = runtime.local_config](int slot) {
+    if (slot < 0)
+      return;
+    auto& disabled = cfg.mwnd_btn_disable;
+    if (disabled.size() <= static_cast<std::size_t>(slot))
+      disabled.resize(static_cast<std::size_t>(slot) + 1, false);
+    disabled[slot] = false;
   });
-  m.def("btn_enable", [sys](int slot) {
-    if (sys)
-      sys->text().SetMwndButtonEnabled(slot, true);
+  m.def("btn_disable_all",
+        [local_config] { local_config->mwnd_btn_disable_all = true; });
+  m.def("btn_disable", [local_config](int slot) {
+    if (slot < 0)
+      return;
+    auto& disabled = local_config->mwnd_btn_disable;
+    if (disabled.size() <= static_cast<std::size_t>(slot))
+      disabled.resize(static_cast<std::size_t>(slot) + 1, false);
+    disabled[slot] = true;
   });
-  m.def("btn_disable_all", [sys] {
-    if (sys)
-      sys->text().SetMwndButtonsEnabled(false);
-  });
-  m.def("btn_disable", [sys](int slot) {
-    if (sys)
-      sys->text().SetMwndButtonEnabled(slot, false);
-  });
-  m.def("touch_enable", [sys] {
-    if (sys)
-      sys->text().SetMwndButtonTouchEnabled(true);
-  });
-  m.def("touch_disable", [sys] {
-    if (sys)
-      sys->text().SetMwndButtonTouchEnabled(false);
-  });
+  m.def("touch_enable",
+        [local_config] { local_config->disable_mwnd_btn_touch = false; });
+  m.def("touch_disable",
+        [local_config] { local_config->disable_mwnd_btn_touch = true; });
   m.def("init_flags", [sys, gameexe, local_config] {
-    ResetLocalSyscomState(sys, gameexe, local_config);
+    ResetLocalSyscomState(sys, gameexe, *local_config);
   });
 
-  m.def("set_readskip", [sys](int value) {
-    if (sys)
-      sys->text().SetSkipMode(value != 0);
+  m.def("set_readskip",
+        [sys](int value) { sys->text().SetSkipMode(value != 0); });
+  m.def("get_readskip", [sys] { return sys->text().skip_mode() ? 1 : 0; });
+  m.def("set_enable_readskip", [local_config](int value) {
+    local_config->syscommenu.read_skip.enable = value != 0;
   });
-  m.def("get_readskip",
-        [sys] { return sys && sys->text().skip_mode() ? 1 : 0; });
-  m.def("set_enable_readskip", [sys](int value) {
-    if (sys) {
-      auto& text = sys->text();
-      text.SetReadSkipButtonAvailable(text.readskip_button_exists(),
-                                      value != 0);
-    }
+  m.def("get_enable_readskip", [local_config] {
+    return local_config->syscommenu.read_skip.enable ? 1 : 0;
   });
-  m.def("get_enable_readskip",
-        [sys] { return sys && sys->text().readskip_button_enabled() ? 1 : 0; });
-  m.def("set_exist_readskip", [sys](int value) {
-    if (sys) {
-      auto& text = sys->text();
-      text.SetReadSkipButtonAvailable(value != 0,
-                                      text.readskip_button_enabled());
-    }
+  m.def("set_exist_readskip", [local_config](int value) {
+    local_config->syscommenu.read_skip.exist = value != 0;
   });
-  m.def("get_exist_readskip",
-        [sys] { return sys && sys->text().readskip_button_exists() ? 1 : 0; });
-  m.def("is_readskip_enable", [sys] {
-    if (!sys)
-      return 0;
-    auto& text = sys->text();
-    return text.readskip_button_exists() && text.readskip_button_enabled() &&
-                   text.kidoku_read()
-               ? 1
-               : 0;
+  m.def("get_exist_readskip", [local_config] {
+    return local_config->syscommenu.read_skip.exist ? 1 : 0;
+  });
+  m.def("is_readskip_enable", [sys, local_config] {
+    const auto& entry = local_config->syscommenu.read_skip;
+    return entry.exist && entry.enable && sys->text().kidoku_read() ? 1 : 0;
   });
 
-  m.def("get_automode",
-        [sys] { return sys && sys->text().auto_mode() ? 1 : 0; });
-  m.def("set_enable_automode", [sys](int value) {
-    if (sys) {
-      auto& text = sys->text();
-      text.SetAutoModeButtonAvailable(text.automode_button_exists(),
-                                      value != 0);
-    }
+  m.def("get_automode", [local_config, global_config] {
+    return EffectiveAutoMode(*local_config, *global_config) ? 1 : 0;
   });
-  m.def("get_enable_automode",
-        [sys] { return sys && sys->text().automode_button_enabled() ? 1 : 0; });
-  m.def("set_exist_automode", [sys](int value) {
-    if (sys) {
-      auto& text = sys->text();
-      text.SetAutoModeButtonAvailable(value != 0,
-                                      text.automode_button_enabled());
-    }
+  m.def("set_enable_automode", [local_config](int value) {
+    local_config->syscommenu.auto_mode.enable = value != 0;
   });
-  m.def("get_exist_automode",
-        [sys] { return sys && sys->text().automode_button_exists() ? 1 : 0; });
-  m.def("is_automode_enable", [sys] {
-    return sys && sys->text().automode_button_exists() &&
-                   sys->text().automode_button_enabled()
-               ? 1
-               : 0;
+  m.def("get_enable_automode", [local_config] {
+    return local_config->syscommenu.auto_mode.enable ? 1 : 0;
+  });
+  m.def("set_exist_automode", [local_config](int value) {
+    local_config->syscommenu.auto_mode.exist = value != 0;
+  });
+  m.def("get_exist_automode", [local_config] {
+    return local_config->syscommenu.auto_mode.exist ? 1 : 0;
+  });
+  m.def("is_automode_enable", [local_config] {
+    const auto& entry = local_config->syscommenu.auto_mode;
+    return entry.exist && entry.enable ? 1 : 0;
   });
 
-  const auto set_local = [local_config](std::string_view root, int id,
-                                        int value) {
-    if (local_config && id >= 0)
-      local_config->SetIntAt(LocalSyscomKey(root, id), value);
-  };
-  const auto get_local = [local_config](std::string_view root, int id) {
-    if (!local_config || id < 0)
-      return 0;
-    return (*local_config)(LocalSyscomKey(root, id)).Int().value_or(0);
-  };
-  const auto set_local_field = [local_config](std::string_view root, int id,
-                                              std::string_view field,
-                                              int value) {
-    if (local_config && id >= 0)
-      local_config->SetIntAt(
-          LocalSyscomKey(root, id) + "." + std::string(field), value);
-  };
-  const auto get_local_field = [local_config](std::string_view root, int id,
-                                              std::string_view field) {
-    if (!local_config || id < 0)
-      return 0;
-    return (*local_config)(LocalSyscomKey(root, id) + "." + std::string(field))
-        .Int()
-        .value_or(0);
-  };
-  m.def("set_extraswitch", [set_local](int id, int value) {
-    set_local("LOCAL_EXTRA_SWITCH", id, value != 0);
-  });
-  m.def("get_extraswitch", [get_local](int id) {
-    return get_local("LOCAL_EXTRA_SWITCH", id) != 0 ? 1 : 0;
-  });
-  m.def("set_enable_extraswitch", [set_local_field](int id, int value) {
-    set_local_field("LOCAL_EXTRA_SWITCH", id, "ENABLE", value != 0);
-  });
-  m.def("get_enable_extraswitch", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_SWITCH", id, "ENABLE") != 0 ? 1 : 0;
-  });
-  m.def("set_exist_extraswitch", [set_local_field](int id, int value) {
-    set_local_field("LOCAL_EXTRA_SWITCH", id, "EXIST", value != 0);
-  });
-  m.def("get_exist_extraswitch", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_SWITCH", id, "EXIST") != 0 ? 1 : 0;
-  });
-  m.def("is_extraswitch_enable", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_SWITCH", id, "EXIST") != 0 &&
-                   get_local_field("LOCAL_EXTRA_SWITCH", id, "ENABLE") != 0
-               ? 1
-               : 0;
-  });
-  m.def("set_localmode", [set_local](int id, int value) {
-    set_local("LOCAL_EXTRA_MODE", id, value);
-  });
-  m.def("get_localmode",
-        [get_local](int id) { return get_local("LOCAL_EXTRA_MODE", id); });
-  m.def("set_enable_localmode", [set_local_field](int id, int value) {
-    set_local_field("LOCAL_EXTRA_MODE", id, "ENABLE", value != 0);
-  });
-  m.def("get_enable_localmode", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_MODE", id, "ENABLE") != 0 ? 1 : 0;
-  });
-  m.def("set_exist_localmode", [set_local_field](int id, int value) {
-    set_local_field("LOCAL_EXTRA_MODE", id, "EXIST", value != 0);
-  });
-  m.def("get_exist_localmode", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_MODE", id, "EXIST") != 0 ? 1 : 0;
-  });
-  m.def("is_localmode_enable", [get_local_field](int id) {
-    return get_local_field("LOCAL_EXTRA_MODE", id, "EXIST") != 0 &&
-                   get_local_field("LOCAL_EXTRA_MODE", id, "ENABLE") != 0
-               ? 1
-               : 0;
-  });
+  const auto bind_extra =
+      [&](auto entries, std::string_view value_setter,
+          std::string_view value_getter, std::string_view enable_setter,
+          std::string_view enable_getter, std::string_view exist_setter,
+          std::string_view exist_getter, std::string_view is_enabled) {
+        using Entry = std::remove_reference_t<decltype((*entries)[0])>;
+        const auto find = [entries](int id) -> Entry* {
+          return id >= 0 && static_cast<std::size_t>(id) < entries->size()
+                     ? &(*entries)[id]
+                     : nullptr;
+        };
+        m.def(value_setter, [find](int id, int value) {
+          if (auto* entry = find(id)) {
+            if constexpr (std::is_same_v<Entry, ExtraSwitchConfig>)
+              entry->onoff = value != 0;
+            else
+              entry->mode = value;
+          }
+        });
+        m.def(value_getter, [find](int id) {
+          auto* entry = find(id);
+          if (!entry)
+            return 0;
+          if constexpr (std::is_same_v<Entry, ExtraSwitchConfig>)
+            return entry->onoff ? 1 : 0;
+          else
+            return entry->mode;
+        });
+        m.def(enable_setter, [find](int id, int value) {
+          if (auto* entry = find(id))
+            entry->enable = value != 0;
+        });
+        m.def(enable_getter, [find](int id) {
+          auto* entry = find(id);
+          return entry && entry->enable ? 1 : 0;
+        });
+        m.def(exist_setter, [find](int id, int value) {
+          if (auto* entry = find(id))
+            entry->exist = value != 0;
+        });
+        m.def(exist_getter, [find](int id) {
+          auto* entry = find(id);
+          return entry && entry->exist ? 1 : 0;
+        });
+        m.def(is_enabled, [find](int id) {
+          auto* entry = find(id);
+          return entry && entry->exist && entry->enable ? 1 : 0;
+        });
+      };
+  bind_extra(&local_config->syscommenu.local_extra_switch, "set_extraswitch",
+             "get_extraswitch", "set_enable_extraswitch",
+             "get_enable_extraswitch", "set_exist_extraswitch",
+             "get_exist_extraswitch", "is_extraswitch_enable");
+  bind_extra(&local_config->syscommenu.local_extra_mode, "set_localmode",
+             "get_localmode", "set_enable_localmode", "get_enable_localmode",
+             "set_exist_localmode", "get_exist_localmode",
+             "is_localmode_enable");
 
   m.def(
       "return_to_menu",
-      [sys, stage, loader, gameexe, input, mask_list, platform,
-       reset_local_memory, frame_actions,
-       finish_active_wipe](VM& vm, Fiber& fiber, std::vector<Value> args) {
+      [sys, stage, loader, gameexe, &input = runtime.input_event_listener,
+       &mask_list = runtime.mask_list, &platform = runtime.platform_implementor,
+       &reset_local_memory = runtime.reset_local_memory,
+       &frame_actions = runtime.frame_action_manager,
+       &finish_active_wipe = runtime.finish_active_wipe](
+          VM& vm, Fiber& fiber, std::vector<Value> args) {
         ReturnMenuParams params = ReturnMenuParams::Parse(std::move(args));
         if (!gameexe || !loader)
           throw RuntimeError("return_to_menu requires game configuration");
@@ -359,8 +290,9 @@ void BindSyscom(SiglusMachine& runtime) {
         if (finish_active_wipe && *finish_active_wipe)
           (*finish_active_wipe)();
 
-        auto restart = [&vm, sys, stage, input, mask_list, reset_local_memory,
-                        frame_actions, finish_active_wipe, entry,
+        auto restart = [&vm, sys, stage, &input, &mask_list,
+                        &reset_local_memory, &frame_actions,
+                        &finish_active_wipe, entry,
                         preserve = params.preserve_backlog]() mutable {
           // Cancel timers before resetting the stage they refer to.
           if (finish_active_wipe && *finish_active_wipe)
@@ -374,15 +306,15 @@ void BindSyscom(SiglusMachine& runtime) {
             stage->Reset();
           if (mask_list)
             mask_list->Reset();
-          if (sys) {
-            if (preserve) {
-              sys->sound().Reset();
-              sys->graphics().Reset();
-              sys->EnableSyscom();
-            } else {
-              sys->Reset();
-            }
+
+          if (preserve) {
+            sys->sound().Reset();
+            sys->graphics().Reset();
+            sys->EnableSyscom();
+          } else {
+            sys->Reset();
           }
+
           if (input)
             input->ResetState();
           vm.ScheduleExecute(entry);
@@ -418,115 +350,124 @@ void BindSyscom(SiglusMachine& runtime) {
     return 0;
   });
 
-  m.def("set_enable_hidemwnd", [](bool) {
-    // TODO
+  m.def("set_enable_hidemwnd", [local_config](bool value) {
+    local_config->syscommenu.hide_mwnd.enable = value;
   });
-  m.def("set_no_wipe_anime_onoff",
-        [no_wipe_animation](int value) { *no_wipe_animation = value != 0; });
-  m.def("set_no_wipe_anime_onoff_default",
-        [no_wipe_animation, default_no_wipe_animation] {
-          *no_wipe_animation = default_no_wipe_animation;
+  const auto add_global_bool =
+      [&](bool GlobalSystemConfig::* field, std::string_view setter,
+          std::string_view reset, std::string_view getter) {
+        m.def(setter, [global_config, field](int value) {
+          global_config->system.*field = value != 0;
         });
-  m.def("get_no_wipe_anime_onoff",
-        [no_wipe_animation] { return *no_wipe_animation ? 1 : 0; });
-  m.def("set_skip_wipe_anime_onoff", [skip_wipe_animation](int value) {
-    *skip_wipe_animation = value != 0;
-  });
-  m.def("set_skip_wipe_anime_onoff_default",
-        [skip_wipe_animation, default_skip_wipe_animation] {
-          *skip_wipe_animation = default_skip_wipe_animation;
+        m.def(reset, [global_config, field, initial = defaults.system.*field] {
+          global_config->system.*field = initial;
         });
-  m.def("get_skip_wipe_anime_onoff",
-        [skip_wipe_animation] { return *skip_wipe_animation ? 1 : 0; });
-  m.def("set_automode", [sys](int val) -> void {
-    if (!sys)
-      return;
-    sys->text().SetAutoMode(val);
+        m.def(getter, [global_config, field] {
+          return global_config->system.*field ? 1 : 0;
+        });
+      };
+  add_global_bool(&GlobalSystemConfig::disable_wipe_anime,
+                  "set_no_wipe_anime_onoff", "set_no_wipe_anime_onoff_default",
+                  "get_no_wipe_anime_onoff");
+  add_global_bool(
+      &GlobalSystemConfig::skip_wipe_anime, "set_skip_wipe_anime_onoff",
+      "set_skip_wipe_anime_onoff_default", "get_skip_wipe_anime_onoff");
+  m.def("set_automode", [global_config](int value) {
+    global_config->enable_auto_mode = value != 0;
   });
-  m.def("set_all_volume_default", [sys]() -> void {
-    if (!sys)
-      return;
-    auto& sound = sys->sound();
-    sound.SetBgmVolumeMod(255);
-    sound.SetKoeVolume(255, 0);
-    sound.SetSeVolumeMod(255);
+  const auto apply_sound = [sys] { sys->sound().ApplyConfiguration(); };
+  const auto add_sound = [&](std::string_view name, SoundCategory category) {
+    const unsigned index = SoundIndex(category);
+    const std::string prefix(name);
+    m.def("set_" + prefix + "_volume",
+          [global_config, index, apply_sound](int value) {
+            global_config->sound_user_volume[index] = std::clamp(value, 0, 255);
+            apply_sound();
+          });
+    m.def("set_" + prefix + "_volume_default",
+          [global_config, index, initial = defaults.sound_user_volume[index],
+           apply_sound] {
+            global_config->sound_user_volume[index] = initial;
+            apply_sound();
+          });
+    m.def("get_" + prefix + "_volume", [global_config, index] {
+      return global_config->sound_user_volume[index];
+    });
+    m.def("set_" + prefix + "_onoff",
+          [global_config, index, apply_sound](int value) {
+            global_config->play_sound_check[index] = value != 0;
+            apply_sound();
+          });
+    m.def("set_" + prefix + "_onoff_default",
+          [global_config, index, initial = defaults.play_sound_check[index],
+           apply_sound] {
+            global_config->play_sound_check[index] = initial;
+            apply_sound();
+          });
+    m.def("get_" + prefix + "_onoff", [global_config, index] {
+      return global_config->play_sound_check[index] ? 1 : 0;
+    });
+  };
+  add_sound("bgm", SoundCategory::Bgm);
+  add_sound("koe", SoundCategory::Voice);
+  add_sound("pcm", SoundCategory::Pcm);
+  add_sound("se", SoundCategory::Se);
+  add_sound("mov", SoundCategory::Movie);
+  m.def("set_all_volume", [global_config, apply_sound](int value) {
+    global_config->all_sound_user_volume = std::clamp(value, 0, 255);
+    apply_sound();
   });
-  m.def("set_bgm_volume_default", [sys]() -> void {
-    if (!sys)
-      return;
-    auto& sound = sys->sound();
-    sound.SetBgmVolumeMod(255);
+  m.def("set_all_volume_default",
+        [global_config, initial = defaults.all_sound_user_volume, apply_sound] {
+          global_config->all_sound_user_volume = initial;
+          apply_sound();
+        });
+  m.def("get_all_volume",
+        [global_config] { return global_config->all_sound_user_volume; });
+  m.def("set_all_onoff", [global_config, apply_sound](int value) {
+    global_config->play_all_sound_check = value != 0;
+    apply_sound();
   });
-  m.def("set_koe_volume_default", [sys]() -> void {
-    if (!sys)
-      return;
-    auto& sound = sys->sound();
-    sound.SetKoeVolume(255, 0);
+  m.def("set_all_onoff_default",
+        [global_config, initial = defaults.play_all_sound_check, apply_sound] {
+          global_config->play_all_sound_check = initial;
+          apply_sound();
+        });
+  m.def("get_all_onoff", [global_config] {
+    return global_config->play_all_sound_check ? 1 : 0;
   });
-  m.def("set_koe_onoff_default", []() -> void {
-    // TODO
+  m.def("set_koemode", [global_config, apply_sound](int value) {
+    global_config->koe_mode = value;
+    apply_sound();
   });
-  m.def("set_bgm_onoff_default", [sys]() -> void {
-    if (!sys)
-      return;
-    auto& sound = sys->sound();
-    sound.SetBgmEnabled(1);
+  m.def("set_koemode_default",
+        [global_config, initial = defaults.koe_mode, apply_sound] {
+          global_config->koe_mode = initial;
+          apply_sound();
+        });
+  m.def("get_koemode", [global_config] { return global_config->koe_mode; });
+  m.def("set_bgmfade_volume", [global_config, apply_sound](int value) {
+    global_config->bgmfade_volume = std::clamp(value, 0, 255);
+    apply_sound();
   });
-  m.def("set_all_onoff_default", [] {
-    // TODO
+  m.def("set_bgmfade_volume_default",
+        [global_config, initial = defaults.bgmfade_volume, apply_sound] {
+          global_config->bgmfade_volume = initial;
+          apply_sound();
+        });
+  m.def("get_bgmfade_volume",
+        [global_config] { return global_config->bgmfade_volume; });
+  m.def("set_bgmfade_onoff", [global_config, apply_sound](int value) {
+    global_config->bgmfade_use_check = value != 0;
+    apply_sound();
   });
-  m.def("set_koemode_default", [] {
-    // TODO
-  });
-  m.def("set_bgmfade_volume_default", [] {
-    // TODO
-  });
-  m.def("set_bgmfade_onoff_default", [] {
-    // TODO
-  });
-  m.def("set_pcm_volume_default", [] {
-    // TODO
-  });
-  m.def("set_pcm_onoff_default", [] {
-    // TODO
-  });
-  m.def("set_se_volume_default", [] {
-    // TODO
-  });
-  m.def("set_se_onoff_default", [] {
-    // TODO
-  });
-  m.def("set_mov_volume_default", [] {
-    // TODO
-  });
-  m.def("set_mov_onoff_default", [] {
-    // TODO
-  });
-  // TODO
-  m.def("get_all_onoff", [] { return 1; });
-  m.def("get_all_volume", [] { return 1; });
-  m.def("get_bgm_onoff", [] { return 1; });
-  m.def("get_bgm_volume", [] { return 1; });
-  m.def("get_koe_onoff", [] { return 1; });
-  m.def("get_koemode", [] { return 1; });
-  m.def("get_koe_volume", [] { return 1; });
-  m.def("get_bgmfade_onoff", [] { return 1; });
-  m.def("get_bgmfade_volume", [] { return 1; });
-  m.def("get_pcm_onoff", [] { return 1; });
-  m.def("get_pcm_volume", [] { return 1; });
-  m.def("get_se_onoff", [] { return 1; });
-  m.def("get_se_volume", [] { return 1; });
-  m.def("get_mov_onoff", [] { return 1; });
-  m.def("get_mov_volume", [] { return 1; });
-  m.def("get_all_onoff", [] { return 1; });
-  m.def("get_bgm_onoff", [] { return 1; });
-  m.def("get_koe_onoff", [] { return 1; });
-  m.def("get_koemode", [] { return 1; });
-  m.def("get_bgmfade_onoff", [] { return 1; });
-  m.def("get_pcm_onoff", [] { return 1; });
-  m.def("get_se_onoff", [] { return 1; });
-  m.def("get_mov_onoff", [] { return 1; });
-  m.def("get_mov_volume", [] { return 1; });
+  m.def("set_bgmfade_onoff_default",
+        [global_config, initial = defaults.bgmfade_use_check, apply_sound] {
+          global_config->bgmfade_use_check = initial;
+          apply_sound();
+        });
+  m.def("get_bgmfade_onoff",
+        [global_config] { return global_config->bgmfade_use_check ? 1 : 0; });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "4_syscom", BindSyscom)

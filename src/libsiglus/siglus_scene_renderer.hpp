@@ -32,7 +32,7 @@
 #include <vector>
 
 class GraphicsObject;
-class Gameexe;
+struct LocalConfig;
 class System;
 class MaskList;
 struct ScreenCanvas;
@@ -45,7 +45,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
                       ::System& system,
                       std::shared_ptr<MaskList> mask_list,
                       std::shared_ptr<::QuakeList> screen_quakes,
-                      std::shared_ptr<::Gameexe> local_config);
+                      ::LocalConfig& local_config);
 
   void ExecuteFrame() override;
   void RenderScene() override;
@@ -71,7 +71,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   ::System& system_;
   std::shared_ptr<MaskList> mask_list_;
   std::shared_ptr<::QuakeList> screen_quakes_;
-  std::shared_ptr<::Gameexe> local_config_;
+  ::LocalConfig& local_config_;
   ToRenderVec to_render_;
   std::shared_ptr<ScreenCanvas> transition_canvas_;
 };

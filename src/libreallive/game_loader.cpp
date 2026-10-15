@@ -24,6 +24,7 @@
 #include "libreallive/game_loader.hpp"
 
 #include "core/event_listener.hpp"
+#include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/stage.hpp"
 #include "libreallive/archive.hpp"
@@ -98,8 +99,12 @@ GameLoader::GameLoader(fs::path gameroot,
       std::make_unique<Stage>((*gameexe_)("OBJECT_MAX").Int().value_or(256));
   SystemOptions system_options;
   system_options.fast_forward = fast_forward;
-  system_ = std::make_shared<System>(
-      *gameexe_, *stage,
+  auto local_config =
+      std::make_unique<LocalConfig>(MakeRealliveLocalConfig(*gameexe_));
+  auto global_config =
+      std::make_unique<GlobalConfig>(MakeRealliveGlobalConfig(*gameexe_));
+  auto system = std::make_unique<System>(
+      *gameexe_, *stage, *local_config, *global_config,
       std::make_shared<AssetScanner>(AssetScanner::BuildFromGameexe(*gameexe_)),
       system_options);
 
@@ -131,9 +136,9 @@ GameLoader::GameLoader(fs::path gameroot,
   scriptor->SetDefaultScenarioConfig(std::move(default_config));
 
   // instantiate virtual machine
-  machine_ = std::make_shared<RLMachine>(system_, std::move(stage), scriptor,
-                                         std::move(memory));
-  system_->machine_ = machine_.get();
+  machine_ = std::make_shared<RLMachine>(
+      gameexe_, std::move(system), std::move(stage), scriptor,
+      std::move(local_config), std::move(global_config), std::move(memory));
   machine_->GetCallStack().Push(
       StackFrame(scriptor->Load(first_seen), StackFrame::TYPE_ROOT));
 
@@ -150,8 +155,8 @@ GameLoader::GameLoader(fs::path gameroot,
     }
   };
   longop_listener_adapter_ = std::make_shared<LongopListenerAdapter>(*machine_);
-  system_->event().AddListener(-20 /*we want the lowest priority*/,
-                               longop_listener_adapter_);
+  machine_->GetSystem().event().AddListener(-20 /*we want the lowest priority*/,
+                                            longop_listener_adapter_);
 
   // Event listener for system
   struct SystemEventListener : public EventListener {
@@ -186,8 +191,8 @@ GameLoader::GameLoader(fs::path gameroot,
     }
   };
   system_listener_ = std::make_shared<SystemEventListener>(*machine_);
-  system_->event().AddListener(20 /*we want the highest priority*/,
-                               system_listener_);
+  machine_->GetSystem().event().AddListener(20 /*we want the highest priority*/,
+                                            system_listener_);
 
   // Load the "DLLs" required
   for (auto it : gameexe_->Filter("DLL.")) {

@@ -39,6 +39,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
@@ -51,13 +54,6 @@
 namespace fs = std::filesystem;
 
 namespace Serialization {
-
-// - Was at 2 was most of rlvm's lifetime.
-// - Was changed to 3 during the 0.7 release because boost 1.35 had a serious
-//   bug in its implementation of vectors of primitive types which made
-//   archives not-backwards (or forwards) compatible. Thankfully, the save
-//   games themselves don't use that feature.
-constexpr int CURRENT_GLOBAL_VERSION = 3;
 
 fs::path buildGlobalMemoryFilename(RLMachine& machine) {
   return machine.GetSystem().GameSaveDirectory() / "global.sav.gz";
@@ -81,12 +77,9 @@ void saveGlobalMemoryTo(std::ostream& oss, RLMachine& machine) {
   boost::archive::text_oarchive oa(filtered_output);
   System& sys = machine.GetSystem();
 
-  oa << CURRENT_GLOBAL_VERSION << machine.GetMemoryStorage().GetGlobalMemory()
-     << machine.GetKidokus() << machine.GetGenerics()
-     << const_cast<const SystemGlobals&>(sys.globals())
-     << const_cast<const GraphicsSystemGlobals&>(sys.graphics().globals())
-     << const_cast<const TextSystemGlobals&>(sys.text().globals())
-     << sys.sound().GetSettings();
+  oa << CURRENT_GLOBAL_VERSION << std::string(GLOBAL_FORMAT_SIGNATURE)
+     << machine.GetMemoryStorage().GetGlobalMemory() << machine.GetKidokus()
+     << machine.GetGlobalConfig() << sys.graphics().cg_table();
 }
 
 void loadGlobalMemory(RLMachine& machine) {
@@ -105,12 +98,16 @@ void loadGlobalMemory(RLMachine& machine) {
       // we're trying to read an incompatible old version's files or the global
       // data is corrupted. Either way, we can't safely do ANYTHING with this
       // game's entire save data so move it out of the way.
+      file.close();
       fs::path save_dir = machine.GetSystem().GameSaveDirectory();
-      fs::path dest_save_dir = save_dir.parent_path() /
-                               (save_dir.filename() / ".old_corrupted_data");
+      const std::string backup_name =
+          save_dir.filename().string() + ".old_corrupted_data";
+      fs::path dest_save_dir = save_dir.parent_path() / backup_name;
+      unsigned int suffix = 1;
+      while (fs::exists(dest_save_dir))
+        dest_save_dir = save_dir.parent_path() /
+                        (backup_name + "." + std::to_string(suffix++));
 
-      if (fs::exists(dest_save_dir))
-        fs::remove_all(dest_save_dir);
       fs::rename(save_dir, dest_save_dir);
 
       std::cerr << "WARNING: Unable to read saved global memory file. Moving "
@@ -127,35 +124,23 @@ void loadGlobalMemoryFrom(std::istream& iss, RLMachine& machine) {
   boost::archive::text_iarchive ia(filtered_input);
   System& sys = machine.GetSystem();
   int version;
-  ia >> version;
+  std::string signature;
+  ia >> version >> signature;
+  if (version != CURRENT_GLOBAL_VERSION || signature != GLOBAL_FORMAT_SIGNATURE)
+    throw std::runtime_error("Unsupported global save format");
 
-  // Load global memory.
   GlobalMemory global_memory;
-  ia >> global_memory;
+  KidokuTable kidokus;
+  GlobalConfig config;
+  // CG asset metadata is not serialized, so retain its filename mapping.
+  CGMTable cg_table = sys.graphics().cg_table();
+  ia >> global_memory >> kidokus >> config >> cg_table;
+
   machine.GetMemoryStorage().PartialReset(std::move(global_memory));
-
-  ia >> machine.GetKidokus();
-  ia >> machine.GetGenerics();
-
-  // When Karmic Koala came out, support for all boost earlier than 1.36 was
-  // dropped. For years, I had used boost 1.35 on Ubuntu. It turns out that
-  // boost 1.35 had a serious bug in it, where it wouldn't save vectors of
-  // primitive data types correctly. These global data files no longer load
-  // correctly.
-  //
-  // After flirting with moving to Google protobuf (can't; doesn't handle
-  // complex object graphs like GraphicsObject and its copy-on-write stuff),
-  // and then trying to fix the problem in a forked copy of the serialization
-  // headers which was unsuccessful, I'm just saying to hell with the user's
-  // settings. Most people don't change these values and save games and global
-  // memory still work (per above.)
-  if (version == CURRENT_GLOBAL_VERSION) {
-    ia >> sys.globals() >> sys.graphics().globals() >> sys.text().globals();
-
-    rlSoundSettings sound_settings;
-    ia >> sound_settings;
-    sys.sound().SetSettings(sound_settings);
-  }
+  machine.GetKidokus() = std::move(kidokus);
+  machine.GetGlobalConfig() = std::move(config);
+  sys.graphics().cg_table() = std::move(cg_table);
+  sys.ApplyConfiguration();
 }
 
 }  // namespace Serialization

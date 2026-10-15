@@ -59,8 +59,6 @@ namespace Serialization {
 
 RLMachine* g_current_machine = NULL;
 
-constexpr int CURRENT_LOCAL_VERSION = 2;
-
 System& currentSystem() {
   if (!g_current_machine)
     throw std::runtime_error("No active serialization machine context");
@@ -70,6 +68,15 @@ System& currentSystem() {
 }  // namespace Serialization
 
 namespace {
+
+void ReadLocalFormat(boost::archive::text_iarchive& archive) {
+  int version;
+  std::string signature;
+  archive >> version >> signature;
+  if (version != Serialization::CURRENT_LOCAL_VERSION ||
+      signature != Serialization::LOCAL_FORMAT_SIGNATURE)
+    throw std::runtime_error("Unsupported local save format");
+}
 
 template <typename TYPE>
 void checkInFileOpened(TYPE& file, const fs::path& home) {
@@ -102,10 +109,9 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
 
   try {
     boost::archive::text_oarchive oa(filtered_output);
-    oa << CURRENT_LOCAL_VERSION << header
+    oa << CURRENT_LOCAL_VERSION << std::string(LOCAL_FORMAT_SIGNATURE) << header
        << machine.GetMemoryStorage().GetLocalMemory()
        << const_cast<const RLMachine&>(machine)
-       << const_cast<const System&>(machine.GetSystem())
        << const_cast<const GraphicsSystem&>(machine.GetSystem().graphics())
        << const_cast<const TextSystem&>(machine.GetSystem().text())
        << const_cast<const SoundSystem&>(machine.GetSystem().sound());
@@ -114,7 +120,7 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
               << std::endl;
 
     g_current_machine = NULL;
-    throw e;
+    throw;
   }
 
   g_current_machine = NULL;
@@ -140,12 +146,12 @@ SaveGameHeader loadHeaderFrom(std::istream& iss) {
   filtered_input.push(boost::iostreams::zlib_decompressor());
   filtered_input.push(iss);
 
-  int version;
   SaveGameHeader header;
 
   // Only load the header
   boost::archive::text_iarchive ia(filtered_input);
-  ia >> version >> header;
+  ReadLocalFormat(ia);
+  ia >> header;
 
   return header;
 }
@@ -163,13 +169,13 @@ void loadLocalMemoryFrom(std::istream& iss, Memory& memory) {
   filtered_input.push(boost::iostreams::zlib_decompressor());
   filtered_input.push(iss);
 
-  int version;
   SaveGameHeader header;
   LocalMemory local_memory;
 
   // Only load the header
   boost::archive::text_iarchive ia(filtered_input);
-  ia >> version >> header >> local_memory;
+  ReadLocalFormat(ia);
+  ia >> header >> local_memory;
   memory.PartialReset(std::move(local_memory));
 }
 
@@ -186,29 +192,24 @@ void loadGameFrom(std::istream& iss, RLMachine& machine) {
   filtered_input.push(boost::iostreams::zlib_decompressor());
   filtered_input.push(iss);
 
-  int version;
   SaveGameHeader header;
 
   g_current_machine = &machine;
 
   try {
-    // Must clear the stack before reseting the System because LongOperations
-    // often hold references to objects in the System heiarchy.
-    machine.Reset();
-
     boost::archive::text_iarchive ia(filtered_input);
+    ReadLocalFormat(ia);
     LocalMemory local_memory;
-    ia >> version >> header;
-    if (version != CURRENT_LOCAL_VERSION) {
-      throw std::runtime_error("Unsupported local save version " +
-                               std::to_string(version) + "; expected " +
-                               std::to_string(CURRENT_LOCAL_VERSION));
-    }
-    ia >> local_memory >> machine >> machine.GetSystem() >>
-        machine.GetSystem().graphics() >> machine.GetSystem().text() >>
-        machine.GetSystem().sound();
+    ia >> header >> local_memory;
+
+    // Long operations may borrow subsystem objects; clear the stack first.
+    // Validate the layout before resetting any current machine state.
+    machine.Reset();
+    ia >> machine >> machine.GetSystem().graphics() >>
+        machine.GetSystem().text() >> machine.GetSystem().sound();
 
     machine.GetMemoryStorage().PartialReset(std::move(local_memory));
+    machine.GetSystem().ApplyConfiguration();
     machine.ReplayGraphicsStackCommand();
     machine.GetSystem().graphics().ForceRefresh();
   } catch (std::exception& e) {
@@ -216,7 +217,7 @@ void loadGameFrom(std::istream& iss, RLMachine& machine) {
               << " ---" << std::endl;
 
     g_current_machine = NULL;
-    throw e;
+    throw;
   }
 
   g_current_machine = NULL;

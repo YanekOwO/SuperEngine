@@ -50,6 +50,7 @@
 #include "machine/general_operations.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
+#include "modules/config_operations.hpp"
 #include "modules/jump.hpp"
 #include "modules/module_bgr.hpp"
 #include "modules/module_grp.hpp"
@@ -278,14 +279,10 @@ struct SetWindowAttr : public RLOpcode<IntConstant_T,
                                        IntConstant_T,
                                        IntConstant_T> {
   void operator()(RLMachine& machine, int r, int g, int b, int a, int f) {
-    std::vector<int> attr(5);
-    attr[0] = r;
-    attr[1] = g;
-    attr[2] = b;
-    attr[3] = a;
-    attr[4] = f;
-
-    machine.GetSystem().text().SetDefaultWindowAttr(attr);
+    auto& config = machine.GetGlobalConfig();
+    config.filter_color = RGBAColour(r, g, b, a);
+    config.reallive.window_filter = f;
+    machine.GetSystem().text().ApplyConfiguration();
   }
 };
 
@@ -300,13 +297,13 @@ struct GetWindowAttr : public RLOpcode<IntReference_T,
                   IntReferenceIterator b,
                   IntReferenceIterator a,
                   IntReferenceIterator f) {
-    TextSystem& text = machine.GetSystem().text();
-
-    *r = text.window_attr_r();
-    *g = text.window_attr_g();
-    *b = text.window_attr_b();
-    *a = text.window_attr_a();
-    *f = text.window_attr_f();
+    const auto& config = machine.GetGlobalConfig();
+    const auto& colour = config.filter_color;
+    *r = colour.r();
+    *g = colour.g();
+    *b = colour.b();
+    *a = colour.a();
+    *f = config.reallive.window_filter;
   }
 };
 
@@ -332,70 +329,74 @@ struct DefWindowAttr : public RLOpcode<IntReference_T,
   }
 };
 
-struct GetSoundSettings : public RLStoreOpcode<> {
-  GetSoundSettings(std::function<int(const rlSoundSettings&)> fn) : fn_(fn) {}
+struct GetGlobalConfigSetting : public RLStoreOpcode<> {
+  GetGlobalConfigSetting(std::function<int(const GlobalConfig&)> fn)
+      : fn_(fn) {}
 
-  std::function<int(const rlSoundSettings&)> fn_;
+  std::function<int(const GlobalConfig&)> fn_;
 
   int operator()(RLMachine& machine) {
-    const rlSoundSettings& settings = machine.GetSystem().sound().GetSettings();
+    const GlobalConfig& settings = machine.GetGlobalConfig();
     return fn_(settings);
   }
 };
 
-struct ChangeSoundSettings : public RLOpcode<IntConstant_T> {
-  ChangeSoundSettings(std::function<void(rlSoundSettings&, int)> fn)
+struct ChangeGlobalConfigSetting : public RLOpcode<IntConstant_T> {
+  ChangeGlobalConfigSetting(std::function<void(GlobalConfig&, int)> fn)
       : fn_(fn) {}
 
-  std::function<void(rlSoundSettings&, int)> fn_;
+  std::function<void(GlobalConfig&, int)> fn_;
 
   void operator()(RLMachine& machine, int value) {
-    rlSoundSettings settings = machine.GetSystem().sound().GetSettings();
-    fn_(settings, value);
-    machine.GetSystem().sound().SetSettings(settings);
+    fn_(machine.GetGlobalConfig(), value);
+    machine.GetSystem().sound().ApplyConfiguration();
   }
 };
 
 struct SetGeneric1 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int value) {
-    auto& generics = machine.GetGenerics();
-    generics.val1 = value;
+    auto& generics = machine.GetGlobalConfig().reallive.generic;
+    generics[0] = value;
   }
 };
 struct SetGeneric2 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int value) {
-    auto& generics = machine.GetGenerics();
-    generics.val2 = value;
+    auto& generics = machine.GetGlobalConfig().reallive.generic;
+    generics[1] = value;
   }
 };
 struct GetGeneric1 : public RLStoreOpcode<IntConstant_T> {
   int operator()(RLMachine& machine, int value) {
-    const auto& generics = machine.GetGenerics();
-    return generics.val1;
+    const auto& generics = machine.GetGlobalConfig().reallive.generic;
+    return generics[0];
   }
 };
 struct GetGeneric2 : public RLStoreOpcode<IntConstant_T> {
   int operator()(RLMachine& machine, int value) {
-    const auto& generics = machine.GetGenerics();
-    return generics.val2;
+    const auto& generics = machine.GetGlobalConfig().reallive.generic;
+    return generics[1];
   }
 };
 
 struct StrSetter : public RLOpcode<StrConstant_T> {
-  std::string& ref;
+  std::string LocalRealLiveConfig::* field;
 
-  StrSetter(std::string& ref_in) : ref(ref_in) {}
+  explicit StrSetter(std::string LocalRealLiveConfig::* member)
+      : field(member) {}
 
-  void operator()(RLMachine&, std::string value) override { ref = value; }
+  void operator()(RLMachine& machine, std::string value) override {
+    machine.GetLocalConfig().reallive.*field = std::move(value);
+  }
 };
 
 struct StrGetter : public RLOpcode<StrReference_T> {
-  std::string& ref;
+  std::string LocalRealLiveConfig::* field;
 
-  StrGetter(std::string& ref_in) : ref(ref_in) {}
+  explicit StrGetter(std::string LocalRealLiveConfig::* member)
+      : field(member) {}
 
-  void operator()(RLMachine&, StringReferenceIterator dst) override {
-    (*dst) = ref;
+  void operator()(RLMachine& machine, StringReferenceIterator dst) override {
+    *dst = machine.GetLocalConfig().reallive.*field;
   }
 };
 
@@ -462,14 +463,21 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(323, 0, "CallStackSize", new CallStackSize);
   AddUnsupportedOpcode(324, 0, "CallStackTrunc");
 
-  AddOpcode(
-      204, 0, "ShowCursor",
-      CallFunctionWith(&GraphicsSystem::set_show_cursor_from_bytecode, 1));
-  AddOpcode(
-      205, 0, "HideCursor",
-      CallFunctionWith(&GraphicsSystem::set_show_cursor_from_bytecode, 0));
-  AddOpcode(206, 0, "GetMouseCursor", ReturnIntValue(&GraphicsSystem::cursor));
-  AddOpcode(207, 0, "MouseCursor", CallFunction(&GraphicsSystem::SetCursor));
+  AddOpcode(204, 0, "ShowCursor", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().cursor_disp_off = false;
+            }));
+  AddOpcode(205, 0, "HideCursor", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().cursor_disp_off = true;
+            }));
+  AddOpcode(206, 0, "GetMouseCursor",
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetLocalConfig().cursor_no;
+            }));
+  AddOpcode(207, 0, "MouseCursor",
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetLocalConfig().cursor_no = value;
+              machine.GetSystem().graphics().ApplyConfiguration();
+            }));
 
   AddUnsupportedOpcode(330, 0, "EnableSkipMode");
   AddUnsupportedOpcode(331, 0, "DisableSkipMode");
@@ -479,11 +487,15 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(334, 0, "ClearLocalSkipMode",
             CallFunctionWith(&TextSystem::SetSkipMode, 0));
 
-  AddOpcode(350, 0, "CtrlKeyShip", ReturnIntValue(&TextSystem::ctrl_key_skip));
-  AddOpcode(351, 0, "CtrlKeySkipOn",
-            CallFunctionWith(&TextSystem::set_ctrl_key_skip, 1));
-  AddOpcode(352, 0, "CtrlKeySkipOff",
-            CallFunctionWith(&TextSystem::set_ctrl_key_skip, 0));
+  AddOpcode(350, 0, "CtrlKeyShip", new ConfigIntGetter([](RLMachine& machine) {
+              return !machine.GetLocalConfig().disable_ctrl;
+            }));
+  AddOpcode(351, 0, "CtrlKeySkipOn", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().disable_ctrl = false;
+            }));
+  AddOpcode(352, 0, "CtrlKeySkipOff", new ConfigAction([](RLMachine& machine) {
+              machine.GetLocalConfig().disable_ctrl = true;
+            }));
   AddOpcode(353, 0, "CtrlPressed", new CtrlPressed);
   AddOpcode(354, 0, "ShiftPressed", new ShiftPressed);
 
@@ -543,10 +555,14 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(1204, 0, "ReturnPrevSelect", new ReturnPrevSelect);
   AddOpcode(1205, 0, "ReturnPrevSelect2", new ReturnPrevSelect);
 
-  AddOpcode(1130, 0, "DefaultGrp", new StrGetter(default_grp_name));
-  AddOpcode(1131, 0, "SetDefaultGrp", new StrSetter(default_grp_name));
-  AddOpcode(1132, 0, "DefaultBgr", new StrGetter(default_bgr_name));
-  AddOpcode(1133, 0, "SetDefaultBgr", new StrSetter(default_bgr_name));
+  AddOpcode(1130, 0, "DefaultGrp",
+            new StrGetter(&LocalRealLiveConfig::default_grp_name));
+  AddOpcode(1131, 0, "SetDefaultGrp",
+            new StrSetter(&LocalRealLiveConfig::default_grp_name));
+  AddOpcode(1132, 0, "DefaultBgr",
+            new StrGetter(&LocalRealLiveConfig::default_bgr_name));
+  AddOpcode(1133, 0, "SetDefaultBgr",
+            new StrSetter(&LocalRealLiveConfig::default_bgr_name));
 
   AddUnsupportedOpcode(1302, 0, "nwSingle");
   AddUnsupportedOpcode(1303, 0, "nwMulti");
@@ -562,146 +578,198 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddUnsupportedOpcode(2050, 0, "SetCursorMono");
   AddUnsupportedOpcode(2000, 0, "CursorMono");
   AddOpcode(2051, 0, "SetSkipAnimations",
-            CallFunction(&GraphicsSystem::set_should_skip_animations));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().system.disable_wipe_anime = value != 0;
+            }));
   AddOpcode(2001, 0, "SkipAnimations",
-            ReturnIntValue(&GraphicsSystem::should_skip_animations));
-  AddOpcode(2052, 0, "SetLowPriority", CallFunction(&System::set_low_priority));
-  AddOpcode(2002, 0, "LowPriority", ReturnIntValue(&System::low_priority));
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().system.disable_wipe_anime;
+            }));
+  AddOpcode(
+      2052, 0, "SetLowPriority",
+      std::make_shared<ConfigIntSetter>([](RLMachine& machine, int value) {
+        machine.GetGlobalConfig().system.low_priority = value;
+      }));
+  AddOpcode(2002, 0, "LowPriority",
+            std::make_shared<ConfigIntGetter>([](RLMachine& machine) {
+              return machine.GetGlobalConfig().system.low_priority;
+            }));
 
   AddOpcode(2223, 0, "SetMessageSpeed",
-            CallFunction(&TextSystem::set_message_speed));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().message_speed = value;
+            }));
   AddOpcode(2323, 0, "MessageSpeed",
-            ReturnIntValue(&TextSystem::message_speed));
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().message_speed;
+            }));
   AddOpcode(2600, 0, "DefaultMessageSpeed",
             new ReturnGameexeInt("INIT_MESSAGE_SPEED", 0));
 
   AddOpcode(2224, 0, "SetMessageNoWait",
-            CallFunction(&TextSystem::set_message_no_wait));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().message_speed_nowait = value != 0;
+            }));
   AddOpcode(2324, 0, "MessageNoWait",
-            ReturnIntValue(&TextSystem::message_no_wait));
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().message_speed_nowait;
+            }));
   AddOpcode(2601, 0, "DefMessageNoWait",
             new ReturnGameexeInt("INIT_MESSAGE_SPEED_MOD", 0));
 
-  AddOpcode(2250, 0, "SetAutoMode", CallFunction(&TextSystem::SetAutoMode));
-  AddOpcode(2350, 0, "AutoMode", ReturnIntValue(&TextSystem::auto_mode));
+  AddOpcode(2250, 0, "SetAutoMode",
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().enable_auto_mode = value != 0;
+            }));
+  AddOpcode(2350, 0, "AutoMode", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().enable_auto_mode;
+            }));
   AddOpcode(2604, 0, "DefAutoMode",
             new ReturnGameexeInt("MESSAGE_KEY_WAIT_USE", 0));
 
   AddOpcode(2251, 0, "SetAutoCharTime",
-            CallFunction(&TextSystem::set_auto_char_time));
-  AddOpcode(2351, 0, "AutoCharTime", ReturnIntValue(&TextSystem::autoCharTime));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().auto_mode_moji_wait = value;
+            }));
+  AddOpcode(2351, 0, "AutoCharTime",
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().auto_mode_moji_wait;
+            }));
   AddOpcode(2605, 0, "DefAutoCharTime",
             new ReturnGameexeInt("INIT_MESSAGE_SPEED", 0));
 
   AddOpcode(2252, 0, "SetAutoBaseTime",
-            CallFunction(&TextSystem::set_auto_base_time));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().auto_mode_min_wait = value;
+            }));
   AddOpcode(2352, 0, "AutoBaseTime",
-            ReturnIntValue(&TextSystem::auto_base_time));
+            new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().auto_mode_min_wait;
+            }));
   AddOpcode(2606, 0, "DefAutoBaseTime",
             new ReturnGameexeInt("MESSAGE_KEY_WAIT_TIME", 0));
 
-  // AddOpcode(2225, 0, "SetKoeMode", CallFunction(&SoundSystem::setKoeMode));
-  // AddOpcode(2325, 0, "KoeMode", ReturnIntValue(&SoundSystem::koe_mode));
   AddOpcode(2325, 0, "KoeMode",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
               return settings.koe_mode;
             }));
-  AddOpcode(2225, 0, "SetKoeMode",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.koe_mode = value;
-            }));
+  AddOpcode(
+      2225, 0, "SetKoeMode",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.koe_mode = value;
+      }));
   AddOpcode(2326, 0, "BgmKoeFadeVol",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.bgm_koe_fade_vol;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.bgmfade_volume;
             }));
-  AddOpcode(2226, 0, "SetBgmKoeFadeVol",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.bgm_koe_fade_vol = value;
-            }));
+  AddOpcode(
+      2226, 0, "SetBgmKoeFadeVol",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.bgmfade_volume = value;
+      }));
   AddUnsupportedOpcode(2602, 0, "DefBgmKoeFadeVol");
   AddOpcode(2327, 0, "BgmKoeFade",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.bgm_koe_fade;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.bgmfade_use_check;
             }));
-  AddOpcode(2227, 0, "SetBgmKoeFade",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.bgm_koe_fade = value;
-            }));
+  AddOpcode(
+      2227, 0, "SetBgmKoeFade",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.bgmfade_use_check = value;
+      }));
   AddUnsupportedOpcode(2603, 0, "DefBgmKoeFade");
   AddOpcode(2330, 0, "BgmVolMod",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.bgm_volume;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.sound_user_volume[SoundIndex(SoundCategory::Bgm)];
             }));
-  AddOpcode(2230, 0, "SetBgmVolMod",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.bgm_volume = value;
-            }));
+  AddOpcode(
+      2230, 0, "SetBgmVolMod",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.sound_user_volume[SoundIndex(SoundCategory::Bgm)] = value;
+      }));
 
-  AddOpcode(2331, 0, "KoeVolMod",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.koe_volume;
-            }));
-  AddOpcode(2231, 0, "SetKoeVolMod",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.koe_volume = value;
-            }));
+  AddOpcode(
+      2331, 0, "KoeVolMod",
+      new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+        return settings.sound_user_volume[SoundIndex(SoundCategory::Voice)];
+      }));
+  AddOpcode(
+      2231, 0, "SetKoeVolMod",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.sound_user_volume[SoundIndex(SoundCategory::Voice)] = value;
+      }));
   AddOpcode(2332, 0, "PcmVolMod",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.pcm_volume;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.sound_user_volume[SoundIndex(SoundCategory::Pcm)];
             }));
-  AddOpcode(2232, 0, "SetPcmVolMod",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.pcm_volume = value;
-            }));
+  AddOpcode(
+      2232, 0, "SetPcmVolMod",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.sound_user_volume[SoundIndex(SoundCategory::Pcm)] = value;
+      }));
 
   AddOpcode(2333, 0, "SeVolMod",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.se_volume;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.sound_user_volume[SoundIndex(SoundCategory::Se)];
             }));
-  AddOpcode(2233, 0, "SetSeVolMod",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.se_volume = value;
-            }));
+  AddOpcode(
+      2233, 0, "SetSeVolMod",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.sound_user_volume[SoundIndex(SoundCategory::Se)] = value;
+      }));
   AddOpcode(2340, 0, "BgmEnabled",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.bgm_enabled;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.play_sound_check[SoundIndex(SoundCategory::Bgm)];
             }));
-  AddOpcode(2240, 0, "SetBgmEnabled",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.bgm_enabled = value;
-            }));
-  AddOpcode(2341, 0, "KoeEnabled",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.koe_enabled;
-            }));
-  AddOpcode(2241, 0, "SetKoeEnabled",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.koe_enabled = value;
-            }));
+  AddOpcode(
+      2240, 0, "SetBgmEnabled",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.play_sound_check[SoundIndex(SoundCategory::Bgm)] = value;
+      }));
+  AddOpcode(
+      2341, 0, "KoeEnabled",
+      new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+        return settings.play_sound_check[SoundIndex(SoundCategory::Voice)];
+      }));
+  AddOpcode(
+      2241, 0, "SetKoeEnabled",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.play_sound_check[SoundIndex(SoundCategory::Voice)] = value;
+      }));
 
   AddOpcode(2342, 0, "PcmEnabled",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.pcm_enabled;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.play_sound_check[SoundIndex(SoundCategory::Pcm)];
             }));
-  AddOpcode(2242, 0, "SetPcmEnabled",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.pcm_enabled = value;
-            }));
+  AddOpcode(
+      2242, 0, "SetPcmEnabled",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.play_sound_check[SoundIndex(SoundCategory::Pcm)] = value;
+      }));
   AddOpcode(2343, 0, "SeEnabled",
-            new GetSoundSettings([](const rlSoundSettings& settings) {
-              return settings.se_enabled;
+            new GetGlobalConfigSetting([](const GlobalConfig& settings) {
+              return settings.play_sound_check[SoundIndex(SoundCategory::Se)];
             }));
-  AddOpcode(2243, 0, "SetSeEnabled",
-            new ChangeSoundSettings([](rlSoundSettings& settings, int value) {
-              settings.se_enabled = value;
-            }));
+  AddOpcode(
+      2243, 0, "SetSeEnabled",
+      new ChangeGlobalConfigSetting([](GlobalConfig& settings, int value) {
+        settings.play_sound_check[SoundIndex(SoundCategory::Se)] = value;
+      }));
 
   AddOpcode(2256, 0, "SetFontWeight",
-            CallFunction(&TextSystem::set_font_weight));
-  AddOpcode(2356, 0, "FontWeight", ReturnIntValue(&TextSystem::font_weight));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().font_futoku = value != 0;
+            }));
+  AddOpcode(2356, 0, "FontWeight", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().font_futoku;
+            }));
   AddOpcode(2257, 0, "SetFontShadow",
-            CallFunction(&TextSystem::set_font_shadow));
-  AddOpcode(2357, 0, "FontShadow", ReturnIntValue(&TextSystem::font_shadow));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().font_shadow = value & 3;
+            }));
+  AddOpcode(2357, 0, "FontShadow", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().font_shadow;
+            }));
 
   AddUnsupportedOpcode(2054, 0, "SetReduceDistortion");
   AddUnsupportedOpcode(2004, 0, "ReduceDistortion");
@@ -718,38 +786,78 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(2322, 0, "Generic2", new GetGeneric2);
 
   AddOpcode(2260, 0, "SetWindowAttrR",
-            CallFunction(&TextSystem::SetWindowAttrR));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().filter_color.set_red(value);
+              machine.GetSystem().text().ApplyConfiguration();
+            }));
   AddOpcode(2261, 0, "SetWindowAttrG",
-            CallFunction(&TextSystem::SetWindowAttrG));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().filter_color.set_green(value);
+              machine.GetSystem().text().ApplyConfiguration();
+            }));
   AddOpcode(2262, 0, "SetWindowAttrB",
-            CallFunction(&TextSystem::SetWindowAttrB));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().filter_color.set_blue(value);
+              machine.GetSystem().text().ApplyConfiguration();
+            }));
   AddOpcode(2263, 0, "SetWindowAttrA",
-            CallFunction(&TextSystem::SetWindowAttrA));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().filter_color.set_alpha(value);
+              machine.GetSystem().text().ApplyConfiguration();
+            }));
   AddOpcode(2264, 0, "SetWindowAttrF",
-            CallFunction(&TextSystem::SetWindowAttrF));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().reallive.window_filter = value;
+              machine.GetSystem().text().ApplyConfiguration();
+            }));
 
   AddOpcode(2267, 0, "SetWindowAttr", new SetWindowAttr);
 
   AddUnsupportedOpcode(2273, 0, "SetClassifyText");
   AddUnsupportedOpcode(2373, 0, "ClassifyText");
   AddOpcode(2274, 0, "SetUseKoe",
-            CallFunction(&SoundSystem::SetUseKoeForCharacter));
+            new ConfigIntIntSetter(
+                [](RLMachine& machine, int character, int enabled) {
+                  machine.GetSystem().sound().SetUseKoeForCharacter(character,
+                                                                    enabled);
+                }));
   // Note: I don't understand how this overload differs, but CLANNAD_FV treats
   // it just like the previous one.
   AddOpcode(2274, 1, "SetUseKoe",
-            CallFunction(&SoundSystem::SetUseKoeForCharacter));
-  AddOpcode(2374, 0, "UseKoe",
-            ReturnIntValue(&SoundSystem::ShouldUseKoeForCharacter));
+            new ConfigIntIntSetter(
+                [](RLMachine& machine, int character, int enabled) {
+                  machine.GetSystem().sound().SetUseKoeForCharacter(character,
+                                                                    enabled);
+                }));
+  AddOpcode(
+      2374, 0, "UseKoe",
+      new ConfigIntArgumentGetter([](RLMachine& machine, int character) {
+        return machine.GetSystem().sound().ShouldUseKoeForCharacter(character);
+      }));
   AddOpcode(2275, 0, "SetScreenMode",
-            CallFunction(&GraphicsSystem::SetScreenMode));
-  AddOpcode(2375, 0, "ScreenMode",
-            ReturnIntValue(&GraphicsSystem::screen_mode));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().screen_size_mode = value == 0 ? 1 : 0;
+              machine.GetSystem().graphics().ApplyConfiguration();
+            }));
+  AddOpcode(2375, 0, "ScreenMode", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().screen_size_mode == 1 ? 0 : 1;
+            }));
 
-  AddOpcode(2360, 0, "WindowAttrR", ReturnIntValue(&TextSystem::window_attr_r));
-  AddOpcode(2361, 0, "WindowAttrG", ReturnIntValue(&TextSystem::window_attr_g));
-  AddOpcode(2362, 0, "WindowAttrB", ReturnIntValue(&TextSystem::window_attr_b));
-  AddOpcode(2363, 0, "WindowAttrA", ReturnIntValue(&TextSystem::window_attr_a));
-  AddOpcode(2364, 0, "WindowAttrF", ReturnIntValue(&TextSystem::window_attr_f));
+  AddOpcode(2360, 0, "WindowAttrR", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().filter_color.r();
+            }));
+  AddOpcode(2361, 0, "WindowAttrG", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().filter_color.g();
+            }));
+  AddOpcode(2362, 0, "WindowAttrB", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().filter_color.b();
+            }));
+  AddOpcode(2363, 0, "WindowAttrA", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().filter_color.a();
+            }));
+  AddOpcode(2364, 0, "WindowAttrF", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().reallive.window_filter;
+            }));
 
   AddOpcode(2367, 0, "GetWindowAttr", new GetWindowAttr);
 
@@ -762,17 +870,26 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(2617, 0, "DefWindowAttr", new DefWindowAttr);
 
   AddOpcode(2270, 0, "SetShowObject1",
-            CallFunction(&GraphicsSystem::set_should_show_object1));
-  AddOpcode(2370, 0, "ShowObject1",
-            ReturnIntValue(&GraphicsSystem::should_show_object1));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().object_disp_flag.at(0) = value;
+            }));
+  AddOpcode(2370, 0, "ShowObject1", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().object_disp_flag.at(0);
+            }));
   AddOpcode(2271, 0, "SetShowObject2",
-            CallFunction(&GraphicsSystem::set_should_show_object2));
-  AddOpcode(2371, 0, "ShowObject2",
-            ReturnIntValue(&GraphicsSystem::should_show_object2));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().object_disp_flag.at(1) = value;
+            }));
+  AddOpcode(2371, 0, "ShowObject2", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().object_disp_flag.at(1);
+            }));
   AddOpcode(2272, 0, "SetShowWeather",
-            CallFunction(&GraphicsSystem::set_should_show_weather));
-  AddOpcode(2372, 0, "ShowWeather",
-            ReturnIntValue(&GraphicsSystem::should_show_weather));
+            new ConfigIntSetter([](RLMachine& machine, int value) {
+              machine.GetGlobalConfig().object_disp_flag.at(2) = value;
+            }));
+  AddOpcode(2372, 0, "ShowWeather", new ConfigIntGetter([](RLMachine& machine) {
+              return machine.GetGlobalConfig().object_disp_flag.at(2);
+            }));
 
   // Sys is hueg liek xbox, so lets group some of the operations by
   // what they do.

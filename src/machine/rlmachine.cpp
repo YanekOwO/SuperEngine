@@ -61,45 +61,46 @@
 // RLMachine
 // -----------------------------------------------------------------------
 static DomainLogger logger("RLMachine");
-RLMachine::RLMachine(std::shared_ptr<System> system,
+RLMachine::RLMachine(std::shared_ptr<Gameexe> gameexe,
+                     std::unique_ptr<System> system,
                      std::unique_ptr<Stage> stage,
                      std::shared_ptr<IScriptor> scriptor,
+                     std::unique_ptr<LocalConfig> local_config,
+                     std::unique_ptr<GlobalConfig> global_config,
                      std::unique_ptr<Memory> memory)
-    : memory_(memory ? std::move(memory) : std::make_unique<Memory>()),
-      module_manager_(ModuleManager::CreatePrototype()),
-      scriptor_(scriptor),
-      system_(*system),
+    : gexe_(std::move(gameexe)),
+      local_config_(std::move(local_config)),
+      global_config_(std::move(global_config)),
       stage_(std::move(stage)),
+      system_(std::move(system)),
+      memory_(memory ? std::move(memory) : std::make_unique<Memory>()),
+      module_manager_(ModuleManager::CreatePrototype()),
+      scriptor_(std::move(scriptor)),
       call_stack_(*memory_),
       savepoint_call_stack_(*memory_) {
-  if (system) {
-    if (!stage_)
-      throw std::invalid_argument("RLMachine requires a stage");
-    auto backend = system->graphics().GetBackend();
-    haikei_ = std::make_unique<Haikei>(
-        system->graphics().screen_size(),
-        [backend](Size size) { return backend->CreateSurface(size); },
-        [this](const std::string& name) {
-          return GetSystem().graphics().GetSurfaceNamed(name);
-        },
-        system->event().GetClock());
+  if (!gexe_ || !system_ || !stage_ || !local_config_ ||
+      !global_config_)
+    throw std::invalid_argument(
+        "RLMachine requires game configuration, system, and stage");
 
-    renderer_ = std::make_shared<rlSceneRenderer>(*this);
-    system->graphics().BindSceneRenderer(renderer_);
+  system_->machine_ = this;
+  auto backend = system_->graphics().GetBackend();
+  haikei_ = std::make_unique<Haikei>(
+      system_->graphics().screen_size(),
+      [backend](Size size) { return backend->CreateSurface(size); },
+      [this](const std::string& name) {
+        return GetSystem().graphics().GetSurfaceNamed(name);
+      },
+      system_->event().GetClock());
 
-    generic_.val1 =
-        system->gameexe()("INIT_ORIGINALSETING1_MOD").Int().value_or(0);
-    generic_.val2 =
-        system->gameexe()("INIT_ORIGINALSETING2_MOD").Int().value_or(0);
-
-    // Initial value of the savepoint
-    MarkSavepoint();
-  }
+  renderer_ = std::make_shared<rlSceneRenderer>(*this);
+  system_->graphics().BindSceneRenderer(renderer_);
+  MarkSavepoint();
 }
 
 RLMachine::~RLMachine() = default;
 
-void RLMachine::Update() { system_.Run(); }
+void RLMachine::Update() { system_->Run(); }
 
 Stage& RLMachine::stage() { return *stage_; }
 
@@ -111,16 +112,25 @@ const Haikei& RLMachine::haikei() const { return *haikei_; }
 
 void RLMachine::MarkSavepoint() {
   savepoint_call_stack_ = call_stack_.Clone();
+  savepoint_local_config_ = *local_config_;
   stage().TakeSavepointSnapshot();
   GetSystem().text().TakeSavepointSnapshot();
 }
 
 ScenarioConfig RLMachine::GetScenarioConfig() const {
   int current_scenario = call_stack_.Top()->pos.scenario_number;
-  return scriptor_->GetScenarioConfig(current_scenario);
+  auto config = scriptor_->GetScenarioConfig(current_scenario);
+  if (local_config_->dont_set_save_point) {
+    config.enable_message_savepoint = false;
+    config.enable_seentop_savepoint = false;
+    config.enable_selcom_savepoint = false;
+  }
+  return config;
 }
 
-void RLMachine::SetMarkSavepoints(const int in) { mark_savepoints_ = in; }
+void RLMachine::SetMarkSavepoints(const int in) {
+  local_config_->dont_set_save_point = !in;
+}
 
 std::shared_ptr<Instruction> RLMachine::ReadInstruction() const {
   if (IsHalted())
@@ -206,9 +216,7 @@ ScriptLocation RLMachine::Location() const {
   return location;
 }
 
-Gameexe& RLMachine::GetGameexe() { return system_.gameexe(); }
-
-Generic& RLMachine::GetGenerics() { return generic_; }
+Gameexe& RLMachine::GetGameexe() { return system_->gameexe(); }
 
 Stopwatch& RLMachine::GetTimer(int layer, int idx) {
   static DomainLogger logger("RLTimer");
@@ -283,6 +291,8 @@ void RLMachine::Reset() {
 void RLMachine::LocalReset() {
   savepoint_call_stack_.Clear();
   memory_->PartialReset(LocalMemory());
+  *local_config_ = MakeRealliveLocalConfig(GetGameexe());
+  savepoint_local_config_ = *local_config_;
   stage().Reset();
   haikei().Reset();
   GetSystem().Reset();
@@ -370,13 +380,11 @@ void RLMachine::PerformTextout(std::string cp932str) {
   }
 
   std::string utf8str = cp932toUTF8(name_parsed_text, GetTextEncoding());
-  TextSystem& ts = GetSystem().text();
-
   // Display UTF-8 characters
   auto ptr = std::make_shared<TextoutLongOperation>(*this, utf8str);
 
-  if (GetSystem().ShouldFastForward() || ts.message_no_wait() ||
-      ts.script_message_nowait()) {
+  if (GetSystem().ShouldFastForward() ||
+      EffectiveMessageNowait(GetLocalConfig(), GetGlobalConfig())) {
     ptr->set_no_wait();
   }
 
@@ -390,12 +398,13 @@ void RLMachine::operator()(std::monostate) {}
 void RLMachine::operator()(Kidoku k) {
   // Check to see if we mark savepoints on textout
   if (GetScenarioConfig().enable_message_savepoint &&
-      system_.text().GetCurrentPage().number_of_chars_on_page() == 0) {
+      system_->text().GetCurrentPage().number_of_chars_on_page() == 0) {
     MarkSavepoint();
   }
 
   // Mark if we've previously read this piece of text.
-  system_.text().SetKidokuRead(kidoku_table_.HasBeenRead(SceneNumber(), k.num));
+  system_->text().SetKidokuRead(
+      kidoku_table_.HasBeenRead(SceneNumber(), k.num));
 
   // Record the kidoku pair in global memory.
   kidoku_table_.RecordKidoku(SceneNumber(), k.num);

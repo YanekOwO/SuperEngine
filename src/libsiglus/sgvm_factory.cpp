@@ -26,6 +26,7 @@
 #include "core/asset_scanner.hpp"
 #include "core/button_action_table.hpp"
 #include "core/counter.hpp"
+#include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
@@ -138,10 +139,14 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
                                      gexe("EFFECT.CNT").Int().value_or(0), 0,
                                      quake_count);
 
+  rt.local_config = MakeSiglusLocalConfig(gexe);
+  rt.global_config = MakeSiglusGlobalConfig(gexe);
+
   // Init sdl system
   SystemOptions system_options;
   system_options.fast_forward = fast_forward_;
-  rt.system = std::make_unique<System>(gexe, *rt.stage, rt.asset_scanner,
+  rt.system = std::make_unique<System>(gexe, *rt.stage, rt.local_config,
+                                       rt.global_config, rt.asset_scanner,
                                        std::move(mwnd_config), system_options);
   rt.system->text().set_active_window(default_window);
   rt.screen_quakes =
@@ -158,8 +163,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
     mask_count = 0;
   rt.mask_list =
       std::make_shared<MaskList>(static_cast<std::size_t>(mask_count));
-  rt.local_config = std::make_shared<Gameexe>();
-  rt.global_config = std::make_shared<Gameexe>();
   rt.renderer = std::make_shared<SiglusSceneRenderer>(
       *rt.stage, *rt.system, rt.mask_list, rt.screen_quakes, rt.local_config);
   rt.system->graphics().BindSceneRenderer(rt.renderer);
@@ -193,113 +196,108 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       });
 
   rt.system->text().SetMwndActionHandler(
-      [local = rt.local_config, global = rt.global_config,
+      [local = &rt.local_config, global = &rt.global_config,
        gameexe = rt.gameexe](const MwndConfig::Button& button, bool execute) {
         using Action = MwndConfig::ButtonAction;
-        const auto key = [&](std::string_view root) {
-          return std::format("{}.{:03}", root, button.action_option);
+        const int id = button.action_option;
+        if (id < 0)
+          return false;
+        const auto mode_count = [&](bool is_global) {
+          return std::max(
+              1, (*gameexe)(std::format("{}.{}.{:03}.ITEM_CNT",
+                                        is_global ? "DIALOG" : "SYSCOMMENU",
+                                        is_global ? "GLOBAL_EXTRA_MODE"
+                                                  : "LOCAL_EXTRA_MODE",
+                                        id))
+                     .Int()
+                     .value_or(1));
         };
         switch (button.action) {
           case Action::LocalSwitch:
+            if (static_cast<std::size_t>(id) >=
+                local->syscommenu.local_extra_switch.size())
+              return false;
             if (execute)
-              local->SetIntAt(key("LOCAL_EXTRA_SWITCH"), button.mode == 0);
+              local->syscommenu.local_extra_switch[id].onoff = button.mode == 0;
             return true;
           case Action::GlobalSwitch:
-            if (execute) {
-              const std::string name = key("GLOBAL_EXTRA_SWITCH");
-              global->SetIntAt(name, !(*global)(name).Int().value_or(0));
-            }
+            if (static_cast<std::size_t>(id) >=
+                global->global_extra_switch_flag.size())
+              return false;
+            if (execute)
+              global->global_extra_switch_flag[id] =
+                  !global->global_extra_switch_flag[id];
             return true;
           case Action::LocalMode:
-          case Action::GlobalMode: {
-            if (!execute)
-              return true;
-            const bool is_global = button.action == Action::GlobalMode;
-            Gameexe& store = is_global ? *global : *local;
-            const std::string name =
-                key(is_global ? "GLOBAL_EXTRA_MODE" : "LOCAL_EXTRA_MODE");
-            const std::string count_key = std::format(
-                "{}.{}.{:03}.ITEM_CNT", is_global ? "DIALOG" : "SYSCOMMENU",
-                is_global ? "GLOBAL_EXTRA_MODE" : "LOCAL_EXTRA_MODE",
-                button.action_option);
-            const int count =
-                std::max(1, (*gameexe)(count_key).Int().value_or(1));
-            store.SetIntAt(name, (store(name).Int().value_or(0) + 1) % count);
+            if (static_cast<std::size_t>(id) >=
+                local->syscommenu.local_extra_mode.size())
+              return false;
+            if (execute) {
+              auto& mode = local->syscommenu.local_extra_mode[id].mode;
+              mode = (mode + 1) % mode_count(false);
+            }
             return true;
-          }
+          case Action::GlobalMode:
+            if (static_cast<std::size_t>(id) >=
+                global->global_extra_mode_flag.size())
+              return false;
+            if (execute) {
+              auto& mode = global->global_extra_mode_flag[id];
+              mode = (mode + 1) % mode_count(true);
+            }
+            return true;
           default:
             return false;
         }
       });
 
   rt.system->text().SetMwndActionStatusHandler(
-      [local = rt.local_config, global = rt.global_config,
-       gameexe = rt.gameexe](const MwndConfig::Button& button) {
+      [local = &rt.local_config,
+       global = &rt.global_config](const MwndConfig::Button& button) {
         using Action = MwndConfig::ButtonAction;
         TextSystem::MwndActionStatus status;
-        const auto key = [&](std::string_view root) {
-          return std::format("{}.{:03}", root, button.action_option);
-        };
-        const auto ensure_value = [](Gameexe& store, const std::string& name,
-                                     int initial) {
-          if (!store.Exists(name))
-            store.SetIntAt(name, initial);
-          return store(name).Int().value_or(initial);
-        };
+        const int id = button.action_option;
+        if (id < 0)
+          return status;
         switch (button.action) {
-          case Action::LocalSwitch: {
-            auto source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_SWITCH",
-                                     button.action_option);
-            const int initial = source.IntAt(2).value_or(0);
-            status.supported = true;
-            status.exists = (*local)(key("LOCAL_EXTRA_SWITCH") + ".EXIST")
-                                .Int()
-                                .value_or(source.IntAt(0).value_or(1)) != 0;
-            status.enabled = (*local)(key("LOCAL_EXTRA_SWITCH") + ".ENABLE")
-                                 .Int()
-                                 .value_or(source.IntAt(1).value_or(1)) != 0;
-            status.mode =
-                ensure_value(*local, key("LOCAL_EXTRA_SWITCH"), initial) != 0;
-            return status;
-          }
-          case Action::LocalMode: {
-            auto source = (*gameexe)("SYSCOMMENU", "LOCAL_EXTRA_MODE",
-                                     button.action_option);
-            const int initial = source.IntAt(2).value_or(0);
-            status.supported = true;
-            status.exists = (*local)(key("LOCAL_EXTRA_MODE") + ".EXIST")
-                                .Int()
-                                .value_or(source.IntAt(0).value_or(1)) != 0;
-            status.enabled = (*local)(key("LOCAL_EXTRA_MODE") + ".ENABLE")
-                                 .Int()
-                                 .value_or(source.IntAt(1).value_or(1)) != 0;
-            status.mode =
-                ensure_value(*local, key("LOCAL_EXTRA_MODE"), initial);
-            return status;
-          }
-          case Action::GlobalSwitch: {
-            const std::string name = key("GLOBAL_EXTRA_SWITCH");
-            const int initial = (*gameexe)("CONFIG", "GLOBAL_EXTRA_SWITCH",
-                                           button.action_option, "ONOFF")
-                                    .Int()
-                                    .value_or(0);
-            status.supported = true;
-            status.mode = ensure_value(*global, name, initial) != 0;
-            return status;
-          }
-          case Action::GlobalMode: {
-            const std::string name = key("GLOBAL_EXTRA_MODE");
-            const int initial = (*gameexe)("CONFIG", "GLOBAL_EXTRA_MODE",
-                                           button.action_option, "MODE")
-                                    .Int()
-                                    .value_or(0);
-            status.supported = true;
-            status.mode = ensure_value(*global, name, initial);
-            return status;
-          }
+          case Action::LocalSwitch:
+            if (static_cast<std::size_t>(id) <
+                local->syscommenu.local_extra_switch.size()) {
+              const auto& entry = local->syscommenu.local_extra_switch[id];
+              status.supported = true;
+              status.exists = entry.exist;
+              status.enabled = entry.enable;
+              status.mode = entry.onoff;
+            }
+            break;
+          case Action::LocalMode:
+            if (static_cast<std::size_t>(id) <
+                local->syscommenu.local_extra_mode.size()) {
+              const auto& entry = local->syscommenu.local_extra_mode[id];
+              status.supported = true;
+              status.exists = entry.exist;
+              status.enabled = entry.enable;
+              status.mode = entry.mode;
+            }
+            break;
+          case Action::GlobalSwitch:
+            if (static_cast<std::size_t>(id) <
+                global->global_extra_switch_flag.size()) {
+              status.supported = true;
+              status.mode = global->global_extra_switch_flag[id];
+            }
+            break;
+          case Action::GlobalMode:
+            if (static_cast<std::size_t>(id) <
+                global->global_extra_mode_flag.size()) {
+              status.supported = true;
+              status.mode = global->global_extra_mode_flag[id];
+            }
+            break;
           default:
-            return status;
+            break;
         }
+        return status;
       });
 
   struct SystemEventListener : public EventListener {

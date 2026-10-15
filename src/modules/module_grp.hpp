@@ -47,6 +47,3 @@ std::shared_ptr<RLOperation> GraphicsStackMappingFun(
 // Replays the new Graphics stack, string representations of reallive bytecode.
 void ReplayGraphicsStackCommand(RLMachine& machine,
                                 const std::deque<std::string>& stack);
-
-// grp file last used. specified when filename is "???"
-extern std::string default_grp_name;

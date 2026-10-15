@@ -24,6 +24,7 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/rect.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -88,31 +89,15 @@ struct MwndObjectList {
   }
 };
 
-bool ConfigFlag(const std::shared_ptr<Gameexe>& cfg, std::string const& key) {
-  if (!cfg)
-    return false;
-  return (*cfg)(key).Int().value_or(0) != 0;
+bool MessageNowait(System* system) {
+  return !system || system->ShouldFastForward() ||
+         EffectiveMessageNowait(system->local_config(),
+                                system->global_config());
 }
 
-bool MessageNowait(System* system, const std::shared_ptr<Gameexe>& cfg) {
-  if (!system)
-    return true;
-  TextSystem& text = system->text();
-  return system->ShouldFastForward() || text.message_no_wait() ||
-         text.script_message_nowait() || ConfigFlag(cfg, "message_nowait");
-}
-
-int ConfigInt(const std::shared_ptr<Gameexe>& cfg,
-              std::string const& key,
-              int fallback) {
-  if (!cfg)
-    return fallback;
-  return (*cfg)(key).Int().value_or(fallback);
-}
-
-bool AutoModeEnabled(System* system, const std::shared_ptr<Gameexe>& cfg) {
+bool AutoModeEnabled(System* system) {
   return system &&
-         (system->text().auto_mode() != 0 || ConfigFlag(cfg, "auto_mode"));
+         EffectiveAutoMode(system->local_config(), system->global_config());
 }
 
 struct KoeCallParams {
@@ -149,18 +134,18 @@ class MwndWaitTask : public CoroutineTask {
   MwndWaitTask(sr::VM& vm,
                System* system,
                std::shared_ptr<TextWindow> window,
-               std::shared_ptr<Gameexe> local_config,
+               LocalConfig& local_config,
                std::shared_ptr<MwndMessageState> message_state,
                AfterWait after_wait)
       : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
         system_(system),
         window_(std::move(window)),
-        local_config_(std::move(local_config)),
+        local_config_(local_config),
         message_state_(std::move(message_state)),
         after_wait_(after_wait) {}
 
   TaskCoroutine Run() override {
-    if (!system_ || MessageNowait(system_, local_config_)) {
+    if (!system_ || MessageNowait(system_)) {
       FinishWait();
       co_return 0;
     }
@@ -168,9 +153,9 @@ class MwndWaitTask : public CoroutineTask {
     PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
 
     try {
-      TextSystem& text = system_->text();
       const unsigned int start_ticks = system_->event().GetTicks();
-      const int auto_time = text.GetAutoTime(AutoModeCharCount());
+      const int auto_time = EffectiveAutoTime(
+          local_config_, system_->global_config(), AutoModeCharCount());
 
       while (true) {
         if ((co_await WaitFor(std::chrono::milliseconds(5), true)) ==
@@ -180,13 +165,13 @@ class MwndWaitTask : public CoroutineTask {
           co_return 1;
         }
 
-        if (MessageNowait(system_, local_config_)) {
+        if (MessageNowait(system_)) {
           pause.Reset();
           FinishWait();
           co_return 0;
         }
 
-        if (AutoModeEnabled(system_, local_config_)) {
+        if (AutoModeEnabled(system_)) {
           const unsigned int elapsed =
               system_->event().GetTicks() - start_ticks;
           if (elapsed >= static_cast<unsigned int>(std::max(auto_time, 0))) {
@@ -249,8 +234,7 @@ class MwndWaitTask : public CoroutineTask {
   }
 
   int AutoModeCharCount() {
-    const int configured_count =
-        ConfigInt(local_config_, "auto_mode_moji_cnt", 0);
+    const int configured_count = local_config_.auto_mode_moji_cnt;
     if (configured_count > 0)
       return configured_count;
 
@@ -264,7 +248,7 @@ class MwndWaitTask : public CoroutineTask {
 
   System* system_;
   std::shared_ptr<TextWindow> window_;
-  std::shared_ptr<Gameexe> local_config_;
+  LocalConfig& local_config_;
   std::shared_ptr<MwndMessageState> message_state_;
   AfterWait after_wait_;
 };
@@ -291,13 +275,13 @@ void BindMwnd(SiglusMachine& runtime) {
   };
   auto context = std::make_shared<PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
-  auto wait = [sys, get, context, cfg = runtime.local_config](
+  auto wait = [sys, get, context, cfg = &runtime.local_config](
                   MwndHandle* h, sr::VM& vm,
                   MwndWaitTask::AfterWait after_wait) {
     auto window = get(h);
     auto message_state = window->message_state();
     auto task = std::make_unique<MwndWaitTask>(
-        vm, sys, std::move(window), cfg, std::move(message_state), after_wait);
+        vm, sys, std::move(window), *cfg, std::move(message_state), after_wait);
     return sr::Value(context->MakeFuture(*vm.gc_, std::move(task)));
   };
 
@@ -478,9 +462,9 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("pp", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, MwndWaitTask::AfterWait::None);
   });
-  mwnd.def("r", [get, wait, cfg = runtime.local_config](MwndHandle* h,
-                                                        sr::VM& vm) {
-    if (ConfigFlag(cfg, "ignore_r"))
+  mwnd.def("r", [get, wait, cfg = &runtime.local_config](MwndHandle* h,
+                                                         sr::VM& vm) {
+    if (cfg->ignore_r)
       return MakeResolvedFuture(*vm.gc_);
     return wait(h, vm,
                 get(h)->action_on_pause() ? MwndWaitTask::AfterWait::Paragraph

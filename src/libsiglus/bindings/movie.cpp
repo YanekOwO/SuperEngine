@@ -316,7 +316,7 @@ class SiglusMovie {
     }
 
     std::unique_ptr<MoviePlayer> player = std::make_unique<MoviePlayer>(
-        *vm_, system_, std::move(path), rect, volume_, key_skip);
+        *vm_, system_, std::move(path), rect, 255, key_skip);
     player_ = player.get();
     pending_ = FutureBackedCoroutineTask(std::move(player));
     pending_->Start();
@@ -359,7 +359,6 @@ class SiglusMovie {
   sr::VM* vm_ = nullptr;
   System* system_ = nullptr;
   std::shared_ptr<AssetScanner> asset_scanner_;
-  int volume_ = 255;
   MoviePlayer* player_ = nullptr;
   std::optional<FutureBackedCoroutineTask> pending_;
 };

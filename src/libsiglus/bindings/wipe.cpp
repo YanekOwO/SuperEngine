@@ -195,21 +195,16 @@ struct SiglusWipe {
 
   SiglusWipe(System* system,
              Stage* stage,
-             std::shared_ptr<bool> no_wipe_animation,
-             std::shared_ptr<bool> skip_wipe_animation,
+             const GlobalConfig& global_config,
              std::shared_ptr<Control> control)
       : system_(system),
         stage_(stage),
-        no_wipe_animation_(std::move(no_wipe_animation)),
-        skip_wipe_animation_(std::move(skip_wipe_animation)),
+        global_config_(global_config),
         control_(std::move(control)) {
     control_->owner = this;
   }
 
-  // The VM (and therefore this native object) is destroyed after several
-  // runtime services. Teardown must only invalidate the external control
-  // hook; touching the borrowed System, Stage, or manager pointers here would
-  // use already-destroyed objects.
+  // Teardown invalidates the external hook before releasing coroutine state.
   ~SiglusWipe() { control_->owner = nullptr; }
 
   struct ActiveWipe {
@@ -250,7 +245,7 @@ struct SiglusWipe {
              WipeParams params,
              std::weak_ptr<ActiveWipe> active,
              FrameCounter progress_counter,
-             std::shared_ptr<bool> skip_wipe_animation,
+             const GlobalConfig& global_config,
              std::function<void(int, int)> finish_stage)
         : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
           system_(system),
@@ -259,7 +254,7 @@ struct SiglusWipe {
           active_(std::move(active)),
           start_ticks_(system ? system->event().GetTicks() : 0),
           progress_counter_(std::move(progress_counter)),
-          skip_wipe_animation_(std::move(skip_wipe_animation)),
+          global_config_(global_config),
           finish_stage_(std::move(finish_stage)) {}
 
     TaskCoroutine Run() override {
@@ -343,7 +338,7 @@ struct SiglusWipe {
       if (key_wait_mode == 1)
         return true;
 
-      return !skip_wipe_animation_ || *skip_wipe_animation_;
+      return global_config_.system.skip_wipe_anime;
     }
 
     int ElapsedTime(bool fast_forward) const {
@@ -382,7 +377,7 @@ struct SiglusWipe {
     std::weak_ptr<ActiveWipe> active_;
     unsigned int start_ticks_ = 0;
     FrameCounter progress_counter_;
-    std::shared_ptr<bool> skip_wipe_animation_;
+    const GlobalConfig& global_config_;
     std::function<void(int, int)> finish_stage_;
   };
 
@@ -458,7 +453,7 @@ struct SiglusWipe {
       if (previous_windows[i] != stage_->mwnd[kLayerFg][i])
         CancelWindowActions(previous_windows[i]);
 
-    if (!system_ || (no_wipe_animation_ && *no_wipe_animation_)) {
+    if (!system_ || global_config_.system.disable_wipe_anime) {
       ClearWipeState();
       return MakeResolvedFuture(*vm.gc_);
     }
@@ -489,7 +484,7 @@ struct SiglusWipe {
     std::weak_ptr<ActiveWipe> weak_active = active;
     auto task = std::make_unique<WipeTask>(
         vm, system_, stage_, std::move(params), active,
-        std::move(progress_counter), skip_wipe_animation_,
+        std::move(progress_counter), global_config_,
         [control = control_, weak_active](int result, int regular_boundaries) {
           if (control->owner) {
             control->owner->ScheduleFinishActive(weak_active.lock(), result,
@@ -534,8 +529,7 @@ struct SiglusWipe {
 
   System* system_ = nullptr;
   Stage* stage_ = nullptr;
-  std::shared_ptr<bool> no_wipe_animation_;
-  std::shared_ptr<bool> skip_wipe_animation_;
+  const GlobalConfig& global_config_;
   std::shared_ptr<Control> control_;
   std::shared_ptr<ActiveWipe> active_;
   PendingCoroutineTasks pending_;
@@ -547,8 +541,7 @@ void BindWipe(SiglusMachine& runtime) {
   sb::class_<SiglusWipe> wipe_cls(m, "Wipe", false);
   auto control = std::make_shared<SiglusWipe::Control>();
   auto wipe = wipe_cls.inst("wipe", runtime.system.get(), runtime.stage.get(),
-                            runtime.no_wipe_animation,
-                            runtime.skip_wipe_animation, control);
+                            runtime.global_config, control);
 
   if (!runtime.finish_active_wipe)
     runtime.finish_active_wipe = std::make_shared<SiglusWipeEndHook>();

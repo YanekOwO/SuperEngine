@@ -33,7 +33,7 @@
 #include <string_view>
 #include <vector>
 
-class Gameexe;
+struct LocalConfig;
 
 namespace serilang {
 class VM;
@@ -57,7 +57,7 @@ class FrameActionManager {
 
   FrameActionManager(serilang::VM& vm,
                      Stage& stage,
-                     std::shared_ptr<Gameexe> local_config,
+                     LocalConfig& local_config,
                      std::size_t global_channel_count);
 
   inline std::shared_ptr<FrameAction> global_action() {
@@ -92,11 +92,10 @@ class FrameActionManager {
       const FrameAction& action,
       const ActionReference& reference);
   void RunFinal(const ActionReference& reference);
-  bool ConfigFlag(std::string_view name) const;
 
   serilang::VM& vm_;
   Stage& stage_;
-  std::shared_ptr<Gameexe> local_config_;
+  LocalConfig& local_config_;
   std::shared_ptr<FrameAction> global_action_;
   FrameActionList global_channels_;
   serilang::NativeClass* action_class_ = nullptr;

@@ -44,7 +44,6 @@
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
 #include "utf8.h"
-#include "utilities/assertx.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/graphics.hpp"
 #include "utilities/string_utilities.hpp"
@@ -70,12 +69,6 @@ const int FULLWIDTH_ZERO = 0xFF10;
 const int FULLWIDTH_NINE = 0xFF19;
 
 constexpr int kSeparateNameWindowMode = 1;
-
-static std::pair<RGBAColour, bool> ParseRGBAF(const std::vector<int>& attr) {
-  ASSERTX_GE(attr.size(), 5);
-  return {RGBAColour(attr.at(0), attr.at(1), attr.at(2), attr.at(3)),
-          static_cast<bool>(attr.at(4))};
-}
 
 struct KoeReplayConfig {
   std::string icon_name;
@@ -115,31 +108,6 @@ static std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(
 }
 
 // -----------------------------------------------------------------------
-// TextSystemGlobals
-// -----------------------------------------------------------------------
-TextSystemGlobals::TextSystemGlobals()
-    : auto_mode_base_time(100),
-      auto_mode_char_time(100),
-      message_speed(30),
-      font_bold(false),
-      font_shadow(true),
-      font_futidoru(false),
-      window_attr{255, 255, 255, 255, 0} {}
-
-// -----------------------------------------------------------------------
-
-TextSystemGlobals::TextSystemGlobals(Gameexe& gexe,
-                                     const MwndConfig& mwnd_config)
-    : auto_mode_base_time(gexe("MESSAGE_KEY_WAIT_TIME").Int().value_or(1500)),
-      auto_mode_char_time(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
-      message_speed(gexe("INIT_MESSAGE_SPEED").Int().value_or(30)),
-      font_name(gexe("CONFIG.FONT.NAME").Str().value_or("")),
-      font_bold(false),
-      font_shadow(true),
-      font_futidoru(false),
-      window_attr(mwnd_config.window_attr()) {}
-
-// -----------------------------------------------------------------------
 // TextSystem
 // -----------------------------------------------------------------------
 TextSystem::TextSystem(System& system,
@@ -148,27 +116,14 @@ TextSystem::TextSystem(System& system,
                        std::unique_ptr<ITextSystem> impl,
                        MwndConfig mwnd_config)
     : text_impl_(std::move(impl)),
-      auto_mode_(false),
-      ctrl_key_skip_(true),
-      fast_text_mode_(false),
-      message_no_wait_(false),
-      script_message_no_wait_(false),
+      local_config_(system.local_config()),
+      global_config_(system.global_config()),
       active_window_(0),
       stage_(stage),
       mwnd_config_(std::move(mwnd_config)),
       is_reading_backlog_(false),
       current_pageset_(),
       in_pause_state_(false),
-      // #WINDOW_*_USE
-      move_use_(false),
-      clear_use_(false),
-      read_jump_use_(false),
-      automode_use_(false),
-      msgbk_use_(false),
-      msgbkleft_use_(false),
-      msgbkright_use_(false),
-      exbtn_use_(false),
-      globals_(gexe, mwnd_config_),
       system_visible_(true),
       skip_mode_(false),
       kidoku_read_(false),
@@ -181,18 +136,6 @@ TextSystem::TextSystem(System& system,
                            ? mwnd_config_.window_capacity()
                            : 0);
   text_impl_->InitSystem();
-
-  GameexeInterpretObject ctrl_use(gexe("CTRL_USE"));
-  ctrl_key_skip_ = ctrl_use.Int().value_or(ctrl_key_skip_);
-
-  CheckAndSetBool(gexe, "WINDOW_MOVE_USE", move_use_);
-  CheckAndSetBool(gexe, "WINDOW_CLEAR_USE", clear_use_);
-  CheckAndSetBool(gexe, "WINDOW_READJUMP_USE", read_jump_use_);
-  CheckAndSetBool(gexe, "WINDOW_AUTOMODE_USE", automode_use_);
-  CheckAndSetBool(gexe, "WINDOW_MSGBK_USE", msgbk_use_);
-  CheckAndSetBool(gexe, "WINDOW_MSGBKLEFT_USE", msgbkleft_use_);
-  CheckAndSetBool(gexe, "WINDOW_MSGBKRIGHT_USE", msgbkright_use_);
-  CheckAndSetBool(gexe, "WINDOW_EXBTN_USE", exbtn_use_);
 
   // Iterate over all the NAMAE keys, which is a feature that Clannad English
   // Edition uses to translate the Japanese names into English.
@@ -332,9 +275,8 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int layer, int window_id) {
     Gameexe& gexe = system_.gameexe();
     TextWindow::InitParams params = mwnd_config_.GetWindow(window_id);
     if (params.window_attr_mod == 0) {
-      auto [colour, is_filter] = ParseRGBAF(window_attr());
-      params.colour = colour;
-      params.is_filter = is_filter;
+      params.colour = global_config_.filter_color;
+      params.is_filter = global_config_.reallive.window_filter != 0;
     }
     auto tw = std::make_shared<TextWindow>(system_, window_id, text_impl_.get(),
                                            params);
@@ -416,13 +358,15 @@ TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
   }
 
   if (button.action == Action::ReadSkip) {
-    status.exists = readskip_button_exists_;
-    status.enabled = status.enabled && readskip_button_enabled_ && kidoku_read_;
+    status.exists = local_config_.syscommenu.read_skip.exist;
+    status.enabled = status.enabled &&
+                     local_config_.syscommenu.read_skip.enable && kidoku_read_;
     status.mode = skip_mode_ ? 1 : 0;
   } else if (button.action == Action::AutoMode) {
-    status.exists = automode_button_exists_;
-    status.enabled = status.enabled && automode_button_enabled_;
-    status.mode = auto_mode_ ? 1 : 0;
+    status.exists = local_config_.syscommenu.auto_mode.exist;
+    status.enabled =
+        status.enabled && local_config_.syscommenu.auto_mode.enable;
+    status.mode = EffectiveAutoMode(local_config_, global_config_) ? 1 : 0;
   }
 
   const bool has_call =
@@ -432,15 +376,21 @@ TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
         (button.action == Action::RealliveFarcall && system_.machine_)));
   const bool mode_matches =
       !button.required_mode || *button.required_mode == status.mode;
-  const bool slot_enabled = IsMwndButtonSlotEnabled(button.slot_id);
+  const auto& disabled = local_config_.mwnd_btn_disable;
+  const bool slot_enabled =
+      button.slot_id < 0 ||
+      static_cast<std::size_t>(button.slot_id) >= disabled.size() ||
+      !disabled[button.slot_id];
   return MwndButtonPresentation{
       .visible = mode_matches,
       .enabled = (status.supported || has_call) && status.exists &&
-                 status.enabled && mwnd_buttons_enabled_ && slot_enabled,
-      .touch_enabled = mwnd_button_touch_enabled_,
+                 status.enabled && !local_config_.mwnd_btn_disable_all &&
+                 slot_enabled,
+      .touch_enabled = !local_config_.disable_mwnd_btn_touch,
       .activated = !button.required_mode &&
                    ((button.action == Action::ReadSkip && skip_mode_) ||
-                    (button.action == Action::AutoMode && auto_mode_)),
+                    (button.action == Action::AutoMode &&
+                     EffectiveAutoMode(local_config_, global_config_))),
   };
 }
 
@@ -478,7 +428,7 @@ void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
       SetSkipMode(button.mode == 0);
       break;
     case Action::AutoMode:
-      SetAutoMode(button.mode == 0);
+      global_config_.enable_auto_mode = button.mode == 0;
       break;
     case Action::ClearWindow:
       system_.graphics().ToggleInterfaceHidden();
@@ -508,31 +458,6 @@ void TextSystem::PlayMwndButtonSound(const MwndConfig::Button& button,
   }
   if (sound >= 0)
     system_.sound().PlaySe(sound);
-}
-
-void TextSystem::SetMwndButtonEnabled(int slot, bool enabled) {
-  if (slot >= 0)
-    mwnd_button_slot_enabled_[slot] = enabled;
-}
-
-bool TextSystem::IsMwndButtonSlotEnabled(int slot) const {
-  const auto it = mwnd_button_slot_enabled_.find(slot);
-  return it == mwnd_button_slot_enabled_.end() || it->second;
-}
-
-void TextSystem::ResetMwndButtonPolicy() {
-  mwnd_buttons_enabled_ = true;
-  mwnd_button_touch_enabled_ = true;
-  mwnd_button_slot_enabled_.clear();
-  mwnd_capture_window_.reset();
-}
-
-void TextSystem::CheckAndSetBool(Gameexe& gexe,
-                                 const std::string& key,
-                                 bool& out) {
-  GameexeInterpretObject key_obj(gexe(key));
-  if (key_obj.Exists())
-    out = key_obj.ToInt();
 }
 
 void TextSystem::ExpireOldPages() {
@@ -675,13 +600,6 @@ std::string TextSystem::InterpretName(const std::string& utf8name) {
   return it->second;
 }
 
-void TextSystem::SetAutoMode(int i) { auto_mode_ = (bool)i; }
-
-int TextSystem::GetAutoTime(int num_chars) {
-  return globals_.auto_mode_base_time +
-         globals_.auto_mode_char_time * num_chars;
-}
-
 void TextSystem::SetKeyCursor(int new_cursor) {
   if (new_cursor == -1) {
     text_key_cursor_.reset();
@@ -699,11 +617,14 @@ int TextSystem::GetCursorNumber() const {
 }
 
 void TextSystem::UpdateWindowsForChangeToWindowAttr() {
+  const auto& colour = global_config_.filter_color;
+  const std::vector<int> attr = {colour.r(), colour.g(), colour.b(), colour.a(),
+                                 global_config_.reallive.window_filter};
   // Check each text window to see if it needs updating
   for (const auto& layer : stage_.mwnd.storage)
     for (const auto& window : layer)
       if (window && !window->GetAttrMod())
-        window->SetRGBAF(window_attr());
+        window->SetRGBAF(attr);
 }
 
 bool TextSystem::ShowWindow(int win_num) const {
@@ -713,36 +634,6 @@ bool TextSystem::ShowWindow(int win_num) const {
     return it->second;
   else
     return true;
-}
-
-void TextSystem::SetDefaultWindowAttr(const std::vector<int>& attr) {
-  globals_.window_attr = attr;
-  UpdateWindowsForChangeToWindowAttr();
-}
-
-void TextSystem::SetWindowAttrR(int i) {
-  globals_.window_attr.at(0) = i;
-  UpdateWindowsForChangeToWindowAttr();
-}
-
-void TextSystem::SetWindowAttrG(int i) {
-  globals_.window_attr.at(1) = i;
-  UpdateWindowsForChangeToWindowAttr();
-}
-
-void TextSystem::SetWindowAttrB(int i) {
-  globals_.window_attr.at(2) = i;
-  UpdateWindowsForChangeToWindowAttr();
-}
-
-void TextSystem::SetWindowAttrA(int i) {
-  globals_.window_attr.at(3) = i;
-  UpdateWindowsForChangeToWindowAttr();
-}
-
-void TextSystem::SetWindowAttrF(int i) {
-  globals_.window_attr.at(4) = i;
-  UpdateWindowsForChangeToWindowAttr();
 }
 
 void TextSystem::SetMousePosition(const Point& pos) {
@@ -1036,15 +927,15 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
     }
 
     if (add_char) {
+      const int decoration = EffectiveFontShadow(local_config_, global_config_);
       std::optional<RGBColour> shadow;
-      if ((globals_.font_shadow || globals_.font_futidoru) &&
-          shadow_colour != nullptr)
+      if ((decoration & 3) && shadow_colour != nullptr)
         shadow = *shadow_colour;
 
       FontFace font{.font = LoadFont(current_size),
                     .is_italic = false,
-                    .is_shadow = globals_.font_shadow,
-                    .is_futidoru = globals_.font_futidoru};
+                    .is_shadow = (decoration & 1) != 0,
+                    .is_futidoru = (decoration & 2) != 0};
       Size s =
           text_impl_->RenderGlyphOnto(character, font, current_colour, shadow,
                                       Point(currentX, currentY), surface);
@@ -1074,7 +965,6 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
 
 void TextSystem::Reset() {
   is_reading_backlog_ = false;
-  script_message_no_wait_ = false;
 
   current_pageset_.clear();
   previous_page_sets_.clear();
@@ -1088,8 +978,10 @@ void TextSystem::Reset() {
   in_selection_mode_ = false;
   kidoku_read_ = false;
   skip_mode_ = false;
-  ResetMwndButtonPolicy();
+  mwnd_capture_window_.reset();
 }
+
+void TextSystem::ApplyConfiguration() { UpdateWindowsForChangeToWindowAttr(); }
 
 void TextSystem::SetKidokuRead(const int in) {
   bool value_changed = kidoku_read_ != in;
@@ -1320,7 +1212,7 @@ static ResolvedFont ResolveFont(System& system, const std::string& name) {
 }
 
 std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
-  const std::string& name = globals_.font_name;
+  const std::string& name = EffectiveFontName(local_config_, global_config_);
 
   // File resolution is independent of pixel size and synthetic bold styling.
   auto [resolved, inserted] = resolved_fonts_.try_emplace(name);
@@ -1333,11 +1225,12 @@ std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
 
   // Family aliases can share a loaded font, but size, bold style and collection
   // face each require a distinct SDL_ttf instance.
-  auto [it, created] = font_cache_.try_emplace(
-      std::make_tuple(file, size, globals_.font_bold, index));
+  auto [it, created] = font_cache_.try_emplace(std::make_tuple(
+      file, size, EffectiveFontBold(local_config_, global_config_), index));
   if (created) {
     try {
-      it->second = text_impl_->GetFont(file, size, globals_.font_bold, index);
+      it->second = text_impl_->GetFont(
+          file, size, EffectiveFontBold(local_config_, global_config_), index);
     } catch (...) {
       // Allow a later attempt to retry instead of returning a cached null font.
       font_cache_.erase(it);

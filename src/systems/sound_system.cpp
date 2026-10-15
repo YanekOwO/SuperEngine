@@ -92,7 +92,6 @@ int SoundSystem::VolumeAdjustTask::calculateVolumeFor(unsigned int in_time) {
 // -----------------------------------------------------------------------
 SoundSystem::SoundSystem(System& system, std::unique_ptr<ISoundSystem> impl)
     : system_(system),
-      settings_(system.gameexe()),
       audio_table_(system.gameexe()),
       voice_assets_(system.GetAssetScanner()),
       voice_factory_(system.GetAssetScanner()),
@@ -104,7 +103,8 @@ SoundSystem::SoundSystem(System& system, std::unique_ptr<ISoundSystem> impl)
 
   /* We're going to be requesting certain things from our audio
      device, so we set them up beforehand */
-  sound_quality_ = s_reallive_sound_qualities[settings_.sound_quality];
+  sound_quality_ = s_reallive_sound_qualities[std::clamp(
+      system_.global_config().reallive.sound_quality, 0, 7)];
   static constexpr int audio_buffer_size = 4096;
   try {
     sound_impl_->OpenAudio(sound_quality_, audio_buffer_size);
@@ -117,7 +117,9 @@ SoundSystem::SoundSystem(System& system, std::unique_ptr<ISoundSystem> impl)
 
   Gameexe& gexe = system_.gameexe();
 
-  std::fill_n(channel_volume_, NUM_TOTAL_CHANNELS, 255);
+  channel_volume_.fill(255);
+  channel_categories_.fill(SoundCategory::Pcm);
+  channel_categories_[KOE_CHANNEL] = SoundCategory::Voice;
 
   // Read the \#KOEONOFF entries
   for (auto koeonoff : gexe.Filter("KOEONOFF.")) {
@@ -142,10 +144,36 @@ SoundSystem::SoundSystem(System& system, std::unique_ptr<ISoundSystem> impl)
       koeplay_ids.push_back(std::stoi(unprocessed_koeids));
     }
 
-    int onoff = (keyparts.at(3) == "ON") ? 1 : 0;
     for (int id : koeplay_ids) {
       usekoe_to_koeplay_mapping_.emplace(usekoe_id, id);
-      settings_.character_koe_enabled[id] = onoff;
+    }
+  }
+
+  // Siglus CHRKOE preferences address menu groups. Each group lists the raw
+  // character numbers whose voice gain and enable flag it controls.
+  uses_character_voice_groups_ = gexe("CHRKOE.CNT").Exists();
+  const int group_count =
+      std::clamp(gexe("CHRKOE.CNT").Int().value_or(64), 0, 256);
+  for (int group = 0; group < group_count; ++group) {
+    auto source = gexe("CHRKOE", group);
+    if (!source.Exists())
+      source = gexe("CHRKOE." + std::to_string(group));
+    if (!source.Exists())
+      continue;
+    uses_character_voice_groups_ = true;
+    const auto values = source.ToStrVec();
+    bool in_character_list = false;
+    for (std::size_t i = 3; i < values.size(); ++i) {
+      std::string characters = values[i];
+      in_character_list |= characters.find('(') != std::string::npos;
+      if (!in_character_list)
+        continue;
+      for (char& ch : characters)
+        if (ch == '(' || ch == ')' || ch == ',')
+          ch = ' ';
+      std::istringstream input(characters);
+      for (int character; input >> character;)
+        character_voice_groups_.emplace(character, group);
     }
   }
 }
@@ -158,40 +186,89 @@ SoundSystem::~SoundSystem() {
 void SoundSystem::ExecuteSoundSystem() {
   unsigned int cur_time = system_.event().GetTicks();
 
-  ChannelAdjustmentMap::iterator it = pcm_adjustment_tasks_.begin();
+  auto it = pcm_adjustment_tasks_.begin();
   while (it != pcm_adjustment_tasks_.end()) {
-    if (cur_time >= it->second.end_time) {
-      SetChannelVolume(it->first, it->second.final_volume);
-      pcm_adjustment_tasks_.erase(it++);
-    } else {
-      int volume = it->second.calculateVolumeFor(cur_time);
-      SetChannelVolume(it->first, volume);
+    const bool complete = cur_time >= it->second.end_time;
+    channel_volume_.at(it->first) =
+        complete ? it->second.final_volume
+                 : it->second.calculateVolumeFor(cur_time);
+    SetChannelVolumeImpl(it->first);
+    if (complete)
+      it = pcm_adjustment_tasks_.erase(it);
+    else
       ++it;
-    }
   }
 
   if (bgm_adjustment_task_) {
-    if (cur_time >= bgm_adjustment_task_->end_time) {
-      SetBgmVolumeScript(bgm_adjustment_task_->final_volume, 0);
+    const bool complete = cur_time >= bgm_adjustment_task_->end_time;
+    bgm_script_volume_ =
+        complete ? bgm_adjustment_task_->final_volume
+                 : bgm_adjustment_task_->calculateVolumeFor(cur_time);
+    ApplyBgmVolume();
+    if (complete)
       bgm_adjustment_task_.reset();
-    } else {
-      int volume = bgm_adjustment_task_->calculateVolumeFor(cur_time);
-      SetBgmVolumeScript(volume, 0);
-    }
   }
 }
 
-rlSoundSettings const& SoundSystem::GetSettings() const { return settings_; }
+int SoundSystem::GetUserVolume(SoundCategory category) const {
+  return system_.global_config().sound_user_volume.at(
+      static_cast<std::size_t>(category));
+}
 
-void SoundSystem::SetSettings(const rlSoundSettings& settings) {
-  settings_ = settings;
+void SoundSystem::SetUserVolume(SoundCategory category, int volume) {
+  system_.global_config().sound_user_volume.at(
+      static_cast<std::size_t>(category)) = std::clamp(volume, 0, 255);
+  ApplyConfiguration();
+}
+
+bool SoundSystem::IsSoundEnabled(SoundCategory category) const {
+  const auto& config = system_.global_config();
+  return config.play_all_sound_check &&
+         config.play_sound_check.at(static_cast<std::size_t>(category));
+}
+
+void SoundSystem::SetSoundEnabled(SoundCategory category, bool enabled) {
+  system_.global_config().play_sound_check.at(
+      static_cast<std::size_t>(category)) = enabled;
+  ApplyConfiguration();
+}
+
+int SoundSystem::EffectiveUserVolume(SoundCategory category) const {
+  return IsSoundEnabled(category)
+             ? compute_channel_volume(
+                   GetUserVolume(category),
+                   system_.global_config().all_sound_user_volume)
+             : 0;
+}
+
+void SoundSystem::ApplyBgmVolume() {
+  if (auto player = sound_impl_->GetBgm())
+    player->SetVolume(
+        static_cast<float>(compute_channel_volume(
+            bgm_script_volume_, EffectiveUserVolume(SoundCategory::Bgm))) /
+        255.0f);
+}
+
+void SoundSystem::ApplyConfiguration() {
+  if (IsSoundEnabled(SoundCategory::Bgm))
+    sound_impl_->EnableBgm();
+  else
+    sound_impl_->DisableBgm();
+  ApplyBgmVolume();
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
+    SetChannelVolumeImpl(channel);
+  if (auto player = sound_impl_->GetMovieAudio())
+    player->SetVolume(
+        static_cast<float>(compute_channel_volume(
+            movie_script_volume_, EffectiveUserVolume(SoundCategory::Movie))) /
+        255.0f);
 }
 
 void SoundSystem::SetUseKoeForCharacter(const int character,
                                         const int enabled) {
   auto range = usekoe_to_koeplay_mapping_.equal_range(character);
   for (auto it = range.first; it != range.second; ++it) {
-    settings_.character_koe_enabled[it->second] = enabled;
+    system_.global_config().chrkoe[it->second].enable = enabled != 0;
   }
 }
 
@@ -200,9 +277,9 @@ int SoundSystem::ShouldUseKoeForCharacter(const int character) const {
   if (it != usekoe_to_koeplay_mapping_.end()) {
     int koeplay_id = it->second;
 
-    auto koe_it = settings_.character_koe_enabled.find(koeplay_id);
-    if (koe_it != settings_.character_koe_enabled.end()) {
-      return koe_it->second;
+    auto koe_it = system_.global_config().chrkoe.find(koeplay_id);
+    if (koe_it != system_.global_config().chrkoe.end()) {
+      return koe_it->second.enable;
     }
   }
 
@@ -211,38 +288,28 @@ int SoundSystem::ShouldUseKoeForCharacter(const int character) const {
 }
 
 void SoundSystem::SetBgmEnabled(const int in) {
-  if (in)
-    sound_impl_->EnableBgm();
-  else
-    sound_impl_->DisableBgm();
-  settings_.bgm_enabled = in;
+  SetSoundEnabled(SoundCategory::Bgm, in != 0);
 }
 
 void SoundSystem::SetBgmVolumeMod(const int in) {
-  settings_.bgm_volume = in;
-
-  player_t player = sound_impl_->GetBgm();
-  if (player) {
-    player->SetVolume(static_cast<float>(in) / 255.0f);
-  }
+  SetUserVolume(SoundCategory::Bgm, in);
 }
 
 void SoundSystem::SetBgmVolumeScript(const int level, int fade_in_ms) {
-  if (fade_in_ms == 0) {
-    settings_.bgm_volume = level;
+  if (fade_in_ms <= 0) {
+    bgm_adjustment_task_.reset();
+    bgm_script_volume_ = std::clamp(level, 0, 255);
+    ApplyBgmVolume();
   } else {
-    unsigned int cur_time = system_.event().GetTicks();
-
+    const unsigned int cur_time = system_.event().GetTicks();
     bgm_adjustment_task_ = std::make_unique<VolumeAdjustTask>(
-        cur_time, settings_.bgm_volume, level, fade_in_ms);
+        cur_time, bgm_script_volume_, std::clamp(level, 0, 255), fade_in_ms);
   }
+}
 
-  player_t player = sound_impl_->GetBgm();
-  if (player) {
-    float volume =
-        static_cast<float>(settings_.bgm_volume * level) / (255.0f * 255.0f);
-    player->SetVolume(volume);
-  }
+int SoundSystem::GetBgmVolumeScript() const {
+  return bgm_adjustment_task_ ? bgm_adjustment_task_->final_volume
+                              : bgm_script_volume_;
 }
 
 player_t SoundSystem::GetBgm() const { return sound_impl_->GetBgm(); }
@@ -331,22 +398,29 @@ bool SoundSystem::BgmLooping() const {
 }
 
 void SoundSystem::SetChannelVolume(const int channel, const int level) {
-  channel_volume_[channel] = level;
+  pcm_adjustment_tasks_.erase(channel);
+  channel_volume_.at(channel) = std::clamp(level, 0, 255);
   SetChannelVolumeImpl(channel);
 }
 
 void SoundSystem::SetChannelVolume(const int channel,
                                    const int level,
                                    const int fade_time_in_ms) {
+  if (fade_time_in_ms <= 0) {
+    SetChannelVolume(channel, level);
+    return;
+  }
   unsigned int cur_time = system_.event().GetTicks();
-
-  pcm_adjustment_tasks_.emplace(
-      channel, VolumeAdjustTask(cur_time, channel_volume_[channel], level,
-                                fade_time_in_ms));
+  pcm_adjustment_tasks_.insert_or_assign(
+      channel, VolumeAdjustTask(cur_time, channel_volume_.at(channel),
+                                std::clamp(level, 0, 255), fade_time_in_ms));
 }
 
 int SoundSystem::GetChannelVolume(const int channel) const {
-  return channel_volume_[channel];
+  if (auto it = pcm_adjustment_tasks_.find(channel);
+      it != pcm_adjustment_tasks_.end())
+    return it->second.final_volume;
+  return channel_volume_.at(channel);
 }
 
 void SoundSystem::WavPlay(const std::string& wav_file, bool loop) {
@@ -373,7 +447,7 @@ void SoundSystem::WavPlay(const std::string& filename,
                           bool loop,
                           const int channel,
                           const int fadein_ms) {
-  if (!settings_.pcm_enabled)
+  if (!IsSoundEnabled(SoundCategory::Pcm))
     return;
 
   if (auto wav_file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
@@ -381,6 +455,7 @@ void SoundSystem::WavPlay(const std::string& filename,
     player_t player = CreateAudioPlayer(wav_file.value());
     player->SetLoopTimes(loop ? -1 : 0);
     player->FadeIn(fadein_ms);
+    channel_categories_.at(channel) = SoundCategory::Pcm;
     SetChannelVolumeImpl(channel);
     sound_impl_->PlayChannel(channel, player);
   } else
@@ -392,30 +467,29 @@ bool SoundSystem::WavPlaying(const int channel) {
 }
 
 void SoundSystem::WavStop(const int channel) {
-  if (settings_.pcm_enabled) {
-    sound_impl_->HaltChannel(channel);
-  }
+  sound_impl_->HaltChannel(channel);
 }
 
-void SoundSystem::WavStopAll() {
-  if (settings_.pcm_enabled) {
-    sound_impl_->HaltAllChannels();
-  }
-}
+void SoundSystem::WavStopAll() { sound_impl_->HaltAllChannels(); }
 
 void SoundSystem::WavFadeOut(const int channel, const int fadetime) {
-  if (settings_.pcm_enabled)
-    sound_impl_->FadeOutChannel(channel, fadetime);
+  sound_impl_->FadeOutChannel(channel, fadetime);
 }
 
-int SoundSystem::IsSeEnabled() const { return settings_.se_enabled; }
+int SoundSystem::IsSeEnabled() const {
+  return IsSoundEnabled(SoundCategory::Se);
+}
 
-void SoundSystem::SetIsSeEnabled(const int in) { settings_.se_enabled = in; }
+void SoundSystem::SetIsSeEnabled(const int in) {
+  SetSoundEnabled(SoundCategory::Se, in != 0);
+}
 
-int SoundSystem::GetSeVolumeMod() const { return settings_.se_volume; }
+int SoundSystem::GetSeVolumeMod() const {
+  return GetUserVolume(SoundCategory::Se);
+}
 
 void SoundSystem::SetSeVolumeMod(const int level) {
-  settings_.se_volume = level;
+  SetUserVolume(SoundCategory::Se, level);
 }
 
 void SoundSystem::PlaySe(const int se_num) {
@@ -440,9 +514,9 @@ void SoundSystem::PlaySe(const int se_num) {
   player_t player = CreateAudioPlayer(file_path.value());
   player->SetLoopTimes(0);
 
-  // SE chunks have no volume other than the modifier.
-  sound_impl_->SetVolume(channel,
-                         realLiveVolumeToSDLMixerVolume(GetSeVolumeMod()));
+  channel_categories_.at(channel) = SoundCategory::Se;
+
+  SetChannelVolumeImpl(channel);
   sound_impl_->PlayChannel(channel, player);
 }
 
@@ -470,23 +544,36 @@ void SoundSystem::KoePlay(int id) {
     KoePlayImpl(id);
 }
 
+CharacterVoiceConfig SoundSystem::VoicePreference(int character) const {
+  const auto& preferences = system_.global_config().chrkoe;
+  CharacterVoiceConfig result;
+  if (!uses_character_voice_groups_) {
+    if (auto it = preferences.find(character); it != preferences.end())
+      return it->second;
+    return result;
+  }
+  const auto [first, last] = character_voice_groups_.equal_range(character);
+  for (auto it = first; it != last; ++it) {
+    if (auto config = preferences.find(it->second);
+        config != preferences.end()) {
+      result.enable &= config->second.enable;
+      result.volume =
+          compute_channel_volume(result.volume, config->second.volume);
+    }
+  }
+  return result;
+}
+
 void SoundSystem::KoePlay(int id, int charid) {
   if (!system_.ShouldFastForward()) {
-    bool play_voice = true;
-
-    auto koe_it = settings_.character_koe_enabled.find(charid);
-    if (koe_it != settings_.character_koe_enabled.end()) {
-      play_voice = koe_it->second;
-    }
-
-    if (play_voice) {
-      KoePlayImpl(id);
-    }
+    const auto preference = VoicePreference(charid);
+    if (preference.enable)
+      KoePlayImpl(id, preference.volume);
   }
 }
 
-void SoundSystem::KoePlayImpl(int id) {
-  if (!settings_.koe_enabled) {
+void SoundSystem::KoePlayImpl(int id, int character_volume) {
+  if (!IsSoundEnabled(SoundCategory::Voice)) {
     return;
   }
 
@@ -494,7 +581,10 @@ void SoundSystem::KoePlayImpl(int id) {
   AudioDecoder decoder(voice_sample.content, voice_sample.format_name);
   auto player = std::make_shared<AudioPlayer>(std::move(decoder));
 
+  channel_categories_[KOE_CHANNEL] = SoundCategory::Voice;
   SetChannelVolumeImpl(KOE_CHANNEL);
+  player->SetVolume(static_cast<float>(std::clamp(character_volume, 0, 255)) /
+                    255.0f);
   sound_impl_->PlayChannel(KOE_CHANNEL, player);
 }
 
@@ -506,8 +596,14 @@ void SoundSystem::KoeStop() { sound_impl_->HaltChannel(KOE_CHANNEL); }
 
 void SoundSystem::PlayMovieAudio(const std::filesystem::path& path,
                                  int volume) {
+  if (!IsSoundEnabled(SoundCategory::Movie))
+    return;
+  movie_script_volume_ = std::clamp(volume, 0, 255);
   player_t player = CreateAudioPlayer(path);
-  player->SetVolume(static_cast<float>(std::clamp(volume, 0, 255)) / 255.0f);
+  player->SetVolume(
+      static_cast<float>(compute_channel_volume(
+          movie_script_volume_, EffectiveUserVolume(SoundCategory::Movie))) /
+      255.0f);
   sound_impl_->PlayMovieAudio(player);
 }
 
@@ -534,9 +630,13 @@ void SoundSystem::Reset() {
 System& SoundSystem::system() { return system_; }
 
 void SoundSystem::SetChannelVolumeImpl(int channel) {
-  int base =
-      channel == KOE_CHANNEL ? settings_.koe_volume : settings_.pcm_volume;
-  int adjusted = compute_channel_volume(GetChannelVolume(channel), base);
+  const auto category = channel_categories_.at(channel);
+  const int base = EffectiveUserVolume(category);
+  // SE chunks have no script channel volume.
+  const int adjusted =
+      category == SoundCategory::Se
+          ? base
+          : compute_channel_volume(channel_volume_.at(channel), base);
 
   sound_impl_->SetVolume(channel, realLiveVolumeToSDLMixerVolume(adjusted));
 }
@@ -548,19 +648,24 @@ player_t SoundSystem::LoadMusic(const std::string& bgm_name) {
   player_t player = CreateAudioPlayer(file_path);
   player->SetName(track.name);
   player->SetPLoop(track.from, track.to, track.loop);
+  player->SetVolume(
+      static_cast<float>(compute_channel_volume(
+          bgm_script_volume_, EffectiveUserVolume(SoundCategory::Bgm))) /
+      255.0f);
   return player;
 }
 
 void SoundSystem::WavPlayImpl(const std::string& filename,
                               const int channel,
                               bool loop) {
-  if (!settings_.pcm_enabled)
+  if (!IsSoundEnabled(SoundCategory::Pcm))
     return;
 
   if (auto wav_file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
       wav_file.has_value()) {
     player_t player = CreateAudioPlayer(wav_file.value());
     player->SetLoopTimes(loop ? -1 : 0);
+    channel_categories_.at(channel) = SoundCategory::Pcm;
     SetChannelVolumeImpl(channel);
     sound_impl_->PlayChannel(channel, player);
   } else
@@ -577,15 +682,24 @@ void SoundSystem::save(Archive& ar, unsigned int version) const {
     looping = BgmLooping();
   }
 
-  ar & track_name & looping;
+  const int bgm_volume = GetBgmVolumeScript();
+  auto channel_volumes = channel_volume_;
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
+    channel_volumes[channel] = GetChannelVolume(channel);
+  ar & track_name & looping & bgm_volume & channel_volumes &
+      movie_script_volume_;
 }
 
 template <class Archive>
 void SoundSystem::load(Archive& ar, unsigned int version) {
   std::string track_name;
   bool looping;
-  ar & track_name & looping;
+  ar & track_name & looping & bgm_script_volume_ & channel_volume_ &
+      movie_script_volume_;
 
+  pcm_adjustment_tasks_.clear();
+  bgm_adjustment_task_.reset();
+  ApplyConfiguration();
   if (track_name != "")
     BgmPlay(track_name, looping);
 }

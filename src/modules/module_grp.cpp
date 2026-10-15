@@ -55,8 +55,6 @@
 
 namespace fs = std::filesystem;
 
-std::string default_grp_name = "";
-
 namespace {
 
 static RGBAColour InvertColor(RGBAColour c) {
@@ -138,7 +136,7 @@ void loadImageToDC1(RLMachine& machine,
 
   if (name != "?") {
     if (name == "???")
-      name = default_grp_name;
+      name = machine.GetLocalConfig().reallive.default_grp_name;
 
     std::shared_ptr<SDLSurface> dc0 = haikei.GetDC(0);
     std::shared_ptr<SDLSurface> dc1 = haikei.GetDC(1);
@@ -234,7 +232,7 @@ void performHideAllTextWindows(RLMachine& machine) {
 // Common code to all the openBg commands.
 void OpenBgPrelude(RLMachine& machine, const std::string& filename) {
   if (!filename.starts_with("?")) {
-    default_grp_name = filename;
+    machine.GetLocalConfig().reallive.default_grp_name = filename;
 
     // Only clear the stack when we are the command setting the background.
     machine.stage().graphics_stack.clear();

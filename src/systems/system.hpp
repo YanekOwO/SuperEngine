@@ -28,9 +28,8 @@
 #pragma once
 
 #include "core/asset_scanner.hpp"
+#include "core/game_config.hpp"
 
-#include <boost/serialization/access.hpp>
-#include <boost/serialization/version.hpp>
 #include <filesystem>
 #include <functional>
 
@@ -96,59 +95,33 @@ struct SystemOptions {
 [[maybe_unused]] constexpr int SYSCOM_HIDE_MENU = 30;
 [[maybe_unused]] constexpr int SYSCOM_SHOW_BACKGROUND = 31;
 
-// Struct containing the global memory to get serialized to disk with
-// global memory.
-struct SystemGlobals {
-  SystemGlobals();
-
-  // Whether we should put up a yes/no dialog box when saving/loading.
-  bool confirm_save_load_;
-
-  // I suspect that this is a placebo. I'll track the value, but I don't think
-  // it's relevant to anything.
-  bool low_priority_;
-
-  // boost::serialization support
-  template <class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar & confirm_save_load_;
-
-    if (version > 0)
-      ar & low_priority_;
-  }
-};
-
-BOOST_CLASS_VERSION(SystemGlobals, 1)
-
 // The system class provides the SDL-backed components that make up a local
 // runtime system, i.e., sound, graphics, filesystem etc.
 class System {
  public:
   System(Gameexe& gameexe,
          Stage& stage,
+         LocalConfig& local_config,
+         GlobalConfig& global_config,
          std::shared_ptr<AssetScanner> scanner = nullptr,
          SystemOptions options = {});
   System(Gameexe& gameexe,
          Stage& stage,
+         LocalConfig& local_config,
+         GlobalConfig& global_config,
          std::shared_ptr<AssetScanner> scanner,
          MwndConfig mwnd_config,
          SystemOptions options = {});
   ~System();
 
-  bool confirm_save_load() const { return globals_.confirm_save_load_; }
-  void set_confirm_save_load(const int in) { globals_.confirm_save_load_ = in; }
-
-  bool low_priority() const { return globals_.low_priority_; }
-  void set_low_priority(const int in) { globals_.low_priority_ = in; }
-
   // Whether we're currently forcing fast forward (only used during game tests
   // to zoom through).
-  bool force_fast_forward() { return force_fast_forward_; }
+  inline bool force_fast_forward() { return force_fast_forward_; }
   // Set in lua_rlvm, to speed through the game with maximum speed!
-  void set_force_fast_forward() { force_fast_forward_ = true; }
+  inline void set_force_fast_forward() { force_fast_forward_ = true; }
 
-  bool force_wait() { return force_wait_; }
-  void set_force_wait(bool in) { force_wait_ = in; }
+  inline bool force_wait() { return force_wait_; }
+  inline void set_force_wait(bool in) { force_wait_ = in; }
 
   inline bool IsQuitRequested() const { return quit_requested_; }
   inline void RequestQuit() { quit_requested_ = true; }
@@ -157,8 +130,8 @@ class System {
   // then during every scene change, if it was western, we flip this bit to
   // true. We do this as a big hack because we only have System access while
   // we're loading fonts.
-  bool use_western_font() { return use_western_font_; }
-  void set_use_western_font() { use_western_font_ = true; }
+  inline bool use_western_font() { return use_western_font_; }
+  inline void set_use_western_font() { use_western_font_ = true; }
 
   // Takes and restores the previous selection snapshot; a special emphemeral
   // save game slot that autosaves on selections and is restored through a
@@ -222,9 +195,12 @@ class System {
   // resets the machine. The System implementation of reset() will call
   // reset() on all systems.
   void Reset();
+  void ApplyConfiguration();
 
-  // Returns the global state for saving/restoring
-  SystemGlobals& globals() { return globals_; }
+  inline LocalConfig& local_config() { return local_config_; }
+  inline const LocalConfig& local_config() const { return local_config_; }
+  inline GlobalConfig& global_config() { return global_config_; }
+  inline const GlobalConfig& global_config() const { return global_config_; }
 
   // Cleans the regname entry from the gameexe and makes it filesystem
   // safe. This translates it to UTF-8, as Gameexe files are written in
@@ -286,9 +262,6 @@ class System {
   std::shared_ptr<TextSystem> text_system_;
   std::shared_ptr<SoundSystem> sound_system_;
 
-  // The visibility status for all syscom entries
-  int syscom_status_[NUM_SYSCOM_ENTRIES];
-
   // Whether the SYSCOM menu is currently being displayed.
   bool in_menu_;
 
@@ -308,7 +281,8 @@ class System {
   // Object to index and find rlvm related files
   std::shared_ptr<AssetScanner> assets_;
 
-  SystemGlobals globals_;
+  LocalConfig& local_config_;
+  GlobalConfig& global_config_;
 
   // A stream with the save game data at the time of the last selection. Used
   // for the Return to Previous Selection feature.
@@ -316,12 +290,4 @@ class System {
 
   // Implementation detail which resets in_menu_;
   friend class MenuReseter;
-
-  friend class boost::serialization::access;
-
-  // boost::serialization
-  template <class Archive>
-  void serialize(Archive& ar, unsigned int version) {
-    // For now, does nothing
-  }
 };
