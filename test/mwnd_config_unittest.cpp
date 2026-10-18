@@ -28,6 +28,85 @@
 
 #include <gtest/gtest.h>
 
+TEST(MwndConfigTest, SiglusMessageLinesFitTheConfiguredWindow) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.WINDOW_POS = 0,472");
+  gameexe.parseLine("MWND.000.WINDOW_SIZE = 1280,248");
+  gameexe.parseLine("MWND.000.MESSAGE_POS = 285,100");
+  gameexe.parseLine("MWND.000.MOJI_CNT = 30,3");
+  gameexe.parseLine("MWND.000.MOJI_SIZE = 26");
+  gameexe.parseLine("MWND.000.MOJI_SPACE = 0,14");
+  gameexe.parseLine("MWND.000.RUBY_SIZE = 10");
+
+  const auto config = MwndConfig::ParseSiglus(gameexe);
+  const auto& window = config.GetWindow(0);
+  auto layout = window.layout;
+  layout.Reset();
+
+  EXPECT_EQ(layout.GetLineHeight(), 40);
+  EXPECT_EQ(layout.GetNormalSize(), Size(780, 106));
+  EXPECT_EQ(window.lower_box_padding, 42);
+  for (int line = 0; line < 3; ++line) {
+    SCOPED_TRACE(line);
+    const auto point = layout.PlaceCharacter('A', std::nullopt, {});
+    ASSERT_TRUE(point);
+    EXPECT_EQ(*point, Point(0, line * 40));
+    const int screen_y =
+        window.y_distance_from_origin + window.upper_box_padding + point->y();
+    EXPECT_LE(screen_y + layout.font_size,
+              window.y_distance_from_origin + window.upper_box_padding + 106);
+    layout.HardBreak();
+  }
+  EXPECT_FALSE(layout.PlaceCharacter('A', std::nullopt, {}));
+}
+
+TEST(MwndConfigTest, SiglusRubyDoesNotChangeMessageLinePositions) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.MOJI_CNT = 30,3");
+  gameexe.parseLine("MWND.000.MOJI_SIZE = 26");
+  gameexe.parseLine("MWND.000.MOJI_SPACE = 0,14");
+  gameexe.parseLine("MWND.000.RUBY_SIZE = 10");
+  gameexe.parseLine("MWND.000.RUBY_SPACE = 3");
+
+  auto layout = MwndConfig::ParseSiglus(gameexe).GetWindow(0).layout;
+  layout.Reset();
+
+  EXPECT_EQ(layout.GetRubyTopPadding(), 13);
+  for (int line = 0; line < 3; ++line) {
+    SCOPED_TRACE(line);
+    layout.RubyBegin();
+    EXPECT_EQ(layout.PlaceCharacter(0x6f22, std::nullopt, {}),
+              Point(0, line * 40));
+    const auto ruby = layout.PlaceRubyText("かん");
+    ASSERT_TRUE(ruby);
+    EXPECT_EQ(*ruby, Rect::REC(0, line * 40 - 13, 26, 10));
+    EXPECT_GE(ruby->y() + layout.GetRubyTopPadding(), 0);
+    layout.HardBreak();
+  }
+}
+
+TEST(MwndConfigTest, RealliveMessageLinesStillReserveRubySpace) {
+  Gameexe gameexe;
+  gameexe.parseLine("WINDOW.000.MOJI_CNT = 30,3");
+  gameexe.parseLine("WINDOW.000.MOJI_SIZE = 26");
+  gameexe.parseLine("WINDOW.000.MOJI_REP = 0,14");
+  gameexe.parseLine("WINDOW.000.LUBY_SIZE = 10");
+
+  auto layout = MwndConfig::ParseReallive(gameexe).GetWindow(0).layout;
+  layout.Reset();
+
+  EXPECT_EQ(layout.GetLineHeight(), 50);
+  EXPECT_EQ(layout.GetNormalSize(), Size(780, 150));
+  EXPECT_EQ(layout.GetRubyTopPadding(), 0);
+  for (int line = 0; line < 3; ++line) {
+    SCOPED_TRACE(line);
+    EXPECT_EQ(layout.PlaceCharacter('A', std::nullopt, {}),
+              Point(0, 10 + line * 50));
+    layout.HardBreak();
+  }
+  EXPECT_FALSE(layout.PlaceCharacter('A', std::nullopt, {}));
+}
+
 TEST(MwndConfigTest, SiglusNameboxUsesItsAnchorAndTextOffset) {
   Gameexe gameexe;
   gameexe.parseLine("MWND.000.NAME_WAKU_NO = 10");
@@ -225,7 +304,7 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   EXPECT_EQ(window.y_distance_from_origin, 34);
   EXPECT_EQ(window.action_on_pause, 1);
   EXPECT_EQ(window.waku_set, 3);
-  EXPECT_EQ(window.layout.GetNormalSize(), Size(320, 152));
+  EXPECT_EQ(window.layout.GetNormalSize(), Size(318, 129));
 
   const auto& waku = config.GetWaku(3);
   EXPECT_EQ(waku.main_file, "frame");

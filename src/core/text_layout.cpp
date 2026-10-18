@@ -47,7 +47,7 @@ TextLayout::TextLayout(int window_height,
 
 void TextLayout::Reset() {
   insertion_x = 0;
-  insertion_y = ruby_font_size;
+  insertion_y = reserve_ruby_space ? ruby_font_size : 0;
   indent_pixels = 0;
   ruby_begin_x.reset();
 }
@@ -98,8 +98,8 @@ std::optional<Rect> TextLayout::PlaceRubyText(std::string_view ruby) {
     return std::nullopt;
   }
 
-  Point topleft(ruby_begin, insertion_y - ruby_font_size);
-  Point downright(ruby_end, insertion_y);
+  Point topleft(ruby_begin, insertion_y - ruby_font_size - ruby_spacing);
+  Point downright(ruby_end, insertion_y - ruby_spacing);
   return Rect(topleft, downright);
 }
 

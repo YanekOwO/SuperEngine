@@ -610,10 +610,12 @@ void TextWindow::Render() {
     // POINT
     Point box = GetWindowRect().origin();
 
-    Point textOrigin = GetTextSurfaceRect().origin();
+    Point textOrigin =
+        GetTextSurfaceRect().origin() - Size(0, layout_.GetRubyTopPadding());
 
     textbox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
-    textbox_waku_->Render(box, surface_size, GetColour(), GetIsFilter());
+    textbox_waku_->Render(box, GetTextSurfaceSize(), GetColour(),
+                          GetIsFilter());
     RenderFaces(1);
 
     switch (state_) {
@@ -682,7 +684,8 @@ void TextWindow::ClearWin() {
 
   // Allocate the text window surface
   if (!text_surface_)
-    text_surface_ = std::make_shared<SDLSurface>(GetTextSurfaceSize());
+    text_surface_ = std::make_shared<SDLSurface>(
+        GetTextSurfaceSize() + Size(0, layout_.GetRubyTopPadding()));
   text_surface_->Fill(RGBAColour::Clear());
 
   name_surface_ = nullptr;
@@ -751,7 +754,8 @@ bool TextWindow::DisplayCharacter(const std::string& current,
       shadow = RGBAColour::Black().rgb();
 
     text_impl_->RenderGlyphOnto(current, font_face, font_colour_, shadow,
-                                *insertion_point + glyph_render_offset_,
+                                *insertion_point + glyph_render_offset_ +
+                                    Point(0, layout_.GetRubyTopPadding()),
                                 text_surface_);
 
     if (indent_after_spacing)
@@ -786,7 +790,7 @@ void TextWindow::DisplayRubyText(const std::string& utf8str) {
     std::shared_ptr<SDLSurface> ruby_surface =
         text_impl_->RenderText(utf8str, FontFace(ifont), font_colour_);
 
-    Point origin = ruby_area->origin();
+    Point origin = ruby_area->origin() + Point(0, layout_.GetRubyTopPadding());
     int delta_x =
         (ruby_area->size().width() - ruby_surface->GetSize().width()) / 2;
     origin += Point(delta_x, 0);

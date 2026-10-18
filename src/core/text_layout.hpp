@@ -34,6 +34,11 @@ class TextLayout {
  public:
   int font_size = 25, ruby_font_size = 0;
 
+  // RealLive reserves a ruby band within every line. Siglus draws ruby above
+  // the character cell without changing the first row or the line advance.
+  bool reserve_ruby_space = true;
+  int ruby_spacing = 0;
+
   int x_spacing = 0, y_spacing = 0;
 
   // Mutable runtime layout state
@@ -73,7 +78,12 @@ class TextLayout {
   void SetIndent(int indent);
 
   [[nodiscard]] inline int GetLineHeight() const {
-    return font_size + y_spacing + ruby_font_size;
+    return font_size + y_spacing + (reserve_ruby_space ? ruby_font_size : 0);
+  }
+
+  // Extra surface storage above the logical text area for Siglus ruby.
+  [[nodiscard]] inline int GetRubyTopPadding() const {
+    return reserve_ruby_space ? 0 : ruby_font_size + ruby_spacing;
   }
 
   [[nodiscard]] inline bool IsFull() const {

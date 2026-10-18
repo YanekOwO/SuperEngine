@@ -82,6 +82,31 @@ TextLayout MakeLayout(int font_size,
   return layout;
 }
 
+TextLayout MakeSiglusLayout(int font_size,
+                            int count_x,
+                            int count_y,
+                            int space_x,
+                            int space_y,
+                            int ruby_size,
+                            int ruby_spacing) {
+  // Siglus counts spacing only between cells; ruby sits above the text.
+  const auto extent = [font_size](int count, int spacing) {
+    if (count <= 0)
+      return 0;
+    return std::max(count * font_size + (count - 1) * spacing, 0);
+  };
+  const int width = extent(count_x, space_x);
+  TextLayout layout(extent(count_y, space_y), width,
+                    width + std::max(font_size, 0));
+  layout.font_size = font_size;
+  layout.ruby_font_size = ruby_size;
+  layout.reserve_ruby_space = false;
+  layout.ruby_spacing = ruby_spacing;
+  layout.x_spacing = space_x;
+  layout.y_spacing = space_y;
+  return layout;
+}
+
 Size ReadRealliveScreenSize(Gameexe& gexe) {
   if (!gexe.Exists("SCREENSIZE_MOD"))
     return Size(800, 600);
@@ -467,7 +492,8 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     int margin_left = 20, margin_top = 20, margin_right = 20,
         margin_bottom = 20;
     int count_x = 26, count_y = 3, font_size = 25;
-    int space_x = -1, space_y = 10, ruby_size = 10, waku_no = 0;
+    int space_x = -1, space_y = 10, ruby_size = 10, ruby_spacing = 1,
+        waku_no = 0;
     int name_mode = 0, name_extend = 0, name_x = 0, name_y = -100;
     int name_align = 0, name_width = 300, name_height = 100;
     int name_message_x = 8, name_message_y = 8;
@@ -489,6 +515,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     font_size = SiglusInt(gexe, id, "MOJI_SIZE").value_or(font_size);
     ApplyPair(SiglusIntVec(gexe, id, "MOJI_SPACE"), space_x, space_y);
     ruby_size = SiglusInt(gexe, id, "RUBY_SIZE").value_or(ruby_size);
+    ruby_spacing = SiglusInt(gexe, id, "RUBY_SPACE").value_or(ruby_spacing);
     waku_no = SiglusInt(gexe, id, "WAKU_NO").value_or(waku_no);
     name_mode = SiglusInt(gexe, id, "NAME_DISP_MODE").value_or(name_mode);
     name_extend = SiglusInt(gexe, id, "NAME_EXTEND_TYPE").value_or(name_extend);
@@ -512,8 +539,8 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     window.screen_size = GetSiglusScreenSize(gexe);
     window.colour = configured_filter_colour;
     window.default_font_size = font_size;
-    window.layout =
-        MakeLayout(font_size, count_x, count_y, space_x, space_y, ruby_size);
+    window.layout = MakeSiglusLayout(font_size, count_x, count_y, space_x,
+                                     space_y, ruby_size, ruby_spacing);
     if (extend_type == 1) {
       window.upper_box_padding = margin_top;
       window.lower_box_padding = margin_bottom;
