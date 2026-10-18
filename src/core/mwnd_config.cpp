@@ -392,6 +392,36 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
   return result;
 }
 
+Size MwndConfig::Namebox::SiglusLayout::GetContentSize(Size text_size) const {
+  if (!auto_size)
+    return window_size;
+  return text_size + Size(window_margin.x() + window_margin.x2(),
+                          window_margin.y() + window_margin.y2());
+}
+
+Rect MwndConfig::Namebox::SiglusLayout::GetWindowRect(Point anchor,
+                                                      Size waku_size,
+                                                      Size text_size) const {
+  const int width = auto_size ? text_size.width() : waku_size.width();
+  const int x = alignment == 1 ? -width / 2 : alignment == 2 ? -width : 0;
+  Point origin = anchor + Point(x, 0);
+  if (auto_size)
+    origin -= Point(window_margin.x(), window_margin.y());
+  return Rect(origin, waku_size);
+}
+
+Point MwndConfig::Namebox::SiglusLayout::GetTextOrigin(Point anchor,
+                                                       Size text_size) const {
+  const int offset_x = auto_size ? message_margin.x() : message_position.x();
+  const int offset_right =
+      auto_size ? message_margin.x2() : message_position.x();
+  const int y = auto_size ? message_margin.y() : message_position.y();
+  const int x = alignment == 1   ? -text_size.width() / 2
+                : alignment == 2 ? -offset_right - text_size.width()
+                                 : offset_x;
+  return anchor + Point(x, y) + message_offset;
+}
+
 MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
   MwndConfig result;
   result.layered_windows_ = true;
@@ -439,7 +469,9 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     int count_x = 26, count_y = 3, font_size = 25;
     int space_x = -1, space_y = 10, ruby_size = 10, waku_no = 0;
     int name_mode = 0, name_extend = 0, name_x = 0, name_y = -100;
+    int name_align = 0, name_width = 300, name_height = 100;
     int name_message_x = 8, name_message_y = 8;
+    int name_message_offset_x = 0, name_message_offset_y = 0;
     int name_margin_left = 8, name_margin_top = 8, name_margin_right = 8,
         name_margin_bottom = 8;
     int name_size = 16, name_space_x = -1, name_space_y = 8, name_count = 8,
@@ -460,9 +492,14 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     waku_no = SiglusInt(gexe, id, "WAKU_NO").value_or(waku_no);
     name_mode = SiglusInt(gexe, id, "NAME_DISP_MODE").value_or(name_mode);
     name_extend = SiglusInt(gexe, id, "NAME_EXTEND_TYPE").value_or(name_extend);
+    name_align = SiglusInt(gexe, id, "NAME_WINDOW_ALIGN").value_or(name_align);
     ApplyPair(SiglusIntVec(gexe, id, "NAME_WINDOW_POS"), name_x, name_y);
+    ApplyPair(SiglusIntVec(gexe, id, "NAME_WINDOW_SIZE"), name_width,
+              name_height);
     ApplyPair(SiglusIntVec(gexe, id, "NAME_MESSAGE_POS"), name_message_x,
               name_message_y);
+    ApplyPair(SiglusIntVec(gexe, id, "NAME_MESSAGE_POS_REP"),
+              name_message_offset_x, name_message_offset_y);
     ApplyRect(SiglusIntVec(gexe, id, "NAME_MESSAGE_MARGIN"), name_margin_left,
               name_margin_top, name_margin_right, name_margin_bottom);
     name_size = SiglusInt(gexe, id, "NAME_MOJI_SIZE").value_or(name_size);
@@ -498,6 +535,17 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     window.waku_set = waku_no;
     window.name_mod = name_mode == 2 ? 2 : (name_mode == 0 && name_waku >= 0);
     if (window.name_mod == 1 && name_waku >= 0) {
+      window.namebox.siglus_layout = Namebox::SiglusLayout{
+          .auto_size = name_extend == 1,
+          .alignment = name_align,
+          .window_size = Size(name_width, name_height),
+          .message_position = Point(name_message_x, name_message_y),
+          .message_offset = Point(name_message_offset_x, name_message_offset_y),
+          .message_margin = Rect::GRP(name_margin_left, name_margin_top,
+                                      name_margin_right, name_margin_bottom),
+          .window_margin =
+              Rect::GRP(margin_left, margin_top, margin_right, margin_bottom),
+      };
       window.namebox.has_waku = true;
       window.namebox.waku_set = name_waku;
       window.namebox.x_spacing = name_space_x;

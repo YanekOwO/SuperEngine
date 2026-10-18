@@ -116,6 +116,7 @@ TextWindow::TextWindow(System& system,
       namebox_centering_(params.namebox.centering),
       minimum_namebox_size_(params.namebox.minimum_size),
       name_size_(params.namebox.character_size),
+      siglus_namebox_layout_(params.namebox.siglus_layout),
       namebox_characters_(0),
       state_(State::Normal),
       next_char_italic_(false),
@@ -210,6 +211,7 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->namebox_centering_ = namebox_centering_;
   result->minimum_namebox_size_ = minimum_namebox_size_;
   result->name_size_ = name_size_;
+  result->siglus_namebox_layout_ = siglus_namebox_layout_;
   result->namebox_characters_ = namebox_characters_;
   result->state_ = state_;
   result->next_char_italic_ = next_char_italic_;
@@ -355,8 +357,11 @@ void TextWindow::SetNameWithoutDisplay(const std::string& utf8name) {
 
 void TextWindow::RenderNameInBox(const std::string& utf8str) {
   RGBColour shadow = RGBAColour::Black().rgb();
-  name_surface_ = system_.text().RenderText(utf8str, font_size_in_pixels(), 0,
-                                            0, font_colour_, &shadow, 0);
+  const int font_size =
+      siglus_namebox_layout_ ? name_size_ : font_size_in_pixels();
+  const int x_spacing = siglus_namebox_layout_ ? name_x_spacing_ : 0;
+  name_surface_ = system_.text().RenderText(utf8str, font_size, x_spacing, 0,
+                                            font_colour_, &shadow, 0);
 }
 
 void TextWindow::SetDefaultTextColor(const std::vector<int>& colour) {
@@ -460,16 +465,32 @@ Rect TextWindow::GetNameboxWakuRect() const {
 
   // The waku is offset from the top left corner of the text window.
   Rect r = GetWindowRect();
+  if (siglus_namebox_layout_) {
+    const Point anchor =
+        r.origin() + Point(namebox_x_offset_, namebox_y_offset_);
+    return siglus_namebox_layout_->GetWindowRect(anchor, boxSize,
+                                                 GetNameboxTextSize());
+  }
   return Rect(Point(r.x() + namebox_x_offset_,
                     r.y() + namebox_y_offset_ - boxSize.height()),
               boxSize);
 }
 
 Size TextWindow::GetNameboxTextArea() const {
+  if (siglus_namebox_layout_)
+    return siglus_namebox_layout_->GetContentSize(GetNameboxTextSize());
   // TODO(erg): This seems excessively wide.
   return Size(
       2 * horizontal_namebox_padding_ + namebox_characters_ * name_size_,
       vertical_namebox_padding_ + name_size_);
+}
+
+Size TextWindow::GetNameboxTextSize() const {
+  if (!name_surface_)
+    return Size(0, name_size_);
+  const Size surface = name_surface_->GetSize();
+  return Size(std::max(surface.width() - 2, 0),
+              std::max(surface.height() - 2, 0));
 }
 
 void TextWindow::SetNameMod(const int in) {
@@ -563,6 +584,23 @@ static Point InsertionPoint(const Rect& waku_rect,
   }
   return insertion_point;
 }
+
+Rect TextWindow::GetNameboxTextRect() const {
+  const Size surface_size = name_surface_->GetSize();
+  if (siglus_namebox_layout_) {
+    const Point anchor =
+        GetWindowRect().origin() + Point(namebox_x_offset_, namebox_y_offset_);
+    return Rect(
+        siglus_namebox_layout_->GetTextOrigin(anchor, GetNameboxTextSize()),
+        surface_size);
+  }
+  const Point origin = InsertionPoint(
+      GetNameboxWakuRect(),
+      Size(horizontal_namebox_padding_, vertical_namebox_padding_),
+      surface_size, namebox_centering_ && namebox_waku_->center_w_,
+      namebox_centering_ && namebox_waku_->center_h_);
+  return Rect(origin, surface_size);
+}
 // TODO(erg): Make this pass the #WINDOW_ATTR colour off wile rendering the
 // waku_backing.
 void TextWindow::Render() {
@@ -596,17 +634,8 @@ void TextWindow::Render() {
                                   GetIsFilter());
           }
 
-          bool center_w = namebox_waku_->center_w_,
-               center_h = namebox_waku_->center_h_;
-          if (!namebox_centering_)
-            center_h = center_w = false;
-          Point insertion_point = InsertionPoint(
-              r, Size(horizontal_namebox_padding_, vertical_namebox_padding_),
-              name_surface_->GetSize(), center_w, center_h);
-
-          name_surface_->RenderToScreen(
-              name_surface_->GetRect(),
-              Rect(insertion_point, name_surface_->GetSize()), 255);
+          name_surface_->RenderToScreen(name_surface_->GetRect(),
+                                        GetNameboxTextRect(), 255);
         }
 
         RenderFaces(0);

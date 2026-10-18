@@ -156,6 +156,7 @@ class TextWindow {
   // GetWindowRect()) and the name text surface (will be a relative calculation
   // to the waku).
   Rect GetNameboxWakuRect() const;
+  Rect GetNameboxTextRect() const;
 
   // The size of the writable text area.
   Size GetNameboxTextArea() const;
@@ -382,6 +383,11 @@ class TextWindow {
   int minimum_namebox_size_;
 
   int name_size_;
+
+  std::optional<NameboxConfig::SiglusLayout> siglus_namebox_layout_;
+
+  // Name glyph bounds, excluding the two-pixel shadow added by RenderText.
+  Size GetNameboxTextSize() const;
 
   // The number of characters in the window (or |minimum_namebox_size_|).
   int namebox_characters_;

@@ -28,6 +28,89 @@
 
 #include <gtest/gtest.h>
 
+TEST(MwndConfigTest, SiglusNameboxUsesItsAnchorAndTextOffset) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.NAME_WAKU_NO = 10");
+  gameexe.parseLine("MWND.000.NAME_WINDOW_POS = 313,51");
+  gameexe.parseLine("MWND.000.NAME_WINDOW_SIZE = 296,33");
+  gameexe.parseLine("MWND.000.NAME_WINDOW_ALIGN = 1");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS = 296,33");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS_REP = 0,-29");
+
+  const auto config = MwndConfig::ParseSiglus(gameexe);
+  const auto& namebox = config.GetWindow(0).namebox;
+  ASSERT_TRUE(namebox.siglus_layout);
+  const auto& layout = *namebox.siglus_layout;
+  const Point anchor =
+      Point(0, 472) + Point(namebox.x_offset, namebox.y_offset);
+  const Size text_size(52, 26);
+
+  EXPECT_EQ(layout.GetContentSize(text_size), Size(296, 33));
+  EXPECT_EQ(layout.GetWindowRect(anchor, Size(296, 33), text_size),
+            Rect::REC(165, 523, 296, 33));
+  EXPECT_EQ(layout.GetTextOrigin(anchor, text_size), Point(287, 527));
+}
+
+TEST(MwndConfigTest, SiglusNameboxAlignsFrameAndTextIndependently) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.NAME_WAKU_NO = 0");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS = 12,7");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS_REP = 3,-2");
+
+  for (int alignment : {0, 1, 2}) {
+    SCOPED_TRACE(alignment);
+    gameexe.SetIntAt("MWND.000.NAME_WINDOW_ALIGN", alignment);
+    const auto config = MwndConfig::ParseSiglus(gameexe);
+    ASSERT_TRUE(config.GetWindow(0).namebox.siglus_layout);
+    const auto& layout = *config.GetWindow(0).namebox.siglus_layout;
+    const Point anchor(400, 200);
+    // Fixed waku assets can override NAME_WINDOW_SIZE.
+    const Size frame_size(100, 35), text_size(41, 26);
+    const int frame_x[] = {400, 350, 300};
+    const int text_x[] = {415, 383, 350};
+    EXPECT_EQ(layout.GetWindowRect(anchor, frame_size, text_size),
+              Rect(frame_x[alignment], 200, frame_size));
+    EXPECT_EQ(layout.GetTextOrigin(anchor, text_size),
+              Point(text_x[alignment], 205));
+  }
+}
+
+TEST(MwndConfigTest, SiglusAutomaticNameboxUsesTextBoundsAndMargins) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.NAME_WAKU_NO = 0");
+  gameexe.parseLine("MWND.000.NAME_EXTEND_TYPE = 1");
+  gameexe.parseLine("MWND.000.NAME_WINDOW_ALIGN = 2");
+  gameexe.parseLine("MWND.000.MESSAGE_MARGIN = 11,12,13,14");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_MARGIN = 3,4,5,6");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS_REP = -1,2");
+
+  const auto config = MwndConfig::ParseSiglus(gameexe);
+  ASSERT_TRUE(config.GetWindow(0).namebox.siglus_layout);
+  const auto& layout = *config.GetWindow(0).namebox.siglus_layout;
+  const Point anchor(200, 300);
+  const Size text_size(51, 26);
+
+  EXPECT_EQ(layout.GetContentSize(text_size), Size(75, 52));
+  EXPECT_EQ(layout.GetWindowRect(anchor, Size(75, 52), text_size),
+            Rect::REC(138, 288, 75, 52));
+  EXPECT_EQ(layout.GetTextOrigin(anchor, text_size), Point(143, 306));
+}
+
+TEST(MwndConfigTest, RealliveNameboxKeepsItsOwnPositioningSettings) {
+  Gameexe gameexe;
+  gameexe.parseLine("WINDOW.000.NAME_MOD = 1");
+  gameexe.parseLine("WINDOW.000.NAME_WAKU_SETNO = 0");
+  gameexe.parseLine("WINDOW.000.NAME_POS = 12,-5");
+  gameexe.parseLine("MWND.000.NAME_WINDOW_ALIGN = 1");
+  gameexe.parseLine("MWND.000.NAME_MESSAGE_POS_REP = 0,-29");
+
+  const auto config = MwndConfig::ParseReallive(gameexe);
+  const auto& namebox = config.GetWindow(0).namebox;
+  EXPECT_FALSE(namebox.siglus_layout);
+  EXPECT_EQ(namebox.x_offset, 12);
+  EXPECT_EQ(namebox.y_offset, -5);
+}
+
 TEST(MwndConfigTest, ScreenDimensionsUseTheSelectedEngine) {
   Gameexe gameexe;
   gameexe.parseLine("SCREEN_SIZE = 1280,720");

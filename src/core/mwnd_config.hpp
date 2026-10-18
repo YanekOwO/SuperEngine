@@ -62,6 +62,27 @@ class MwndConfig {
   };
 
   struct Namebox {
+    struct SiglusLayout {
+      bool auto_size = false;
+      // NAME_WINDOW_ALIGN: 0 left, 1 center, 2 right of NAME_WINDOW_POS.
+      int alignment = 0;
+      Size window_size{300, 100};
+      Point message_position{8, 8};
+      Point message_offset;
+      Rect message_margin = Rect::GRP(8, 8, 8, 8);
+      // The legacy engine expands automatic name frames by MESSAGE_MARGIN.
+      Rect window_margin = Rect::GRP(20, 20, 20, 20);
+
+      Size GetContentSize(Size text_size) const;
+      Rect GetWindowRect(Point anchor, Size waku_size, Size text_size) const;
+      Point GetTextOrigin(Point anchor, Size text_size) const;
+
+      bool operator==(const SiglusLayout&) const = default;
+    };
+
+    // Native Siglus anchor and text positioning, independent of RealLive's
+    // bottom-left offset and padding convention.
+    std::optional<SiglusLayout> siglus_layout;
     // Whether a separate name-window waku was configured.
     bool has_waku = false;
     // Name-window frame number (NAME_WAKU_SETNO / NAME_WAKU_NO).
