@@ -26,13 +26,15 @@
 #include "core/compression.hpp"
 #include "core/gameexe.hpp"
 #include "encodings/utf16.hpp"
+#include "libsiglus/cracker.hpp"
 #include "libsiglus/xorkey.hpp"
 #include "log/domain_logger.hpp"
 #include "utilities/byte_reader.hpp"
 #include "utilities/mapped_file.hpp"
 
 #include <boost/algorithm/string/trim.hpp>
-#include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 namespace libsiglus {
@@ -57,6 +59,9 @@ static Gameexe CreateGexeImpl(std::string_view sv, const xorkey_t& key) {
     data[i] ^= gexe_key[i & 0xff];
 
   data = Decompress_lzss(data);
+  if (data.size() >= 2 && static_cast<uint8_t>(data[0]) == 0xff &&
+      static_cast<uint8_t>(data[1]) == 0xfe)
+    data.erase(0, 2);
 
   Gameexe gexe;
   std::stringstream ss(utf16le::Decode(data));
@@ -73,6 +78,8 @@ static Gameexe CreateGexeImpl(std::string_view sv, const xorkey_t& key) {
 }
 
 Gameexe CreateGexe(std::string_view sv) {
+  if (sv.size() < 16)
+    throw std::runtime_error("CreateGexe: truncated file header.");
   for (auto it = ExekeyRegistry::cbegin(); it != ExekeyRegistry::cend(); ++it) {
     try {
       const auto& [name, key] = *it;
@@ -83,7 +90,15 @@ Gameexe CreateGexe(std::string_view sv) {
     }
   }
 
-  throw std::runtime_error("CreateGexe: no valid key found.");
+  // fallback
+  ByteReader header(sv);
+  header.Proceed(4);
+  if (header.PopAs<uint32_t>(4) == 0)
+    return CreateGexeImpl(sv, xorkey_t{});
+  const auto key = CrackGameexe(sv.substr(8));
+  static DomainLogger logger("Gameexe");
+  logger(Severity::Info) << "Cracked exekey: " << ToHex(key);
+  return CreateGexeImpl(sv, key);
 }
 
 Gameexe CreateGexe(const std::filesystem::path& pth) {

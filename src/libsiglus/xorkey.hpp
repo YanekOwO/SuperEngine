@@ -83,4 +83,18 @@ using ExekeyRegistry = StaticRegistry<XorKeyTag, std::string_view, xorkey_t>;
     0x36, 0xbc, 0xe5, 0x60, 0x77, 0x68, 0x08, 0x4f, 0xbb, 0xab, 0xe2, 0x78,
     0x07, 0xe8, 0x73, 0xbf};
 
+inline std::string ToHex(const xorkey_t& data) {
+  constexpr char hex[] = "0123456789ABCDEF";
+
+  std::string result;
+  result.reserve(data.size() * 2);
+
+  for (uint8_t byte : data) {
+    result += hex[byte >> 4];
+    result += hex[byte & 0x0F];
+  }
+
+  return result;
+}
+
 }  // namespace libsiglus

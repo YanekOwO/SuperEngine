@@ -90,7 +90,7 @@ class Archive {
 
  public:
   std::string_view data_;
-  const xorkey_t& key_;
+  const xorkey_t key_;
   Pack_hdr const* hdr_;
 
   std::vector<std::string> raw_scene_data_;

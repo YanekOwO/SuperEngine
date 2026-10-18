@@ -25,14 +25,18 @@
 
 #include "core/compression.hpp"
 #include "encodings/utf16.hpp"
+#include "libsiglus/cracker.hpp"
 #include "libsiglus/xorkey.hpp"
 #include "log/domain_logger.hpp"
 #include "utilities/byte_reader.hpp"
 
-#include <array>
+#include <cstring>
+#include <stdexcept>
 #include <string>
 
 namespace libsiglus {
+
+static DomainLogger logger("Archive");
 
 Archive Archive::Create(std::string_view raw_data) {
   for (auto it = ExekeyRegistry::cbegin(); it != ExekeyRegistry::cend(); ++it) {
@@ -45,7 +49,41 @@ Archive Archive::Create(std::string_view raw_data) {
     }
   }
 
-  throw std::runtime_error("Archive::Create: no valid key found.");
+  // fallback
+  if (raw_data.size() < sizeof(Pack_hdr))
+    throw std::runtime_error("Archive::Create: truncated archive header.");
+  Pack_hdr header;
+  std::memcpy(&header, raw_data.data(), sizeof(header));
+  xorkey_t key{};
+  if (header.scn_data_exe_angou_mod != 0 && header.scn_data_cnt != 0) {
+    if (header.scn_data_cnt < 0 ||
+        header.scn_data_index_cnt < header.scn_data_cnt ||
+        header.scn_data_index_list_ofs < 0 || header.scn_data_list_ofs < 0 ||
+        static_cast<std::size_t>(header.scn_data_index_list_ofs) >
+            raw_data.size() ||
+        static_cast<std::size_t>(header.scn_data_list_ofs) > raw_data.size())
+      throw std::runtime_error("Archive::Create: invalid scene index.");
+    const auto count = static_cast<std::size_t>(header.scn_data_cnt);
+    const auto index = raw_data.substr(header.scn_data_index_list_ofs);
+    const auto data = raw_data.substr(header.scn_data_list_ofs);
+    if (count > index.size() / 8)
+      throw std::runtime_error("Archive::Create: truncated scene index.");
+    ByteReader reader(index);
+    std::vector<std::string_view> scenes;
+    scenes.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto offset = reader.PopAs<uint32_t>(4);
+      const auto size = reader.PopAs<uint32_t>(4);
+      if (offset > data.size() || size > data.size() - offset)
+        throw std::runtime_error("Archive::Create: truncated scene data.");
+      scenes.push_back(data.substr(offset, size));
+    }
+
+    key = CrackScene(scenes);
+    logger(Severity::Info) << "Cracked xorkey: " << ToHex(key);
+  }
+
+  return Archive(raw_data, key);
 }
 
 Archive::Archive(std::string_view data, const xorkey_t& key)
