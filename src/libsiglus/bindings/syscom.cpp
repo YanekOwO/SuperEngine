@@ -349,6 +349,7 @@ void BindSyscom(SiglusMachine& runtime) {
     // TODO: implement save/load
     return 0;
   });
+  m.def("get_new_save_no", []() -> int { return 1; });
 
   m.def("set_enable_hidemwnd", [local_config](bool value) {
     local_config->syscommenu.hide_mwnd.enable = value;

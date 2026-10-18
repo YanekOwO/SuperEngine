@@ -25,9 +25,11 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "log/domain_logger.hpp"
 #include "long_operations/siglus_wait.hpp"
+#include "srbind/args.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
+#include "vm/value.hpp"
 #include "vm/vm.hpp"
 
 #include <ctime>
@@ -35,6 +37,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace libsiglus::binding {
 namespace sb = srbind;
@@ -60,7 +63,9 @@ void BindSystem(SiglusMachine& runtime) {
         [root = runtime.save_pth](std::string filename) {
           return fs::exists(root / filename);
         });
-  m.def("check_dummy", &nop).def("clear_dummy", &nop);
+  m.def(
+       "check_dummy", [](std::vector<sr::Value>) { nop(); }, sb::vararg)
+      .def("clear_dummy", [](std::vector<sr::Value>) { nop(); }, sb::vararg);
   m.def("debug_write_log",
         [logger = DomainLogger("SiglusDbg")](std::string msg) {
           logger(Severity::Info) << std::move(msg);

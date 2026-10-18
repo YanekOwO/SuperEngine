@@ -130,6 +130,13 @@ class SoundSystem {
   void SetSeVolumeMod(const int in);
 
   void PlaySe(const int se_num);
+  void PlaySeByFileName(const std::string& filename);
+  void PlaySeByKoeNo(int id);
+  void StopSe(int fade_ms = 100);
+  enum SeState { kSeFree = 0, kSePlaying = 1, kSeFading = 2 };
+  int CheckSe() const;
+  void SetSeVolumeScript(int volume, int fade_ms = 0);
+  int GetSeVolumeScript() const;
 
   bool HasSe(const int se_num);
 
@@ -156,6 +163,9 @@ class SoundSystem {
   int EffectiveUserVolume(SoundCategory category) const;
   void ApplyBgmVolume();
   void ApplyGlobalPcmVolume();
+  void ApplySeVolume();
+  void UpdateSeVolume(unsigned int ticks);
+  void StartSe(player_t player, int channel);
   int FindIdleChannel() const;
   CharacterVoiceConfig VoicePreference(int character) const;
 
@@ -209,10 +219,13 @@ class SoundSystem {
   std::array<SoundCategory, NUM_TOTAL_CHANNELS> channel_categories_;
 
   int next_pcm_ = 0;
+  std::array<bool, NUM_TOTAL_CHANNELS> se_fading_{};
 
   // Script playback gains are runtime state, separate from user preferences.
   int bgm_script_volume_ = 255;
   int movie_script_volume_ = 255;
+  int se_script_volume_ = 255;
+  int se_target_volume_ = 255;
 
   // Open tasks that adjust the volume of a wave channel. We do this
   // because the audio backend doesn't provide this functionality and
@@ -220,6 +233,7 @@ class SoundSystem {
   ChannelAdjustmentMap pcm_adjustment_tasks_;
 
   std::unique_ptr<VolumeAdjustTask> bgm_adjustment_task_;
+  std::unique_ptr<VolumeAdjustTask> se_adjustment_task_;
 
   // Maps each UseKoe id to one or more koePlay ids.
   std::multimap<int, int> usekoe_to_koeplay_mapping_;

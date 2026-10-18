@@ -497,6 +497,66 @@ void BindSound(SiglusMachine& runtime) {
       sys->sound().StopPcm();
   });
 
+  System* sys = runtime.system.get();
+  sb::module_ se(vm, "se");
+  auto play_se = [sys](int number) {
+    if (sys)
+      sys->sound().PlaySe(number);
+  };
+  se.def("play", play_se);
+  se.def("play_by_se_no", play_se);
+  se.def("play_by_file_name", [sys](std::string filename) {
+    if (sys)
+      sys->sound().PlaySeByFileName(filename);
+  });
+  se.def("play_by_koe_no", [sys](int number) {
+    if (sys)
+      sys->sound().PlaySeByKoeNo(number);
+  });
+  se.def(
+      "stop",
+      [sys](int fade_ms) {
+        if (sys)
+          sys->sound().StopSe(fade_ms);
+      },
+      sb::arg("fade_ms") = 100);
+  se.def("check",
+         [sys] { return sys ? sys->sound().CheckSe() : SoundSystem::kSeFree; });
+  auto wait_se = [sys](sr::VM& vm, bool key_skip) {
+    return lop::MakePollingWaitFuture(
+        vm,
+        [sys] {
+          return !sys || sys->ShouldFastForward() ||
+                 sys->sound().CheckSe() != SoundSystem::kSePlaying;
+        },
+        key_skip, sys ? sys->event_ptr().get() : nullptr);
+  };
+  se.def("wait", [wait_se](sr::VM& vm) { return wait_se(vm, false); });
+  se.def("wait_key", [wait_se](sr::VM& vm) { return wait_se(vm, true); });
+  se.def(
+      "set_volume",
+      [sys](int volume, int fade_ms) {
+        if (sys)
+          sys->sound().SetSeVolumeScript(volume, fade_ms);
+      },
+      sb::arg("volume"), sb::arg("fade_ms") = 0);
+  se.def(
+      "set_volume_max",
+      [sys](int fade_ms) {
+        if (sys)
+          sys->sound().SetSeVolumeScript(255, fade_ms);
+      },
+      sb::arg("fade_ms") = 0);
+  se.def(
+      "set_volume_min",
+      [sys](int fade_ms) {
+        if (sys)
+          sys->sound().SetSeVolumeScript(0, fade_ms);
+      },
+      sb::arg("fade_ms") = 0);
+  se.def("get_volume",
+         [sys] { return sys ? sys->sound().GetSeVolumeScript() : 255; });
+
   runtime.bgm_table =
       std::make_shared<BgmTable>(BgmTable::CreateFromSiglus(*runtime.gameexe));
   auto bgm_table = runtime.bgm_table;

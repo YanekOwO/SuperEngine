@@ -35,7 +35,7 @@ class IPlatformImplementor;
 
 class SgvmInstance {
  public:
-  int start_scene_ = 0;
+  std::optional<int> start_scene_;
   bool debug_ = false;
   bool fast_forward_ = false;
   DebugFrameDumpConfig debug_frame_dump_config_;

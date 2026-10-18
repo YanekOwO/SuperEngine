@@ -29,9 +29,6 @@
 #include "m6/compiler_pipeline.hpp"
 #include "systems/graphics_system.hpp"
 #include "utilities/file.hpp"
-#include "vm/function.hpp"
-#include "vm/instruction.hpp"
-#include "vm/object.hpp"
 #include "vm/vm.hpp"
 
 #include <exception>
@@ -76,21 +73,7 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
         return 0;
     }
 
-    sr::Module* mod = rt.loader->Load(start_scene_);
-    if (!mod) {
-      std::string errmsg =
-          std::format("Failed to parse start scene: {}", start_scene_);
-      throw std::runtime_error(std::move(errmsg));
-    }
-
-    sr::Function* script = (*mod->globals)["%%script"].Get_if<sr::Function>();
-    if (!script) {
-      std::string errmsg =
-          std::format("Scene {}: %%script not found", start_scene_);
-      throw std::runtime_error(std::move(errmsg));
-    }
-
-    vm.ScheduleExecute(script);
+    machine->Start(start_scene_);
     machine->Run();
 
     return 0;

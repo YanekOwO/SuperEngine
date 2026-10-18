@@ -1120,6 +1120,34 @@ TEST_F(ElementParserTest, GlobalPcmCommandsAreImmediateCalls) {
   EXPECT_EQ(chain(explicit_stop), "pcm.stop()");
 }
 
+TEST_F(ElementParserTest, SeCommandsPreserveArgumentsAndWaitFlags) {
+  const std::pair<int, const char*> plays[] = {
+      {0, "play"}, {6, "play_by_koe_no"}, {9, "play_by_se_no"}};
+  for (const auto& [id, name] : plays) {
+    ElementCode call{45, id};
+    call.ForceBind({0, {v(3)}});
+    EXPECT_EQ(chain(call), std::string("se.") + name + "(int:3)");
+  }
+  ElementCode file{45, 5};
+  file.ForceBind({0, {v("effect")}});
+  EXPECT_EQ(chain(file), "se.play_by_file_name(str:effect)");
+  ElementCode stop{45, 7};
+  stop.ForceBind({1, {v(1000)}});
+  EXPECT_EQ(chain(stop), "se.stop(int:1000)");
+  EXPECT_EQ(chain(45, 7), "se.stop()");
+  ElementCode volume{45, 1};
+  volume.ForceBind({1, {v(128), v(500)}});
+  EXPECT_EQ(chain(volume), "se.set_volume(int:128,int:500)");
+  EXPECT_EQ(chain(45, 2), "se.set_volume_max()");
+  EXPECT_EQ(chain(45, 3), "se.set_volume_min()");
+  EXPECT_EQ(chain(45, 4).chain.GetType(), Type::Int);
+  EXPECT_EQ(chain(45, 11).chain.GetType(), Type::Int);
+  EXPECT_EQ(chain(45, 8).CallFlags(), "[]as");
+  EXPECT_EQ(chain(45, 10).CallFlags(), "[]as");
+  EXPECT_EQ(chain(45, 8).chain.GetType(), Type::None);
+  EXPECT_EQ(chain(45, 10).chain.GetType(), Type::Int);
+}
+
 TEST_F(ElementParserTest, Pcmch) {
   {
     ElementCode elm{44, -1, 0, 0};

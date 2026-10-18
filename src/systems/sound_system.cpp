@@ -185,6 +185,7 @@ SoundSystem::~SoundSystem() {
 
 void SoundSystem::ExecuteSoundSystem() {
   unsigned int cur_time = system_.event().GetTicks();
+  UpdateSeVolume(cur_time);
 
   auto it = pcm_adjustment_tasks_.begin();
   while (it != pcm_adjustment_tasks_.end()) {
@@ -554,14 +555,99 @@ void SoundSystem::PlaySe(const int se_num) {
   }
 
   auto file_path = voice_assets_->FindFile(file_name, SOUNDFILETYPES);
-  player_t player = CreateAudioPlayer(file_path.value());
-  player->SetLoopTimes(0);
-
-  channel_categories_.at(channel) = SoundCategory::Se;
-
-  SetChannelVolumeImpl(channel);
-  sound_impl_->PlayChannel(channel, player);
+  if (!file_path)
+    throw file_path.error();
+  StartSe(CreateAudioPlayer(file_path.value()), channel);
 }
+
+void SoundSystem::PlaySeByFileName(const std::string& filename) {
+  if (!IsSeEnabled())
+    return;
+  const int channel = FindIdleChannel();
+  auto file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
+  if (!file)
+    throw file.error();
+  StartSe(CreateAudioPlayer(file.value()), channel);
+}
+
+void SoundSystem::PlaySeByKoeNo(int id) {
+  if (!IsSeEnabled())
+    return;
+  const int channel = FindIdleChannel();
+  const VoiceClip clip = voice_factory_.LoadSample(id);
+  StartSe(std::make_shared<AudioPlayer>(
+              AudioDecoder(clip.content, clip.format_name)),
+          channel);
+}
+
+void SoundSystem::StartSe(player_t player, int channel) {
+  UpdateSeVolume(system_.event().GetTicks());
+  player->SetLoopTimes(0);
+  channel_categories_.at(channel) = SoundCategory::Se;
+  se_fading_.at(channel) = false;
+  SetChannelVolumeImpl(channel);
+  sound_impl_->PlayChannel(channel, std::move(player));
+}
+
+void SoundSystem::StopSe(int fade_ms) {
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel) {
+    if (channel_categories_[channel] != SoundCategory::Se ||
+        !sound_impl_->IsPlaying(channel))
+      continue;
+    se_fading_[channel] = fade_ms > 0;
+    if (fade_ms > 0)
+      sound_impl_->FadeOutChannel(channel, fade_ms);
+    else
+      sound_impl_->HaltChannel(channel);
+  }
+}
+
+int SoundSystem::CheckSe() const {
+  bool fading = false;
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel) {
+    if (channel_categories_[channel] != SoundCategory::Se ||
+        !sound_impl_->IsPlaying(channel))
+      continue;
+    if (!se_fading_[channel])
+      return kSePlaying;
+    fading = true;
+  }
+  return fading ? kSeFading : kSeFree;
+}
+
+void SoundSystem::ApplySeVolume() {
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
+    if (channel_categories_[channel] == SoundCategory::Se)
+      SetChannelVolumeImpl(channel);
+}
+
+void SoundSystem::UpdateSeVolume(unsigned int ticks) {
+  if (!se_adjustment_task_)
+    return;
+  const bool complete = ticks >= se_adjustment_task_->end_time;
+  se_script_volume_ = complete ? se_adjustment_task_->final_volume
+                               : se_adjustment_task_->calculateVolumeFor(ticks);
+  if (complete)
+    se_adjustment_task_.reset();
+  ApplySeVolume();
+}
+
+void SoundSystem::SetSeVolumeScript(int volume, int fade_ms) {
+  const unsigned int ticks = system_.event().GetTicks();
+  UpdateSeVolume(ticks);
+  se_target_volume_ = volume;
+  const int target = std::clamp(volume, 0, 255);
+  if (fade_ms <= 0) {
+    se_adjustment_task_.reset();
+    se_script_volume_ = target;
+  } else {
+    se_adjustment_task_ = std::make_unique<VolumeAdjustTask>(
+        ticks, se_script_volume_, target, fade_ms);
+  }
+  ApplySeVolume();
+}
+
+int SoundSystem::GetSeVolumeScript() const { return se_target_volume_; }
 
 bool SoundSystem::HasSe(const int se_num) {
   try {
@@ -668,6 +754,10 @@ void SoundSystem::Reset() {
   BgmStop();
   StopMovieAudio();
   WavStopAll();
+  se_fading_.fill(false);
+  se_adjustment_task_.reset();
+  se_script_volume_ = se_target_volume_ = 255;
+  ApplySeVolume();
 }
 
 System& SoundSystem::system() { return system_; }
@@ -675,10 +765,10 @@ System& SoundSystem::system() { return system_; }
 void SoundSystem::SetChannelVolumeImpl(int channel) {
   const auto category = channel_categories_.at(channel);
   const int base = EffectiveUserVolume(category);
-  // SE chunks have no script channel volume.
+  // SE uses its global script gain instead of the WAV channel gain.
   const int adjusted =
       category == SoundCategory::Se
-          ? base
+          ? compute_channel_volume(se_script_volume_, base)
           : compute_channel_volume(channel_volume_.at(channel), base);
 
   sound_impl_->SetVolume(channel, realLiveVolumeToSDLMixerVolume(adjusted));
