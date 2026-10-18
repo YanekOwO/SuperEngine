@@ -30,39 +30,78 @@
 
 void Effect::Reset() { *this = Effect(); }
 
+void Effect::Execute() {
+  for (auto it = events_.begin(); it != events_.end();) {
+    it->second.value = static_cast<int>(it->second.counter.ReadFrame());
+    if (it->second.counter.IsFinished())
+      it = events_.erase(it);
+    else
+      ++it;
+  }
+}
+
+void Effect::StartEvent(int property, FrameCounter counter) {
+  if (property < 0 || property > 13)
+    throw std::runtime_error("Invalid stage effect event " +
+                             std::to_string(property));
+  const int value = static_cast<int>(counter.ReadFrame());
+  events_.insert_or_assign(property, Event{std::move(counter), value});
+}
+
+bool Effect::IsEventRunning(int property) const {
+  const auto it = events_.find(property);
+  return it != events_.end() && it->second.counter.IsActive();
+}
+
+void Effect::EndEvent(int property) { events_.erase(property); }
+
+int Effect::GetRenderValue(int property) const {
+  const auto it = events_.find(property);
+  if (it == events_.end())
+    return Get(property);
+  const int value = it->second.value;
+  return property < 3 ? value : std::clamp(value, 0, 255);
+}
+
 bool Effect::Contains(int order, int layer) const {
   return std::pair(begin_order, begin_layer) <= std::pair(order, layer) &&
          std::pair(order, layer) <= std::pair(end_order, end_layer);
 }
 
 void Effect::ApplyTo(ObjectParameter& param) const {
-  param.position_x += x;
-  param.position_y += y;
-  param.z_depth += z;
-  param.SetMono(ObjectParameter::ComposeEffectLevel(param.mono(), mono));
-  param.SetInvert(ObjectParameter::ComposeEffectLevel(param.invert(), reverse));
-  param.SetBright(ObjectParameter::ComposeEffectLevel(param.Bright(), bright));
-  param.SetDark(ObjectParameter::ComposeEffectLevel(param.Dark(), dark));
+  param.position_x += GetRenderValue(0);
+  param.position_y += GetRenderValue(1);
+  param.z_depth += GetRenderValue(2);
+  param.SetMono(
+      ObjectParameter::ComposeEffectLevel(param.mono(), GetRenderValue(3)));
+  param.SetInvert(
+      ObjectParameter::ComposeEffectLevel(param.invert(), GetRenderValue(4)));
+  param.SetBright(
+      ObjectParameter::ComposeEffectLevel(param.Bright(), GetRenderValue(5)));
+  param.SetDark(
+      ObjectParameter::ComposeEffectLevel(param.Dark(), GetRenderValue(6)));
 
   const int child_rate = param.colour_level();
+  const int color_rate = GetRenderValue(10);
   if (child_rate + color_rate > 0) {
     const int denominator = 255 * 255 - (255 - child_rate) * (255 - color_rate);
     const int parent_rate = color_rate * 255 * 255 / denominator;
-    param.SetColourRed(
-        (param.colour_red() * (255 - parent_rate) + color_r * parent_rate) /
-        255);
-    param.SetColourGreen(
-        (param.colour_green() * (255 - parent_rate) + color_g * parent_rate) /
-        255);
-    param.SetColourBlue(
-        (param.colour_blue() * (255 - parent_rate) + color_b * parent_rate) /
-        255);
+    param.SetColourRed((param.colour_red() * (255 - parent_rate) +
+                        GetRenderValue(7) * parent_rate) /
+                       255);
+    param.SetColourGreen((param.colour_green() * (255 - parent_rate) +
+                          GetRenderValue(8) * parent_rate) /
+                         255);
+    param.SetColourBlue((param.colour_blue() * (255 - parent_rate) +
+                         GetRenderValue(9) * parent_rate) /
+                        255);
   }
   param.SetColourLevel(
       ObjectParameter::ComposeEffectLevel(child_rate, color_rate));
-  param.SetTintRed(std::clamp(param.tint_red() + color_add_r, 0, 255));
-  param.SetTintGreen(std::clamp(param.tint_green() + color_add_g, 0, 255));
-  param.SetTintBlue(std::clamp(param.tint_blue() + color_add_b, 0, 255));
+  param.SetTintRed(std::clamp(param.tint_red() + GetRenderValue(11), 0, 255));
+  param.SetTintGreen(
+      std::clamp(param.tint_green() + GetRenderValue(12), 0, 255));
+  param.SetTintBlue(std::clamp(param.tint_blue() + GetRenderValue(13), 0, 255));
 }
 
 int Effect::Get(int idx) const {

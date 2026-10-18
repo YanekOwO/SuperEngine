@@ -23,9 +23,11 @@
 
 #pragma once
 
+#include "core/frame_counter.hpp"
+
 #include <limits>
+#include <map>
 #include <string_view>
-#include <vector>
 
 struct ObjectParameter;
 
@@ -54,6 +56,11 @@ struct Effect {
   Effect() = default;
 
   void Reset();
+  void Execute();
+
+  void StartEvent(int property, FrameCounter counter);
+  bool IsEventRunning(int property) const;
+  void EndEvent(int property);
 
   bool Contains(int order, int layer) const;
 
@@ -62,4 +69,15 @@ struct Effect {
   int Get(int idx) const;
   void Set(int idx, int val);
   static std::string_view GetPropertyName(int idx);
+
+ private:
+  // Property reads retain their base/target value, while rendering uses the
+  // current event value until the event ends, as in legacy Siglus.
+  struct Event {
+    FrameCounter counter;
+    int value;
+  };
+  std::map<int, Event> events_;
+
+  int GetRenderValue(int property) const;
 };

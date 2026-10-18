@@ -351,6 +351,12 @@ void Stage::InitializeAllObjectParams() {
 }
 
 void Stage::Execute() {
+  for (auto& layer_effects : effects.storage) {
+    for (auto& effect : layer_effects) {
+      if (effect)
+        effect->Execute();
+    }
+  }
   for (auto& layer_objects : objects.storage) {
     for (auto& obj : layer_objects) {
       if (!obj)
