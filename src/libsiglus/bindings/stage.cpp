@@ -41,7 +41,7 @@ class StageLayer {
 
     self.btnsel = nil;
     try {
-      self.btnsel = LazyArray(Btnset);
+      self.btnsel = LazyArray(Btnsel);
     } catch (e) {
       print("Siglus stage.btnsel binding unavailable:", e);
     }

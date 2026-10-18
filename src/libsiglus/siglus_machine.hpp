@@ -40,6 +40,7 @@
 #include "vm/value.hpp"
 
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -97,6 +98,8 @@ struct SiglusMachine {
   // Overrides this exact selection key for the lifetime of this machine.
   // Choices are original option indices; -1 requests player cancellation.
   void RegisterDebugSelectionChoice(int scene, int kidoku, int choice);
+  // Appends a choice for the next selection, ahead of indexed overrides.
+  void QueueDebugSelectionChoice(int choice);
   // Called once after input or automation accepts a new selection result.
   void OnSelectionChosen(const Selection& session);
 
@@ -140,6 +143,7 @@ struct SiglusMachine {
 
  private:
   std::map<std::pair<int, int>, int> debug_selection_choices_;
+  std::deque<int> debug_selection_choice_queue_;
   bool updating_selection_ = false;
   std::vector<std::weak_ptr<Counter>> counters_;
 };

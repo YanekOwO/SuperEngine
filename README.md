@@ -66,6 +66,16 @@ If you don't have the file "msgothic.ttc" in either the game directory
 nor your home directory, please specify a Japanese font on the command
 line with --font.
 
+For Siglus games, use `--hook` to run a custom script on the game's machine
+before loading the start scene:
+
+```bash
+rlvm --engine siglus --hook hooks.sr /path/to/GameDirectory/
+```
+
+The hook's globals, state changes, and debug registrations remain available to
+the game. Hook errors stop startup.
+
 ## COMPILING RLVM
 
 ### Prerequisites

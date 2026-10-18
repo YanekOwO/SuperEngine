@@ -26,7 +26,9 @@
 
 #include "libsiglus/sgvm_factory.hpp"
 #include "libsiglus/siglus_machine.hpp"
+#include "m6/compiler_pipeline.hpp"
 #include "systems/graphics_system.hpp"
+#include "utilities/file.hpp"
 #include "vm/function.hpp"
 #include "vm/instruction.hpp"
 #include "vm/object.hpp"
@@ -34,6 +36,7 @@
 
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 
@@ -51,6 +54,27 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
 
     rt.system->graphics().SetDebugFrameDumpConfig(debug_frame_dump_config_);
     sr::VM& vm = *rt.vm;
+
+    if (hook_path_) {  // inject custom script
+      const std::filesystem::path& path = *hook_path_;
+      try {
+        auto source =
+            m6::SourceBuffer::Create(LoadFileStr(path), path.string());
+        m6::CompilerPipeline compiler(machine->vm->gc_);
+        compiler.compile(std::move(source));
+        if (!compiler.Ok())
+          throw std::runtime_error(compiler.FormatErrors());
+
+        machine->vm->AddFiber(compiler.Get());
+        machine->Run();
+      } catch (const std::exception& e) {
+        throw std::runtime_error(
+            std::format("Hook '{}': {}", path.string(), e.what()));
+      }
+
+      if (vm.IsStopRequested())
+        return 0;
+    }
 
     sr::Module* mod = rt.loader->Load(start_scene_);
     if (!mod) {

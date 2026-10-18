@@ -169,6 +169,13 @@ void SiglusMachine::RegisterDebugSelectionChoice(int scene,
   debug_selection_choices_.insert_or_assign({scene, kidoku}, choice);
 }
 
+void SiglusMachine::QueueDebugSelectionChoice(int choice) {
+  if (choice < -1)
+    throw sr::RuntimeError(
+        "Selection choice must be -1 or a nonnegative index");
+  debug_selection_choice_queue_.push_back(choice);
+}
+
 void SiglusMachine::OnSelectionChosen(const Selection& s) {
   const int index = s.result.value();
   if (system) {
@@ -298,14 +305,22 @@ void SiglusMachine::UpdateSelection(int ms) {
     return;
 
   // injected choice
-  const auto choice =
-      debug_selection_choices_.find({s->request.scene, s->request.kidoku});
-  if (choice == debug_selection_choices_.end())
+  std::optional<int> choice;
+  if (!debug_selection_choice_queue_.empty()) {
+    choice = debug_selection_choice_queue_.front();
+    debug_selection_choice_queue_.pop_front();
+  } else if (const auto it = debug_selection_choices_.find(
+                 {s->request.scene, s->request.kidoku});
+             it != debug_selection_choices_.end()) {
+    choice = it->second;
+  }
+
+  if (!choice)
     return;
-  if (!selection_state->Choose(choice->second))
+  if (!selection_state->Choose(*choice))
     throw sr::RuntimeError(std::format(
         "Invalid registered selection choice {} for scene {}, kidoku {}",
-        choice->second, s->request.scene, s->request.kidoku));
+        *choice, s->request.scene, s->request.kidoku));
   OnSelectionChosen(*s);
   if (system)
     system->graphics().ForceRefresh();

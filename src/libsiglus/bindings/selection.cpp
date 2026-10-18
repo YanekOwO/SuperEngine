@@ -303,6 +303,8 @@ void BindSelection(SiglusMachine& rt) {
         [&rt](int scene, int kidoku, int choice) {
           rt.RegisterDebugSelectionChoice(scene, kidoku, choice);
         });
+  m.def("__debug_queue_sel_choice",
+        [&rt](int choice) { rt.QueueDebugSelectionChoice(choice); });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_selection", BindSelection)

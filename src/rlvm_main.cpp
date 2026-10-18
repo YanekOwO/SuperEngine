@@ -96,13 +96,14 @@ int main(int argc, char* argv[]) {
       "show-platforms", "Print all avaliable gui platforms.")(
       "log-level", po::value<std::string>(),
       "Minimum severity level to log (none, info, warning, error)")(
-      "fast-forward",
-      "Fast forward execution by injecting Ctrl key events")(
+      "fast-forward", "Fast forward execution by injecting Ctrl key events")(
       "debug",
       po::value<bool>()
           ->default_value(false, "false")
           ->implicit_value(true, "true"),
       "Enable debug instrumentation (true/false)")(
+      "hook", po::value<std::string>(),
+      "Run a script before the game payload (Siglus only).")(
       "engine", po::value<std::string>()->default_value("reallive"));
 
   po::options_description debugOpts("Debug options");
@@ -192,6 +193,12 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
+  const std::string engine = vm["engine"].as<std::string>();
+  if (vm.count("hook") && engine != "siglus" && engine != "Siglus") {
+    std::cerr << "ERROR: --hook requires --engine siglus." << std::endl;
+    return -1;
+  }
+
   DebugFrameDumpConfig debug_frame_dump_config;
   if (vm.count("debug-frame-dump")) {
     int interval = vm["debug-frame-dump"].as<int>();
@@ -268,10 +275,6 @@ int main(int argc, char* argv[]) {
   // -----------------------------------------------------------------------
   // Create game instance
 
-  std::string engine = "reallive";
-  if (vm.count("engine"))
-    engine = vm["engine"].as<std::string>();
-
   if (engine == "reallive" || engine == "Reallive") {
     RLVMInstance instance;
     instance.SetPlatformImplementor(platform_impl);
@@ -294,6 +297,8 @@ int main(int argc, char* argv[]) {
       instance.font_ = vm["font"].as<std::string>();
     if (vm.count("scene"))
       instance.start_scene_ = vm["scene"].as<int>();
+    if (vm.count("hook"))
+      instance.hook_path_ = vm["hook"].as<std::string>();
     instance.debug_ = vm["debug"].as<bool>();
 
     return instance.Main(gamerootPath);

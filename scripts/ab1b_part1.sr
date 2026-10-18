@@ -1,0 +1,175 @@
+
+que = __debug_queue_sel_choice;
+
+// Episode 1: Departure
+que(1); // 001. Doubt her
+que(0); // 002. Laugh
+que(0); // 003. Be surprised
+que(0); // 004. Join them
+que(0); // 005. Damn Brat
+que(1); // 006. This is not okay
+que(1); // 007. Otonashi
+que(0); // 008. About the non-Brigade students
+que(1); // 009. About Angel's violent nature
+que(2); // 010. About God
+que(3); // 011. About what's outside of the school
+que(4); // 012. About Angel's powers
+que(5); // 013. About humans
+que(1); // 014. I'm still not sure
+que(0); // 015. I don't mind living with an NPC
+que(0); // 016. Ask if this is really okay
+que(1); // 017. Are you, like, gay or something?
+que(1); // 018. Refuse
+// MAP: Iwasawa
+que(0); // 019. Could be
+que(1); // 020. Go for the indirect kiss and chug
+que(0); // 021. Yes
+que(0); // 022. Do we really need to go that far?
+que(0); // 023. I'll get by somehow
+
+// Episode 2: Guild
+que(1); // 024. Go off on your own
+// MAP: Iwasawa
+que(0); // 025. Talk to her
+que(0); // 026. The concert's starting!!
+que(1); // 027. I'm interested in you
+que(0); // 028. Talk about food
+que(0); // 029. Take class
+que(1); // 030. Sit at a different table
+// MAP: Iwasawa
+que(1); // 031. Talk about sound
+que(1); // 032. Follow orders
+que(0); // 033. Entrust yourself to Hinata
+que(0); // 034. Do as he says
+que(0); // 035. Dodge right 
+que(1); // 036. Follow after everyone
+que(0); // 037. Climb
+que(0); // 038. Climb
+que(1); // 039. Abandon him
+que(0); // 040. Try to lift her spirits
+que(0); // 041. Why did you become the leader?
+que(0); // 042. How did you die?
+que(0); // 043. Follow her
+que(1); // 044. Try to fight
+que(1); // 045. Just watch it happen
+que(0); // 046. Fall back with Yuri
+que(0); // 047. Ask about his relationship with Yuri
+
+// Episode 3: My Song
+que(1); // 048. Go out on your own
+// MAP: Iwasawa
+que(3); // 049. Talk about something 'adult'
+que(2); // 050. It's not a question of size
+que(0); // 051. Take class
+que(1); // 052. The chance to talk with Angel
+// MAP: Hisako
+que(1); // 053. I'm interested in you, too
+que(1); // 054. Leave it at that
+que(0); // 055. What's the Angel Area?
+que(2); // 056. I'll protect her
+que(1); // 057. Stop here
+que(0); // 058. Follow up
+que(0); // 059. Ask Hinata for help
+que(1); // 060. Go out on your own
+// MAP: Iwasawa
+que(8); // 061. Talk about plants
+que(0); // 062. Take class
+que(0); // 063. Tell her about the operation
+// MAP: Hisako
+que(0); // 064. It does
+que(0); // 065. I can definitely help
+que(0); // 066. Counselling
+que(1); // 067. Check out Yuri's reaction
+que(1); // 068. Chase and call out to her
+que(0); // 069. Praise the song
+que(0); // 070. Something's off here...
+que(2); // 071. Are the tickets really random?
+// MAP: Iwasawa
+que(6); // 072. Talk about bodily functions
+que(0); // 073. Take class
+// MAP: Iwasawa
+que(0); // 074. You're charming as a woman
+que(0); // 075. Yeah
+que(0); // 076. You're beautiful
+que(7); // 077. Talk about the speed of sound
+que(0); // 078. Worry about Iwasawa
+que(1); // 079. I forgot that I left my cup ramen cooking
+que(1); // 080. Not my problem
+que(0); // 081. Go and stop her
+que(1); // 082. I was worried about my ramen
+que(0); // 083. Dig even deeper
+
+// Episode 4: Day Game
+que(0); // 084. No way they'd go for that
+// MAP: Iwasawa
+que(1); // 085. Did I make a mistake?
+que(0); // 086. Let her treat you
+que(0); // 087. I'll do that
+que(1); // 088. Don't imagine it
+que(0); // 089. Imagine it
+// MAP: Iwasawa
+que(0); // 090. She wants to talk with me
+que(1); // 091. You don't smell
+que(1); // 092. Refuse
+que(1); // 093. Join Iwasawa's team
+que(0); // 094. I don't mind
+que(1); // 095. No problem
+que(0); // 096. Ask for his help
+que(0); // 097. Swing
+que(1); // 098. Keep pitching
+que(0); // 099. Ask Iwasawa
+que(2); // 100. I'll kiss you if you shut them out
+que(1); // 101. Disagree
+que(0); // 102. Shake your head
+que(0); // 103. Kiss me
+que(0); // 104. It's better to leave this world
+
+// Episode 5: Favorite Flavor
+// MAP: Iwasawa
+que(1); // 105. We were
+que(0); // 106. Say you don't need reminders
+que(0); // 107. Recommend Sekine
+que(1); // 108. Get to know the other members
+// MAP: Iwasawa
+// MAP: TK
+// MAP: Yui
+// MAP: Yuri
+// MAP: Noda
+que(0); // 109. Go make up an excuse
+que(0); // 110. I want to see that, too
+que(0); // 111. Yeah
+que(0); // 112. I did
+que(1); // 113. Nod silently
+que(1); // 114. In a platonic sense
+// MAP: Iwasawa
+que(0); // 115. I do
+que(1); // 116. The lyrics depend on the music
+que(0); // 117. Listen
+que(1); // 118. Realism
+que(0); // 119. Dodge
+que(1); // 120. I haven't
+// MAP: Iwasawa
+que(0); // 121. Just a little
+que(2); // 122. Either way the crowd will be there
+que(0); // 123. I like crows better
+que(0); // 124. My big story
+
+// Episode 6: Family Affair
+que(0); // 125. Sleep a bit longer
+que(0); // 126. They're just hiccups
+// MAP: Iwasawa
+que(0); // 127. About when she arrived here
+que(2); // 128. I am, in both of you
+que(1); // 129. Sexy ones
+que(1); // 130. I don't
+que(1); // 131. Yeah, I like 'em big
+que(0); // 132. They're ideal
+que(1); // 133. Pass her by
+que(1); // 134. Pass
+que(1); // 135. It's just your imagination
+
+// Episode: Iwasawa
+que(0); // 136. A human
+que(0); // 137. I'll be a crow, too
+que(0); // 138. Yeah
+que(0); // 139. Iwasawa

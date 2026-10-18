@@ -26,6 +26,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "systems/igraphics_backend.hpp"
@@ -39,6 +40,7 @@ class SgvmInstance {
   bool fast_forward_ = false;
   DebugFrameDumpConfig debug_frame_dump_config_;
   std::string font_;
+  std::optional<std::filesystem::path> hook_path_;
   std::shared_ptr<IPlatformImplementor> platform_implementor_;
 
   int Main(const std::filesystem::path& gameroot);
