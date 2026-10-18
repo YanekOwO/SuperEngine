@@ -487,6 +487,16 @@ void BindSound(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
+  sb::module_ pcm(vm, "pcm");
+  pcm.def("play", [sys = runtime.system.get()](std::string filename) {
+    if (sys)
+      sys->sound().PlayPcm(filename);
+  });
+  pcm.def("stop", [sys = runtime.system.get()] {
+    if (sys)
+      sys->sound().StopPcm();
+  });
+
   runtime.bgm_table =
       std::make_shared<BgmTable>(BgmTable::CreateFromSiglus(*runtime.gameexe));
   auto bgm_table = runtime.bgm_table;

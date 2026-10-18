@@ -108,7 +108,7 @@ SoundSystem::SoundSystem(System& system, std::unique_ptr<ISoundSystem> impl)
   static constexpr int audio_buffer_size = 4096;
   try {
     sound_impl_->OpenAudio(sound_quality_, audio_buffer_size);
-    sound_impl_->AllocateChannels(NUM_TOTAL_CHANNELS);
+    sound_impl_->AllocateChannels(NUM_TOTAL_CHANNELS + NUM_PCM_CHANNELS);
   } catch (std::runtime_error& e) {
     std::ostringstream oss;
     oss << "Couldn't initialize audio: " << e.what();
@@ -257,6 +257,7 @@ void SoundSystem::ApplyConfiguration() {
   ApplyBgmVolume();
   for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
     SetChannelVolumeImpl(channel);
+  ApplyGlobalPcmVolume();
   if (auto player = sound_impl_->GetMovieAudio())
     player->SetVolume(
         static_cast<float>(compute_channel_volume(
@@ -427,7 +428,7 @@ void SoundSystem::WavPlay(const std::string& wav_file, bool loop) {
   int channel_number = -1;
 
   try {
-    channel_number = sound_impl_->FindIdleChannel();
+    channel_number = FindIdleChannel();
   } catch (std::runtime_error& e) {
     std::ostringstream oss;
     oss << "Couldn't find a free channel for wavPlay(): " << e.what();
@@ -476,6 +477,48 @@ void SoundSystem::WavFadeOut(const int channel, const int fadetime) {
   sound_impl_->FadeOutChannel(channel, fadetime);
 }
 
+int SoundSystem::FindIdleChannel() const {
+  // Automatic WAV and SE playback must not borrow the global PCM pool.
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
+    if (!sound_impl_->IsPlaying(channel))
+      return channel;
+  throw std::runtime_error("All channels are busy.");
+}
+
+void SoundSystem::ApplyGlobalPcmVolume() {
+  const int volume =
+      realLiveVolumeToSDLMixerVolume(EffectiveUserVolume(SoundCategory::Pcm));
+  for (int slot = 0; slot < NUM_PCM_CHANNELS; ++slot)
+    sound_impl_->SetVolume(NUM_TOTAL_CHANNELS + slot, volume);
+}
+
+void SoundSystem::PlayPcm(const std::string& filename) {
+  if (!IsSoundEnabled(SoundCategory::Pcm))
+    return;
+
+  for (int i = 0; i < NUM_PCM_CHANNELS; ++i) {
+    if (!sound_impl_->IsPlaying(NUM_TOTAL_CHANNELS + next_pcm_))
+      break;
+    next_pcm_ = (next_pcm_ + 1) % NUM_PCM_CHANNELS;
+  }
+
+  auto file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
+  if (!file)
+    throw file.error();
+  player_t player = CreateAudioPlayer(file.value());
+  player->SetLoopTimes(0);
+  const int channel = NUM_TOTAL_CHANNELS + next_pcm_;
+  sound_impl_->SetVolume(channel, realLiveVolumeToSDLMixerVolume(
+                                      EffectiveUserVolume(SoundCategory::Pcm)));
+  sound_impl_->PlayChannel(channel, std::move(player));
+  next_pcm_ = (next_pcm_ + 1) % NUM_PCM_CHANNELS;
+}
+
+void SoundSystem::StopPcm() {
+  for (int slot = 0; slot < NUM_PCM_CHANNELS; ++slot)
+    sound_impl_->FadeOutChannel(NUM_TOTAL_CHANNELS + slot, 100);
+}
+
 int SoundSystem::IsSeEnabled() const {
   return IsSoundEnabled(SoundCategory::Se);
 }
@@ -501,7 +544,7 @@ void SoundSystem::PlaySe(const int se_num) {
   int channel = se.channel;
 
   if (channel < 0)
-    channel = sound_impl_->FindIdleChannel();
+    channel = FindIdleChannel();
 
   // Make sure there isn't anything playing on the current channel
   sound_impl_->HaltChannel(channel);

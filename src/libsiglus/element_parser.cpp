@@ -1464,9 +1464,9 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
     }
 
     case Type::Pcm: {
-      static const auto mp =
-          make_flatmap<Builder>({id[0] | b(Type::Callable, Member("play")),
-                                 id[1] | b(Type::None, Member("stop"))});
+      static const auto mp = make_flatmap<Builder>(
+          {id[0] | b_callable("play", Type::None),
+           id[1] | b_callable("stop", Type::None)});
       return &mp;
     }
 

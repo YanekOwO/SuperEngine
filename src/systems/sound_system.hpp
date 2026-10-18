@@ -50,6 +50,9 @@ constexpr int NUM_KOE_CHANNELS = 1;
 constexpr int NUM_TOTAL_CHANNELS =
     NUM_BASE_CHANNELS + NUM_EXTRA_WAVPLAY_CHANNELS + NUM_KOE_CHANNELS;
 
+// PCM channels uses a separated pool
+constexpr int NUM_PCM_CHANNELS = 16;
+
 // The koe channel is the last one.
 [[maybe_unused]] constexpr int KOE_CHANNEL =
     NUM_BASE_CHANNELS + NUM_EXTRA_WAVPLAY_CHANNELS;
@@ -116,6 +119,10 @@ class SoundSystem {
   void WavStopAll();
   void WavFadeOut(const int channel, const int fadetime);
 
+  // PCM uses an independent pool of one-shot voices.
+  void PlayPcm(const std::string& filename);
+  void StopPcm();
+
   int IsSeEnabled() const;
   void SetIsSeEnabled(const int in);
 
@@ -148,6 +155,8 @@ class SoundSystem {
   void KoePlayImpl(int id, int character_volume = 255);
   int EffectiveUserVolume(SoundCategory category) const;
   void ApplyBgmVolume();
+  void ApplyGlobalPcmVolume();
+  int FindIdleChannel() const;
   CharacterVoiceConfig VoicePreference(int character) const;
 
   // Implementation to play a wave file. Two wavPlay() versions use this
@@ -198,6 +207,8 @@ class SoundSystem {
   // Per channel volume
   std::array<int, NUM_TOTAL_CHANNELS> channel_volume_;
   std::array<SoundCategory, NUM_TOTAL_CHANNELS> channel_categories_;
+
+  int next_pcm_ = 0;
 
   // Script playback gains are runtime state, separate from user preferences.
   int bgm_script_volume_ = 255;

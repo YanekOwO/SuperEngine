@@ -1102,6 +1102,24 @@ TEST_F(ElementParserTest, System) {
   }
 }
 
+TEST_F(ElementParserTest, GlobalPcmCommandsAreImmediateCalls) {
+  ElementCode play{43, 0};
+  play.ForceBind({0, {v("se_sasareru")}});
+  auto parsed = chain(play);
+  EXPECT_EQ(parsed, "pcm.play(str:se_sasareru)");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+
+  auto stop = chain(43, 1);
+  EXPECT_EQ(stop, "pcm.stop()");
+  EXPECT_EQ(stop.chain.GetType(), Type::None);
+  EXPECT_EQ(stop.CallFlags(), "[]s");
+
+  ElementCode explicit_stop{43, 1};
+  explicit_stop.ForceBind({0, {}});
+  EXPECT_EQ(chain(explicit_stop), "pcm.stop()");
+}
+
 TEST_F(ElementParserTest, Pcmch) {
   {
     ElementCode elm{44, -1, 0, 0};
