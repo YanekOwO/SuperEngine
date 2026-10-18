@@ -794,6 +794,34 @@ TEST_F(ElementParserTest, MwndButtonUsesObjectBindingAndGetterBeforeIndexing) {
             "stage.front.mwnd[int:1].button[int:2].child[int:0].x = int:42");
 }
 
+TEST_F(ElementParserTest, MwndFaceUsesObjectPropertiesAndDirectListGetter) {
+  ElementCode resize{38, 3, -1, 0, 53, -1, 0, 54, 2};
+  resize.ForceBind({1, {v(1)}});
+  EXPECT_EQ(chain(resize),
+            "stage.front.mwnd[int:0].face[int:0].x_rep.resize(int:1)");
+
+  ElementCode setter{38, 3, -1, 0, 53, -1, 0, 145};
+  setter.ForceBind({1, {v(0)}});
+  EXPECT_EQ(chain(setter),
+            "stage.front.mwnd[int:0].face[int:0].mask_no = int:0");
+
+  ElementCode getter{38, 3, -1, 0, 53};
+  getter.ForceBind({0, {}});
+  EXPECT_EQ(chain(getter), "stage.front.mwnd[int:0].face");
+}
+
+TEST_F(ElementParserTest, GlobalFaceCommandsTargetActiveWindow) {
+  ElementCode single{41};
+  single.ForceBind({0, {v("portrait")}});
+  EXPECT_EQ(chain(single), "mwnd.set_face(str:portrait)");
+
+  ElementCode indexed{41};
+  indexed.ForceBind({1, {v(1), v("portrait")}});
+  EXPECT_EQ(chain(indexed), "mwnd.set_face(int:1,str:portrait)");
+
+  EXPECT_EQ(chain(72), "mwnd.clear_face()");
+}
+
 TEST_F(ElementParserTest, Mwnd) {
   {
     ElementCode elm{22};

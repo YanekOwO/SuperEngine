@@ -1413,12 +1413,12 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[26] | b_callable("koe_play_wait", Type::None, NONSIMPLE | AWAIT),
            id[27] |
                b_callable("koe_play_wait_key", Type::Int, NONSIMPLE | AWAIT),
-           id[22] | b(Type::None, Member("clear_face")),
+           id[22] | b_callable("clear_face", Type::None),
            id[21] | b(Type::Callable, Member("set_face")),
            id[10] | b_prop("layer", Type::Int, true),
            id[11] | b_prop("world", Type::Int, true),
            id[32] | b_prop("button", Type::ObjList),
-           id[53] | b(Type::ObjList, Member("face")),
+           id[53] | b_prop("face", Type::ObjList),
            id[30] | b_prop("object", Type::ObjList),
 
            // parameter
@@ -1776,6 +1776,14 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
     }
 
       // ====== MWND ======
+    case 41: {  // SET_FACE
+      elm.code.front() = Value(Integer(21));
+      return make_sym_chain(Type::Mwnd, "mwnd", elm, 0);
+    }
+    case 72: {  // CLEAR_FACE
+      elm.code.front() = Value(Integer(22));
+      return make_sym_chain(Type::Mwnd, "mwnd", elm, 0);
+    }
     case 22: {  // SET_WAKU
       elm.code.front() = Value(Integer(0));
       return make_sym_chain(Type::Mwnd, "mwnd", elm, 0);

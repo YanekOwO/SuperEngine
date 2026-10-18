@@ -207,10 +207,15 @@ struct SiglusWipe {
   static void CancelWindowActions(const std::shared_ptr<TextWindow>& window) {
     if (!window)
       return;
-    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()})
-      if (waku)
-        for (const auto& object : waku->objects_)
+    for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
+      if (!waku)
+        continue;
+      for (const auto* list :
+           {&waku->button_objects_, &waku->faces_, &waku->objects_}) {
+        for (const auto& object : *list)
           CancelObjectActions(object);
+      }
+    }
     window->ClearMouseCapture();
   }
 

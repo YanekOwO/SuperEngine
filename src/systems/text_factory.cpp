@@ -92,6 +92,8 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
   waku->button_config_ = config.buttons;
   waku->button_visible_.resize(config.button_count, true);
   if (config_.layered_windows()) {
+    waku->faces_.resize(config.face_positions.size());
+    waku->face_positions_ = config.face_positions;
     for (const auto& button : config.buttons) {
       if (button.file.empty())
         continue;

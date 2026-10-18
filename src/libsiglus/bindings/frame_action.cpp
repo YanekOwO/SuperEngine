@@ -89,7 +89,8 @@ void VisitActions(const std::shared_ptr<FrameAction>& global_action,
       for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
         if (!waku)
           continue;
-        for (const auto* list : {&waku->button_objects_, &waku->objects_})
+        for (const auto* list :
+             {&waku->button_objects_, &waku->faces_, &waku->objects_})
           for (const auto& object : *list)
             roots.emplace_back(object, layer == kLayerBg);
       }

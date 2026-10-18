@@ -284,12 +284,6 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int layer, int window_id) {
     TextFactory waku_factory(mwnd_config_);
     tw->SetTextboxWaku(params.waku_set, waku_factory.CreateWaku(
                                             system_, *tw, params.waku_set, 0));
-    if (mwnd_config_.HasWaku(params.waku_set)) {
-      const auto& faces = mwnd_config_.GetWaku(params.waku_set).face_positions;
-      for (std::size_t i = 0; i < faces.size() && i < MwndConfig::kNumFaceSlots;
-           ++i)
-        tw->SetFaceSlotPosition(static_cast<int>(i), faces[i]);
-    }
     if (tw->GetNameMod() == kSeparateNameWindowMode &&
         params.namebox.has_waku) {
       tw->SetNameboxWaku(

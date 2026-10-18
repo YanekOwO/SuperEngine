@@ -29,7 +29,6 @@
 #include "core/memory_internal/facade.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/drawer/colour_filter.hpp"
-#include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/object_internal/drawer/movie.hpp"
 #include "core/object_internal/objdrawer.hpp"
@@ -120,23 +119,6 @@ struct MovieCreateParams {
   bool ready_only = false;
 };
 
-void ApplyObjectFileSuffix(std::string& filename, ObjectParameter& param) {
-  const std::size_t pos = filename.find('?');
-  if (pos == std::string::npos)
-    return;
-
-  const std::string tone_curve = filename.substr(pos + 1);
-  filename.erase(pos);
-
-  try {
-    std::size_t parsed = 0;
-    int value = std::stoi(tone_curve, &parsed);
-    if (parsed == tone_curve.size() && value > 0)
-      param.tonecurve_no = value;
-  } catch (const std::exception&) {
-  }
-}
-
 void SetClipRectValue(ObjectParameter& param,
                       void (Rect::*setter)(int),
                       int value) {
@@ -152,66 +134,6 @@ void SetOwnClipRectValue(ObjectParameter& param,
       param.has_own_clip_rect() ? param.own_clip_rect() : Rect::GRP(0, 0, 0, 0);
   (rect.*setter)(value);
   param.SetOwnClipRect(rect);
-}
-
-void ReplaceFileDrawer(GraphicsObject& object,
-                       GraphicsSystem* graphics,
-                       std::string filename) {
-  ObjectParameter params = object.Param();
-  ApplyObjectFileSuffix(filename, params);
-  if (filename.empty())
-    throw std::runtime_error("Object filename is empty");
-
-  std::unique_ptr<GraphicsObjectData> drawer;
-  if (IsCompositeObjectName(filename)) {
-    std::vector<CompositeGraphicsObjectLayer> layers;
-    for (const CompositeObjectPart& part : ParseCompositeObjectName(filename)) {
-      layers.push_back({.surface = graphics->GetSurfaceNamed(part.file_name),
-                        .offset = Point(part.x, part.y),
-                        .cut_no = part.cut_no,
-                        .blend_type = part.blend_type});
-    }
-    drawer = std::make_unique<CompositeGraphicsObject>(std::move(layers));
-  } else {
-    auto surface = graphics->GetSurfaceNamed(filename);
-    drawer = std::make_unique<GraphicsObjectOfFile>(surface);
-  }
-
-  object.Param() = std::move(params);
-  object.SetDrawer(std::move(drawer));
-  object.SetFilePath(std::move(filename));
-}
-
-void CreateObject(GraphicsObject& object,
-                  System* system,
-                  std::string filename) {
-  GraphicsSystem* graphics = system ? system->graphics_ptr().get() : nullptr;
-  if (!graphics)
-    throw std::runtime_error("Object.create requires a graphics system");
-
-  if (filename.empty())
-    throw std::runtime_error("Object.create filename is empty");
-
-  object.Reset();
-  ReplaceFileDrawer(object, graphics, std::move(filename));
-}
-
-void ChangeObjectFile(GraphicsObject& object,
-                      System* system,
-                      std::string filename) {
-  GraphicsSystem* graphics = system ? system->graphics_ptr().get() : nullptr;
-  if (!graphics)
-    throw std::runtime_error("Object.change_file requires a graphics system");
-  if (filename.empty())
-    throw std::runtime_error("Object.change_file filename is empty");
-
-  if (!object.GetDrawer<GraphicsObjectOfFile>() &&
-      !object.GetDrawer<CompositeGraphicsObject>()) {
-    throw std::runtime_error(
-        "Object.change_file requires a file-backed object");
-  }
-
-  ReplaceFileDrawer(object, graphics, std::move(filename));
 }
 
 void LoadGan(GraphicsObject& object,
@@ -965,7 +887,8 @@ void BindObject(SiglusMachine& runtime) {
         if (args.size() == 5)
           pattern = RequireInt(args[4], "pat");
 
-        CreateObject(*h->object, system, std::move(filename));
+        h->object->Reset();
+        h->object->ReplaceFileDrawer(system->graphics(), std::move(filename));
         if (visible)
           h->object->Param().SetVisible(*visible);
         if (x)
@@ -1231,7 +1154,7 @@ void BindObject(SiglusMachine& runtime) {
     return o.CountMutators() > 0;
   });
   object.def("change_file", [system](ObjectHandle* h, std::string filename) {
-    ChangeObjectFile(*h->object, system, std::move(filename));
+    h->object->ReplaceFileDrawer(system->graphics(), std::move(filename));
   });
   object.def(
       "copy_from",

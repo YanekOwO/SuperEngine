@@ -42,6 +42,8 @@ TextWaku::TextWaku(const TextWaku& source)
       button_objects_(source.button_objects_.size()),
       button_config_(source.button_config_),
       button_visible_(source.button_visible_),
+      faces_(source.faces_.size()),
+      face_positions_(source.face_positions_),
       renderer_(source.renderer_) {
   for (std::size_t i = 0; i < objects_.size(); ++i)
     if (source.objects_[i])
@@ -51,10 +53,13 @@ TextWaku::TextWaku(const TextWaku& source)
     if (source.button_objects_[i])
       button_objects_[i] =
           std::make_shared<GraphicsObject>(source.button_objects_[i]->Clone());
+  for (std::size_t i = 0; i < faces_.size(); ++i)
+    if (source.faces_[i])
+      faces_[i] = std::make_shared<GraphicsObject>(source.faces_[i]->Clone());
 }
 
 void TextWaku::Execute() {
-  for (auto* list : {&button_objects_, &objects_})
+  for (auto* list : {&button_objects_, &faces_, &objects_})
     for (auto& obj : *list) {
       if (!obj)
         continue;
@@ -108,6 +113,59 @@ std::shared_ptr<GraphicsObject> TextWaku::TouchButton(std::size_t index) {
   if (!button)
     button = std::make_shared<GraphicsObject>();
   return button;
+}
+
+std::shared_ptr<GraphicsObject> TextWaku::TouchFace(std::size_t index) {
+  auto& face = faces_.at(index);
+  if (!face)
+    face = std::make_shared<GraphicsObject>();
+  return face;
+}
+
+void TextWaku::ClearFaces() {
+  const auto reset = [](auto&& self, GraphicsObject& object) -> void {
+    for (const auto& child : object.GetChildren())
+      if (child)
+        self(self, *child);
+    object.Reset();
+  };
+  for (const auto& face : faces_)
+    if (face)
+      reset(reset, *face);
+}
+
+void TextWaku::ResetFacesFrom(TextWaku& previous) {
+  previous.ClearFaces();
+  const std::size_t count = faces_.size();
+  faces_ = std::move(previous.faces_);
+  faces_.resize(count);
+}
+
+void TextWaku::RenderFaces(const Point& window_origin) {
+  std::vector<std::pair<std::size_t, GraphicsObject*>> draw_order;
+  for (std::size_t i = 0; i < faces_.size(); ++i) {
+    if (!faces_[i])
+      continue;
+    // Siglus forces face objects visible while their window is displayed.
+    faces_[i]->Param().SetVisible(true);
+    if (faces_[i]->HasDrawer() || faces_[i]->HasChildren())
+      draw_order.emplace_back(i, faces_[i].get());
+  }
+  if (draw_order.empty())
+    return;
+  if (!renderer_)
+    throw std::runtime_error("TextWaku::RenderFaces requires a scene renderer");
+  std::sort(draw_order.begin(), draw_order.end(),
+            [](const auto& a, const auto& b) {
+              const auto& ap = a.second->Param();
+              const auto& bp = b.second->Param();
+              return std::tie(ap.z_order, ap.z_layer, ap.z_depth, a.first) <
+                     std::tie(bp.z_order, bp.z_layer, bp.z_depth, b.first);
+            });
+  for (const auto& [index, object] : draw_order)
+    renderer_->RenderObject(
+        *object, nullptr,
+        ObjectParent(window_origin + face_positions_.at(index)));
 }
 
 bool TextWaku::ButtonVisible(std::size_t index) const {

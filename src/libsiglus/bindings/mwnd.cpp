@@ -25,13 +25,15 @@
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/game_config.hpp"
+#include "core/object.hpp"
 #include "core/rect.hpp"
 #include "libsiglus/bindings/selection.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "long_operations/wait_for_selection.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
 #include "long_operations/siglus_wait.hpp"
+#include "long_operations/wait_for_selection.hpp"
 #include "srbind/srbind.hpp"
+#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_factory.hpp"
@@ -58,11 +60,17 @@ namespace sb = srbind;
 namespace sr = serilang;
 
 struct MwndObjectList {
+  enum class Kind { Object, Button, Face };
+
   std::shared_ptr<TextWindow> window;
   std::function<sr::Value(std::shared_ptr<GraphicsObject>)> make_object;
-  bool buttons = false;
+  Kind kind = Kind::Object;
 
-  std::string Name() const { return buttons ? "mwnd.button" : "mwnd.object"; }
+  std::string Name() const {
+    if (kind == Kind::Face)
+      return "mwnd.face";
+    return kind == Kind::Button ? "mwnd.button" : "mwnd.object";
+  }
 
   TextWaku& Resolve() const {
     if (!window || !window->GetTextboxWaku())
@@ -77,13 +85,18 @@ struct MwndObjectList {
                              " index out of range: " + std::to_string(index));
     if (!make_object)
       throw sr::RuntimeError(Name() + " requires the Object binding");
-    return make_object(buttons ? waku.TouchButton(index)
-                               : waku.TouchObject(index));
+    if (kind == Kind::Face)
+      return make_object(waku.TouchFace(index));
+    return make_object(kind == Kind::Button ? waku.TouchButton(index)
+                                            : waku.TouchObject(index));
   }
 
   std::size_t Size() const {
     auto& waku = Resolve();
-    return buttons ? waku.button_objects_.size() : waku.objects_.size();
+    if (kind == Kind::Face)
+      return waku.faces_.size();
+    return kind == Kind::Button ? waku.button_objects_.size()
+                                : waku.objects_.size();
   }
 };
 
@@ -269,7 +282,12 @@ void BindMwnd(SiglusMachine& runtime) {
     return sr::Value(object_list.make_inst(get(h), runtime.make_object));
   });
   mwnd.prop_r("button", [get, object_list, &runtime](MwndHandle* h) mutable {
-    return sr::Value(object_list.make_inst(get(h), runtime.make_object, true));
+    return sr::Value(object_list.make_inst(get(h), runtime.make_object,
+                                           MwndObjectList::Kind::Button));
+  });
+  mwnd.prop_r("face", [get, object_list, &runtime](MwndHandle* h) mutable {
+    return sr::Value(object_list.make_inst(get(h), runtime.make_object,
+                                           MwndObjectList::Kind::Face));
   });
 
   mwnd.def(
@@ -293,11 +311,6 @@ void BindMwnd(SiglusMachine& runtime) {
         auto message = state(h);
         message->waku_file = waku.main_file;
         message->filter_file = waku.filter_file;
-        for (std::size_t i = 0;
-             i < waku.face_positions.size() && i < MwndConfig::kNumFaceSlots;
-             ++i)
-          window->SetFaceSlotPosition(static_cast<int>(i),
-                                      waku.face_positions[i]);
         if (name_waku >= 0 && window->GetNameMod() == 1)
           window->SetNameboxWaku(
               name_waku, factory.CreateWaku(*sys, *window, name_waku, 0));
@@ -386,19 +399,28 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("clear", clear);
   mwnd.def("novel_clear", clear);
   mwnd.def("clear_face", [get](MwndHandle* h) {
-    auto window = get(h);
-    for (int i = 0; i < MwndConfig::kNumFaceSlots; ++i)
-      window->FaceClose(i);
+    if (auto* waku = get(h)->GetTextboxWaku())
+      waku->ClearFaces();
   });
   mwnd.def(
       "set_face",
-      [get](MwndHandle* h, std::vector<sr::Value> args) {
-        if (args.empty())
+      [get, sys](MwndHandle* h, std::vector<sr::Value> args) {
+        CallPacket packet = CallPacket::DecodeFrom(std::move(args));
+        if (packet.args.empty())
           return;
-        const int slot = args.size() == 1 ? 0 : AsInt(args[0]).value_or(0);
-        const std::string file = AsString(args[args.size() == 1 ? 0 : 1]);
-        if (slot >= 0 && slot < MwndConfig::kNumFaceSlots)
-          get(h)->FaceOpen(file, slot);
+        const int slot =
+            packet.args.size() == 1 ? 0 : AsInt(packet.args[0]).value_or(0);
+        auto* waku = get(h)->GetTextboxWaku();
+        if (!waku || slot < 0 ||
+            static_cast<std::size_t>(slot) >= waku->faces_.size())
+          return;
+        const std::string file =
+            AsString(packet.args[packet.args.size() == 1 ? 0 : 1]);
+        auto face = waku->TouchFace(slot);
+        if (file.empty())
+          face->FreeOwnObjectData();
+        else
+          face->ReplaceFileDrawer(sys->graphics(), file);
       },
       sb::vararg);
   mwnd.def(

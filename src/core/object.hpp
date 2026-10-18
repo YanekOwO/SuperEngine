@@ -38,6 +38,7 @@
 class GraphicsObjectData;
 class ObjectMutator;
 class GraphicsObject;
+class GraphicsSystem;
 
 struct ParentObjState {
   RenderState render_state = RenderState::Id();
@@ -115,6 +116,8 @@ class GraphicsObject {
   void SetChild(std::size_t idx, GraphicsObject&& obj);
   void ResetChildren(std::size_t count = 0);
   void EnsureChildCapacity(std::size_t count);
+
+  void ReplaceFileDrawer(GraphicsSystem& graphics, std::string filename);
 
   // Frees the object data. Corresponds to objFree, but is also invoked by
   // other commands.

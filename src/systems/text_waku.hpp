@@ -75,6 +75,10 @@ class TextWaku {
   void ResetObjectsFrom(TextWaku& previous);
   std::shared_ptr<GraphicsObject> TouchButton(std::size_t index);
   void ResetButtonsFrom(TextWaku& previous);
+  std::shared_ptr<GraphicsObject> TouchFace(std::size_t index);
+  void ClearFaces();
+  void ResetFacesFrom(TextWaku& previous);
+  void RenderFaces(const Point& window_origin);
   ParentObjState ButtonParent(std::size_t index, const Rect& window) const;
   bool ButtonVisible(std::size_t index) const;
   static ParentObjState ObjectParent(const Point& window_origin);
@@ -88,6 +92,10 @@ class TextWaku {
   std::vector<std::shared_ptr<GraphicsObject>> button_objects_;
   std::vector<MwndConfig::Button> button_config_;
   std::vector<bool> button_visible_;
+
+  // mwnd.face and its template anchors. Script positions are offsets.
+  std::vector<std::shared_ptr<GraphicsObject>> faces_;
+  std::vector<Point> face_positions_;
 
   std::shared_ptr<ISceneRenderer> renderer_;
 

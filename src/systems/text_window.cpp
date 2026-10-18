@@ -237,6 +237,8 @@ void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
     waku->ResetObjectsFrom(*textbox_waku_);
   if (textbox_waku_)
     waku->ResetButtonsFrom(*textbox_waku_);
+  if (textbox_waku_)
+    waku->ResetFacesFrom(*textbox_waku_);
   waku_set_ = waku_set;
   textbox_waku_ = std::move(waku);
   system_.text().InitializeMwndButtonFrameActions(*textbox_waku_);
@@ -638,6 +640,7 @@ void TextWindow::Render() {
     }
 
     RenderFaces(0);
+    textbox_waku_->RenderFaces(box);
     RenderKoeReplayButtons();
 
     text_surface_->RenderToScreen(Rect(Point(0, 0), surface_size),
