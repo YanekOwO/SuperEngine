@@ -82,10 +82,10 @@ TextLayout MakeLayout(int font_size,
   return layout;
 }
 
-Size ReadScreenSize(Gameexe& gexe) {
+Size ReadRealliveScreenSize(Gameexe& gexe) {
   if (!gexe.Exists("SCREENSIZE_MOD"))
     return Size(800, 600);
-  return GetScreenSize(gexe);
+  return GetRealliveScreenSize(gexe);
 }
 
 std::set<int> FindIndices(Gameexe& gexe, std::string prefix, std::size_t part) {
@@ -247,7 +247,7 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
   for (int id : window_ids) {
     auto source = gexe("WINDOW", id);
     Window window;
-    window.screen_size = ReadScreenSize(gexe);
+    window.screen_size = ReadRealliveScreenSize(gexe);
     window.window_attr_mod = source("ATTR_MOD").Int().value_or(0);
     const auto attr = window.window_attr_mod == 0
                           ? result.window_attr_
@@ -472,7 +472,7 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     name_waku = SiglusInt(gexe, id, "NAME_WAKU_NO").value_or(name_waku);
 
     Window window;
-    window.screen_size = ReadScreenSize(gexe);
+    window.screen_size = GetSiglusScreenSize(gexe);
     window.colour = configured_filter_colour;
     window.default_font_size = font_size;
     window.layout =

@@ -21,9 +21,79 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <utilities/graphics.hpp>
+#include "core/gameexe.hpp"
+#include "core/rect.hpp"
+#include "systems/system_error.hpp"
+#include "utilities/graphics.hpp"
+
+#include <stdexcept>
+#include <vector>
+
+TEST(ScreenSizeTest, RealliveModesIgnoreSiglusDimensions) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREEN_SIZE = 1920,1080");
+  gameexe.parseLine("SCREENSIZE_MOD = 0");
+  EXPECT_EQ(GetRealliveScreenSize(gameexe), Size(640, 480));
+  gameexe.SetIntAt("SCREENSIZE_MOD", 1);
+  EXPECT_EQ(GetRealliveScreenSize(gameexe), Size(800, 600));
+  gameexe.SetAt("SCREENSIZE_MOD", {999, 1280, 720});
+  EXPECT_EQ(GetRealliveScreenSize(gameexe), Size(1280, 720));
+}
+
+TEST(ScreenSizeTest, RealliveMissingAndInvalidModesKeepTheirErrors) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREEN_SIZE = 1280,720");
+  EXPECT_THAT([&] { GetRealliveScreenSize(gameexe); },
+              testing::ThrowsMessage<std::runtime_error>(testing::StrEq(
+                  "Gameexe[SCREENSIZE_MOD]: Unknown Gameexe key")));
+  gameexe.SetAt("SCREENSIZE_MOD", {});
+  EXPECT_THAT([&] { GetRealliveScreenSize(gameexe); },
+              testing::ThrowsMessage<SystemError>(
+                  testing::StrEq("Missing #SCREENSIZE_MOD key")));
+  gameexe.SetIntAt("SCREENSIZE_MOD", 2);
+  EXPECT_THAT([&] { GetRealliveScreenSize(gameexe); },
+              testing::ThrowsMessage<SystemError>(
+                  testing::StrEq("Illegal #SCREENSIZE_MOD value: 2")));
+  gameexe.SetAt("SCREENSIZE_MOD", {999, 1280});
+  EXPECT_THAT([&] { GetRealliveScreenSize(gameexe); },
+              testing::ThrowsMessage<SystemError>(
+                  testing::StrEq("Illegal #SCREENSIZE_MOD value: 999")));
+}
+
+TEST(ScreenSizeTest, SiglusDimensionsIgnoreRealliveModes) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");
+  gameexe.parseLine("SCREEN_SIZE = 1280,720");
+  EXPECT_EQ(GetSiglusScreenSize(gameexe), Size(1280, 720));
+  gameexe.SetIntAt("SCREENSIZE_MOD", 0);
+  gameexe.SetAt("SCREEN_SIZE", {1920, 1080});
+  EXPECT_EQ(GetSiglusScreenSize(gameexe), Size(1920, 1080));
+}
+
+TEST(ScreenSizeTest, SiglusMissingDimensionsUseLegacyDefault) {
+  Gameexe gameexe;
+  EXPECT_EQ(GetSiglusScreenSize(gameexe), Size(800, 600));
+  gameexe.parseLine("SCREENSIZE_MOD = 0");
+  EXPECT_EQ(GetSiglusScreenSize(gameexe), Size(800, 600));
+}
+
+TEST(ScreenSizeTest, SiglusInvalidDimensionsNameTheSetting) {
+  Gameexe gameexe;
+  const std::vector<std::vector<GexeVal>> invalid = {
+      {}, {1280}, {1280, 720, 1}, {0, 720}, {1280, 0}, {-1, 720}, {1280, -1}};
+  for (const auto& dimensions : invalid) {
+    SCOPED_TRACE(testing::PrintToString(dimensions));
+    gameexe.SetAt("SCREEN_SIZE", dimensions);
+    EXPECT_THAT(
+        [&] { GetSiglusScreenSize(gameexe); },
+        testing::ThrowsMessage<SystemError>(testing::HasSubstr("SCREEN_SIZE")));
+  }
+  gameexe.SetStringAt("SCREEN_SIZE", "invalid");
+  EXPECT_THROW(GetSiglusScreenSize(gameexe), SystemError);
+}
 
 constexpr float EPS = 1e-6f;
 

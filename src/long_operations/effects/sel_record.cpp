@@ -92,7 +92,7 @@ selRecord GetSelRecord(Gameexe& gexe, int selNum) {
     }
     // If all else fails, return a default SEL effect
     else {
-      Size screen = GetScreenSize(gexe);
+      Size screen = GetRealliveScreenSize(gexe);
       result = selRecord({0, 0, screen.width(), screen.height(), 0, 0, 1000, 0,
                           0, 0, 0, 0, 0, 0, 255, 0});
     }

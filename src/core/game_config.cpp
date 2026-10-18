@@ -34,18 +34,6 @@
 #include <stdexcept>
 #include <string_view>
 
-static Size ReadSize(Gameexe& gexe, std::string_view key, Size fallback) {
-  auto values = gexe(key).IntVec();
-  return values && values->size() >= 2 ? Size((*values)[0], (*values)[1])
-                                       : fallback;
-}
-
-static Size ScreenSize(Gameexe& gexe) {
-  if (gexe.Exists("SCREEN_SIZE"))
-    return ReadSize(gexe, "SCREEN_SIZE", Size(800, 600));
-  return gexe.Exists("SCREENSIZE_MOD") ? GetScreenSize(gexe) : Size(800, 600);
-}
-
 static RGBAColour ReadColor(Gameexe& gexe,
                             std::string_view key,
                             RGBAColour fallback) {
@@ -91,7 +79,9 @@ LocalConfig MakeRealliveLocalConfig(Gameexe& gexe) {
 
 GlobalConfig MakeRealliveGlobalConfig(Gameexe& gexe) {
   GlobalConfig result;
-  result.screen_size_free = ScreenSize(gexe);
+  result.screen_size_free = gexe.Exists("SCREENSIZE_MOD")
+                                ? GetRealliveScreenSize(gexe)
+                                : Size(800, 600);
   result.fullscreen_resolution = result.screen_size_free;
   result.message_speed = gexe("INIT_MESSAGE_SPEED").ReadInt(30);
   result.auto_mode_moji_wait = result.message_speed;
@@ -193,7 +183,7 @@ LocalConfig MakeSiglusLocalConfig(Gameexe& gexe) {
 GlobalConfig MakeSiglusGlobalConfig(Gameexe& gexe) {
   GlobalConfig result;
   result.screen_size_mode = gexe("CONFIG.WINDOW_MODE").ReadInt(0);
-  result.screen_size_free = ScreenSize(gexe);
+  result.screen_size_free = GetSiglusScreenSize(gexe);
   result.fullscreen_resolution = result.screen_size_free;
   switch (gexe("CONFIG.FONT.TYPE").ReadInt(0)) {
     case 1:

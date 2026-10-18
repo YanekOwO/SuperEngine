@@ -361,7 +361,7 @@ void SetObjectDataToRect(RLMachine& machine,
 
 struct objOfArea_0 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int buf) {
-    Rect rect(0, 0, GetScreenSize(machine.GetSystem().gameexe()));
+    Rect rect(0, 0, GetRealliveScreenSize(machine.GetSystem().gameexe()));
     SetObjectDataToRect(machine, this, buf, rect);
   }
 };
@@ -396,7 +396,7 @@ struct objOfRect_1 : public RLOpcode<IntConstant_T,
     // Because of the screwed up optionality here, (x and y are optional while
     // width height are not, we hack with the INT_MIN value).
     if (width == INT_MIN) {
-      Rect screen(0, 0, GetScreenSize(machine.GetSystem().gameexe()));
+      Rect screen(0, 0, GetRealliveScreenSize(machine.GetSystem().gameexe()));
       SetObjectDataToRect(machine, this, buf, Size(x, y).CenteredIn(screen));
     } else {
       SetObjectDataToRect(machine, this, buf, Rect(x, y, Size(width, height)));
@@ -419,7 +419,7 @@ struct objOfRect_2 : public RLOpcode<IntConstant_T,
                   int visible) {
     Rect data_rect;
     if (height == INT_MIN) {
-      Rect screen(0, 0, GetScreenSize(machine.GetSystem().gameexe()));
+      Rect screen(0, 0, GetRealliveScreenSize(machine.GetSystem().gameexe()));
       data_rect = Size(x, y).CenteredIn(screen);
       // Crazy optionality here.
       visible = width;

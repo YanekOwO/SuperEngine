@@ -166,7 +166,7 @@ struct objSetRect_1 : public RLOpcode<IntConstant_T, Rect_T<rect_impl::GRP>> {
 
 struct objSetRect_0 : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int buf) {
-    Rect rect(0, 0, GetScreenSize(machine.GetSystem().gameexe()));
+    Rect rect(0, 0, GetRealliveScreenSize(machine.GetSystem().gameexe()));
     objSetRect_1()(machine, buf, rect);
   }
 };

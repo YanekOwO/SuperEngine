@@ -137,7 +137,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   gexe.SetIntAt("SUBTITLE", 0);
   gexe.SetIntAt("MOUSE_CURSOR", 0);
   gexe.SetStringAt("__GAMEPATH", base_path_.string());
-  gexe.parseLine("#SCREENSIZE_MOD=999,1920,1080");
   MwndConfig mwnd_config = MwndConfig::ParseSiglus(gexe);
   const int default_window = mwnd_config.default_window();
 
@@ -148,6 +147,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   // Init sdl system
   SystemOptions system_options;
+  system_options.engine = SystemOptions::Engine::Siglus;
   system_options.fast_forward = fast_forward_;
   rt.system = std::make_unique<System>(gexe, *rt.stage, rt.local_config,
                                        rt.global_config, rt.asset_scanner,

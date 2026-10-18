@@ -98,6 +98,7 @@ GameLoader::GameLoader(fs::path gameroot,
   auto stage =
       std::make_unique<Stage>((*gameexe_)("OBJECT_MAX").Int().value_or(256));
   SystemOptions system_options;
+  system_options.engine = SystemOptions::Engine::Reallive;
   system_options.fast_forward = fast_forward;
   auto local_config =
       std::make_unique<LocalConfig>(MakeRealliveLocalConfig(*gameexe_));

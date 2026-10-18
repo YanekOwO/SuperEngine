@@ -117,7 +117,8 @@ class GraphicsSystem : public EventListener {
 
   GraphicsSystem(System& system,
                  Gameexe& gameexe,
-                 std::shared_ptr<IGraphicsBackend> backend);
+                 std::shared_ptr<IGraphicsBackend> backend,
+                 Size screen_size);
   virtual ~GraphicsSystem();
 
   std::shared_ptr<IGraphicsBackend> GetBackend() const { return impl_; }

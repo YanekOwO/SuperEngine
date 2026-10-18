@@ -29,6 +29,30 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <sstream>
 
+TEST(GameConfigTest, ScreenDimensionsUseTheSelectedEngine) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREEN_SIZE = 1280,720");
+  gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");
+
+  const auto siglus = MakeSiglusGlobalConfig(gameexe);
+  EXPECT_EQ(siglus.screen_size_free, Size(1280, 720));
+  EXPECT_EQ(siglus.fullscreen_resolution, Size(1280, 720));
+  const auto reallive = MakeRealliveGlobalConfig(gameexe);
+  EXPECT_EQ(reallive.screen_size_free, Size(1920, 1080));
+  EXPECT_EQ(reallive.fullscreen_resolution, Size(1920, 1080));
+}
+
+TEST(GameConfigTest, MissingEngineScreenDimensionsUseLegacyDefaults) {
+  Gameexe siglus;
+  siglus.parseLine("SCREENSIZE_MOD = 0");
+  EXPECT_EQ(MakeSiglusGlobalConfig(siglus).screen_size_free, Size(800, 600));
+
+  Gameexe reallive;
+  reallive.parseLine("SCREEN_SIZE = 1280,720");
+  EXPECT_EQ(MakeRealliveGlobalConfig(reallive).screen_size_free,
+            Size(800, 600));
+}
+
 TEST(GameConfigTest, GlobalRoundTrip) {
   GlobalConfig global;
   std::stringstream ss;

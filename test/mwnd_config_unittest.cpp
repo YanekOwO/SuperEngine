@@ -28,6 +28,38 @@
 
 #include <gtest/gtest.h>
 
+TEST(MwndConfigTest, ScreenDimensionsUseTheSelectedEngine) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREEN_SIZE = 1280,720");
+  gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");
+
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).screen_size,
+            Size(1280, 720));
+  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWindow(0).screen_size,
+            Size(1920, 1080));
+}
+
+TEST(MwndConfigTest, SiglusScreenDimensionsDoNotRequireRealliveKeys) {
+  Gameexe gameexe;
+  gameexe.parseLine("SCREEN_SIZE = 1920,1080");
+
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).screen_size,
+            Size(1920, 1080));
+  EXPECT_FALSE(gameexe.Exists("SCREENSIZE_MOD"));
+}
+
+TEST(MwndConfigTest, MissingEngineScreenDimensionsUseLegacyDefaults) {
+  Gameexe siglus;
+  siglus.parseLine("SCREENSIZE_MOD = 0");
+  EXPECT_EQ(MwndConfig::ParseSiglus(siglus).GetWindow(0).screen_size,
+            Size(800, 600));
+
+  Gameexe reallive;
+  reallive.parseLine("SCREEN_SIZE = 1280,720");
+  EXPECT_EQ(MwndConfig::ParseReallive(reallive).GetWindow(0).screen_size,
+            Size(800, 600));
+}
+
 TEST(MwndConfigTest, SiglusWakuObjectsUseLegacyDefaultAndExplicitCounts) {
   Gameexe gameexe;
   EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWaku(0).object_count, 1);
@@ -64,7 +96,7 @@ TEST(MwndConfigTest, SiglusButtonListPreservesEmptySlotsAndLegacyLimits) {
 
 TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   Gameexe gameexe;
-  gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");
+  gameexe.parseLine("SCREEN_SIZE = 1920,1080");
   gameexe.parseLine("MWND.CNT = 1");
   gameexe.parseLine("MWND.DEFAULT_MWND_NO = 0");
   gameexe.parseLine("MWND.DEFAULT_SEL_MWND_NO = 1");
@@ -105,6 +137,7 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   EXPECT_EQ(config.default_selection_window(), 1);
   EXPECT_TRUE(config.HasWindow(1));
   const auto& window = config.GetWindow(0);
+  EXPECT_EQ(window.screen_size, Size(1920, 1080));
   EXPECT_EQ(window.x_distance_from_origin, 12);
   EXPECT_EQ(window.y_distance_from_origin, 34);
   EXPECT_EQ(window.action_on_pause, 1);
@@ -135,6 +168,7 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
             (MwndConfig::ButtonSound{.hit = 4, .push = 5, .decide = 6}));
   EXPECT_FALSE(gameexe.Exists("WINDOW.000.MOJI_SIZE"));
   EXPECT_FALSE(gameexe.Exists("DEFAULT_SEL_WINDOW"));
+  EXPECT_FALSE(gameexe.Exists("SCREENSIZE_MOD"));
 }
 
 TEST(MwndConfigTest, SiglusButtonSoundsUseLegacyDefaults) {

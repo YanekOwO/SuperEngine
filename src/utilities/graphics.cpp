@@ -60,7 +60,7 @@ std::vector<int> GetSELEffect(RLMachine& machine, int selNum) {
       // Crap! Couldn't fall back on the default one either, so instead return
       // a SEL vector that is a screenwide, short fade because we absolutely
       // can't fail here.
-      Size screen = GetScreenSize(gexe);
+      Size screen = GetRealliveScreenSize(gexe);
       selEffect = {0,
                    0,
                    screen.width(),
@@ -92,7 +92,7 @@ void GetSELPointAndRect(RLMachine& machine,
   point = Point(selEffect[4], selEffect[5]);
 }
 
-Size GetScreenSize(Gameexe& gameexe) {
+Size GetRealliveScreenSize(Gameexe& gameexe) {
   std::vector<int> graphicsMode = gameexe("SCREENSIZE_MOD").ToIntVec();
   if (graphicsMode.size()) {
     if (graphicsMode[0] == 0) {
@@ -111,6 +111,18 @@ Size GetScreenSize(Gameexe& gameexe) {
   std::ostringstream oss;
   oss << "Missing #SCREENSIZE_MOD key";
   throw SystemError(oss.str());
+}
+
+Size GetSiglusScreenSize(Gameexe& gameexe) {
+  if (!gameexe.Exists("SCREEN_SIZE"))
+    return Size(800, 600);
+
+  const auto dimensions = gameexe("SCREEN_SIZE").IntVec();
+  if (!dimensions || dimensions->size() != 2 || (*dimensions)[0] <= 0 ||
+      (*dimensions)[1] <= 0)
+    throw SystemError("Siglus SCREEN_SIZE must contain two positive integers");
+
+  return Size((*dimensions)[0], (*dimensions)[1]);
 }
 
 void ClipDestination(const Rect& clip_rect, Rect& src, Rect& dest) {

@@ -152,7 +152,8 @@ GraphicsSystem::GraphicsObjectSettings::GetObjectSettingsFor(int obj_num) {
 // -----------------------------------------------------------------------
 GraphicsSystem::GraphicsSystem(System& system,
                                Gameexe& gameexe,
-                               std::shared_ptr<IGraphicsBackend> backend)
+                               std::shared_ptr<IGraphicsBackend> backend,
+                               Size screen_size)
     : screen_update_mode_(SCREENUPDATEMODE_AUTOMATIC),
       screen_needs_refresh_(false),
       is_responsible_for_update_(true),
@@ -169,7 +170,6 @@ GraphicsSystem::GraphicsSystem(System& system,
       asset_scanner_(system.GetAssetScanner()),
       preloaded_g00_(256),
       image_cache_(64) {
-  Size screen_size = GetScreenSize(gameexe);
   bool is_fullscreen = global_config_.screen_size_mode == 1;
   impl_->InitSystem(screen_size, is_fullscreen);
   SetScreenSize(screen_size);

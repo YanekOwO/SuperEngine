@@ -46,6 +46,7 @@
 #include "systems/system_error.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/exception.hpp"
+#include "utilities/graphics.hpp"
 #include "utilities/shutdown_signal.hpp"
 #include "utilities/string_utilities.hpp"
 #include "version.h"
@@ -99,7 +100,9 @@ System::System(Gameexe& gameexe,
              local_config,
              global_config,
              std::move(scanner),
-             MwndConfig::ParseReallive(gameexe),
+             options.engine == SystemOptions::Engine::Siglus
+                 ? MwndConfig::ParseSiglus(gameexe)
+                 : MwndConfig::ParseReallive(gameexe),
              options) {}
 
 System::System(Gameexe& gameexe,
@@ -117,6 +120,9 @@ System::System(Gameexe& gameexe,
       assets_(scanner),
       local_config_(local_config),
       global_config_(global_config) {
+  const Size screen_size = options.engine == SystemOptions::Engine::Siglus
+                               ? GetSiglusScreenSize(gameexe)
+                               : GetRealliveScreenSize(gameexe);
   rlevent_handler_ = std::make_shared<RLEventListener>();
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -127,8 +133,8 @@ System::System(Gameexe& gameexe,
   InstallShutdownSignalHandlers();
 
   auto graphics_backend = std::make_shared<SDLGraphicsBackend>();
-  graphics_system_ =
-      std::make_shared<GraphicsSystem>(*this, gameexe, graphics_backend);
+  graphics_system_ = std::make_shared<GraphicsSystem>(
+      *this, gameexe, graphics_backend, screen_size);
 
   std::unique_ptr<IEventBackend> event_impl =
       std::make_unique<SDLEventBackend>();

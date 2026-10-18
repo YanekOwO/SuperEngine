@@ -54,7 +54,10 @@ class MenuReseter;
 }
 
 struct SystemOptions {
+  enum class Engine { Reallive, Siglus };
+
   bool fast_forward = false;
+  Engine engine = Engine::Reallive;
 };
 
 // Syscom Constants
