@@ -34,6 +34,8 @@ class SGVMFactory {
  public:
   std::unique_ptr<SiglusMachine> Create();
 
+  static std::unique_ptr<Stage> CreateStage(Gameexe& gameexe);
+
   std::filesystem::path base_path_;
   bool debug_ = false;
   bool fast_forward_ = false;

@@ -103,6 +103,13 @@ static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
   return {};
 }
 
+std::unique_ptr<Stage> SGVMFactory::CreateStage(Gameexe& gexe) {
+  const int obj_count = gexe("OBJECT.CNT").Int().value_or(256);
+  const int effect_cnt = gexe("EFFECT.CNT").Int().value_or(0);
+  const int quake_count = gexe("QUAKE.CNT").Int().value_or(16);
+  return std::make_unique<Stage>(obj_count, effect_cnt, 0, quake_count);
+}
+
 std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   std::unique_ptr<SiglusMachine> ret = std::make_unique<SiglusMachine>();
   SiglusMachine& rt = *ret;
@@ -134,10 +141,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   MwndConfig mwnd_config = MwndConfig::ParseSiglus(gexe);
   const int default_window = mwnd_config.default_window();
 
-  int quake_count = std::clamp(gexe("QUAKE.CNT").Int().value_or(16), 0, 256);
-  rt.stage = std::make_unique<Stage>(gexe("OBJECT_MAX").Int().value_or(256),
-                                     gexe("EFFECT.CNT").Int().value_or(0), 0,
-                                     quake_count);
+  rt.stage = CreateStage(gexe);
 
   rt.local_config = MakeSiglusLocalConfig(gexe);
   rt.global_config = MakeSiglusGlobalConfig(gexe);
@@ -150,7 +154,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
                                        std::move(mwnd_config), system_options);
   rt.system->text().set_active_window(default_window);
   rt.screen_quakes =
-      std::make_shared<QuakeList>(static_cast<std::size_t>(quake_count));
+      std::make_shared<QuakeList>(rt.stage->quakes.Size(kLayerFg));
 
   int counter_count = gexe("COUNTER.CNT").Int().value_or(16);
   if (counter_count < 0)
