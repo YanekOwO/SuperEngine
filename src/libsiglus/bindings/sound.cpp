@@ -26,7 +26,7 @@
 #include "core/bgm_table.hpp"
 #include "libsiglus/bindings/bootstrap.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
@@ -68,7 +68,7 @@ class PlaybackState {
                             bool fade_only,
                             std::function<bool()> is_playing) {
     if (fade_only && state_ != kFadeOut)
-      return MakeResolvedFuture(*vm.gc_);
+      return lop::MakeResolvedFuture(*vm.gc_);
 
     auto done = [this, is_playing = std::move(is_playing)] {
       if (!is_playing || !is_playing()) {
@@ -78,8 +78,9 @@ class PlaybackState {
       }
       return false;
     };
-    return MakePollingWaitFuture(vm, std::move(done), key_skip,
-                                 system ? system->event_ptr().get() : nullptr);
+    return lop::MakePollingWaitFuture(
+        vm, std::move(done), key_skip,
+        system ? system->event_ptr().get() : nullptr);
   }
 
  private:
@@ -255,7 +256,7 @@ class SiglusGlobalKoe {
     auto done = [system = system_] {
       return !system || !system->sound().KoePlaying();
     };
-    return MakePollingWaitFuture(
+    return lop::MakePollingWaitFuture(
         vm, std::move(done), key_skip,
         system_ ? system_->event_ptr().get() : nullptr);
   }
@@ -516,7 +517,7 @@ void BindSound(SiglusMachine& runtime) {
             ExKoeCallParams::ParseFrom(std::move(args), true, false);
         global_koe->Play(params);
         return params.wait ? global_koe->WaitForKoe(vm, params.key_skip)
-                           : MakeResolvedFuture(*vm.gc_);
+                           : lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   m.def(
@@ -526,7 +527,7 @@ void BindSound(SiglusMachine& runtime) {
             ExKoeCallParams::ParseFrom(std::move(args), true, true);
         global_koe->Play(params);
         return params.wait ? global_koe->WaitForKoe(vm, params.key_skip)
-                           : MakeResolvedFuture(*vm.gc_);
+                           : lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   m.def(

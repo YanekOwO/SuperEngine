@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -29,10 +26,12 @@
 #include "core/rect.hpp"
 #include "core/rlevent_listener.hpp"
 #include "machine/rlmachine.hpp"
+#include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
-#include "systems/event_system.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // WaitLongOperation
@@ -132,28 +131,33 @@ void WaitLongOperation::RecordMouseCursorPosition() {
   *y_ = location.y();
 }
 
-bool WaitLongOperation::operator()(RLMachine& machine) {
-  bool done = ctrl_pressed_ || machine.GetSystem().ShouldFastForward();
+Task<int> WaitLongOperation::Run(WaitContext& waits) {
+  for (;;) {
+    bool done = ctrl_pressed_ || machine_.GetSystem().ShouldFastForward();
+    const auto now = machine_.GetSystem().event().GetTicks();
+    if (!done && wait_until_target_time_)
+      done = now > target_time_;
+    if (!done && break_on_event_)
+      done = event_function_();
 
-  if (!done && wait_until_target_time_) {
-    done = machine.GetSystem().event().GetTicks() > target_time_;
-  }
-
-  if (!done && break_on_event_) {
-    done = event_function_();
-  }
-
-  if (break_on_clicks_) {
-    if (button_pressed_) {
-      done = true;
-      machine.set_store_register(button_pressed_);
-    } else if (done) {
-      // TODO(erg): this is fishy. shouldn't we record when clicked?
-      if (save_click_location_)
-        RecordMouseCursorPosition();
-      machine.set_store_register(0);
+    if (break_on_clicks_) {
+      if (button_pressed_) {
+        done = true;
+        machine_.set_store_register(button_pressed_);
+      } else if (done) {
+        if (save_click_location_)
+          RecordMouseCursorPosition();
+        machine_.set_store_register(0);
+      }
     }
+    if (done)
+      co_return 0;
+    if (wait_until_target_time_ && !break_on_event_)
+      co_await waits.WaitFor(std::chrono::milliseconds(target_time_ - now + 1),
+                             true);
+    else
+      co_await waits.Schedule();
   }
-
-  return done;
 }
+
+}  // namespace lop

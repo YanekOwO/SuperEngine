@@ -32,16 +32,16 @@
 #include "core/event_listener.hpp"
 #include "core/frame_counter.hpp"
 #include "log/domain_logger.hpp"
+#include "long_operations/long_operation.hpp"
 #include "long_operations/wait_long_operation.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
 #include "machine/rloperation/rlop_store.hpp"
+#include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
-#include "systems/event_system.hpp"
 
 #include <chrono>
 
@@ -79,7 +79,7 @@ struct Sys_time : public RLOpcode<IntConstant_T, DefaultIntValue_T<0>> {
     const auto duration = chr::duration_cast<chr::milliseconds>(
         machine.GetTimer(layer_, counter).GetReading());
     if (duration.count() < numeric_cast<unsigned int>(time)) {
-      auto wait_op = std::make_shared<WaitLongOperation>(machine);
+      auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
       if (in_time_c_)
         wait_op->BreakOnClicks();
       wait_op->BreakOnEvent(

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -32,7 +29,7 @@
 
 #include "core/colour.hpp"
 #include "core/rect.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 #include "systems/renderable.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
@@ -44,6 +41,8 @@ class SelectElement;
 }
 
 // -----------------------------------------------------------------------
+
+namespace lop {
 
 // Base class for all selections.
 class SelectLongOperation : public LongOperation {
@@ -77,7 +76,7 @@ class SelectLongOperation : public LongOperation {
   std::vector<std::string> GetOptions() const;
 
   // Overridden from LongOperation:
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  protected:
   RLMachine& machine_;
@@ -191,3 +190,5 @@ class ButtonSelectLongOperation : public SelectLongOperation,
 
   std::vector<ButtonOption> buttons_;
 };
+
+}  // namespace lop

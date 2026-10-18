@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -30,10 +27,12 @@
 #include <memory>
 
 #include "core/rect.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 
 class RLMachine;
 class SDLSurface;
+
+namespace lop {
 
 class ZoomLongOperation : public LongOperation {
  public:
@@ -46,9 +45,11 @@ class ZoomLongOperation : public LongOperation {
                     const int time);
   virtual ~ZoomLongOperation();
 
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  private:
+  RLMachine& machine_;
+
   std::shared_ptr<SDLSurface> orig_surface_;
   std::shared_ptr<SDLSurface> src_surface_;
 
@@ -59,3 +60,5 @@ class ZoomLongOperation : public LongOperation {
 
   unsigned int start_time_;
 };
+
+}  // namespace lop

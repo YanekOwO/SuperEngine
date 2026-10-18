@@ -33,9 +33,9 @@
 #include "core/gameexe.hpp"
 #include "core/haikei.hpp"
 #include "core/stage.hpp"
-#include "effects/effect.hpp"
-#include "effects/effect_factory.hpp"
-#include "effects/sel_record.hpp"
+#include "long_operations/effects/effect.hpp"
+#include "long_operations/effects/effect_factory.hpp"
+#include "long_operations/effects/sel_record.hpp"
 #include "long_operations/wait_long_operation.hpp"
 #include "long_operations/zoom_long_operation.hpp"
 #include "machine/general_operations.hpp"
@@ -171,19 +171,19 @@ void loadDCToDC1(RLMachine& machine,
 }
 
 // TODO: Move this to the mpl parameter parser
-selRecord PackEffectParam(Rect srcRect,
-                          Point dest,
-                          int time,
-                          int style,
-                          int direction = 0,
-                          int v1 = 0,
-                          int v2 = 0,
-                          int v3 = 0,
-                          int v4 = 0,
-                          int v5 = 0,
-                          int tr = 0,
-                          int lv = 0) {
-  selRecord effect_param;
+lop::selRecord PackEffectParam(Rect srcRect,
+                               Point dest,
+                               int time,
+                               int style,
+                               int direction = 0,
+                               int v1 = 0,
+                               int v2 = 0,
+                               int v3 = 0,
+                               int v4 = 0,
+                               int v5 = 0,
+                               int tr = 0,
+                               int lv = 0) {
+  lop::selRecord effect_param;
   effect_param.rect = srcRect;
   effect_param.point = dest;
   effect_param.duration = time;
@@ -204,20 +204,20 @@ void performEffect(RLMachine& machine,
                    const std::shared_ptr<SDLSurface>& dst,
                    int selnum) {
   if (!machine.replaying_graphics_stack()) {
-    std::shared_ptr<LongOperation> lop(
-        EffectFactory::BuildFromSEL(machine, src, dst, selnum));
-    machine.PushLongOperation(lop);
+    std::shared_ptr<lop::LongOperation> operation(
+        lop::EffectFactory::BuildFromSEL(machine, src, dst, selnum));
+    machine.PushLongOperation(operation);
   }
 }
 
 void performEffect(RLMachine& machine,
                    const std::shared_ptr<SDLSurface>& src,
                    const std::shared_ptr<SDLSurface>& dst,
-                   selRecord effect_param) {
+                   lop::selRecord effect_param) {
   if (!machine.replaying_graphics_stack()) {
-    std::shared_ptr<LongOperation> lop(
-        EffectFactory::Build(machine, src, dst, effect_param));
-    machine.PushLongOperation(lop);
+    std::shared_ptr<lop::LongOperation> operation(
+        lop::EffectFactory::Build(machine, src, dst, effect_param));
+    machine.PushLongOperation(operation);
   }
 }
 
@@ -266,7 +266,7 @@ struct shake : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int spec) {
     machine.GetSystem().graphics().QueueShakeSpec(spec);
 
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->BreakOnEvent(std::bind(StopShaking, std::ref(machine)));
     machine.PushLongOperation(wait_op);
   }
@@ -348,7 +348,7 @@ struct load_3 : public RLOpcode<StrConstant_T,
 // {grp,rec}Display
 // -----------------------------------------------------------------------
 
-void DisplayEffect(RLMachine& machine, int dc, const selRecord& param) {
+void DisplayEffect(RLMachine& machine, int dc, const lop::selRecord& param) {
   const Rect& src = param.rect;
   const Point& dest = param.point;
   const auto transparency = param.transparency;
@@ -366,7 +366,8 @@ void DisplayEffect(RLMachine& machine, int dc, const selRecord& param) {
 struct display_1
     : public RLOpcode<IntConstant_T, IntConstant_T, IntConstant_T> {
   void operator()(RLMachine& machine, int dc, int effectNum, int opacity) {
-    auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), effectNum);
+    auto sel_record =
+        lop::GetSelRecord(machine.GetSystem().gameexe(), effectNum);
     sel_record.transparency = opacity;
     DisplayEffect(machine, dc, sel_record);
   }
@@ -374,7 +375,8 @@ struct display_1
 
 struct display_0 : public RLOpcode<IntConstant_T, IntConstant_T> {
   void operator()(RLMachine& machine, int dc, int effectNum) {
-    auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), effectNum);
+    auto sel_record =
+        lop::GetSelRecord(machine.GetSystem().gameexe(), effectNum);
     DisplayEffect(machine, dc, sel_record);
   }
 };
@@ -391,7 +393,8 @@ struct display_3 : public RLOpcode<IntConstant_T,
                   Rect srcRect,
                   Point dest,
                   int opacity) {
-    auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), effectNum);
+    auto sel_record =
+        lop::GetSelRecord(machine.GetSystem().gameexe(), effectNum);
     sel_record.rect = srcRect;
     sel_record.point = dest;
     sel_record.transparency = opacity;
@@ -407,7 +410,8 @@ struct display_2
                   int effectNum,
                   Rect srcRect,
                   Point dest) {
-    auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), effectNum);
+    auto sel_record =
+        lop::GetSelRecord(machine.GetSystem().gameexe(), effectNum);
     sel_record.rect = srcRect;
     sel_record.point = dest;
     DisplayEffect(machine, dc, sel_record);
@@ -452,7 +456,8 @@ struct display_4 : public RLOpcode<IntConstant_T,
 struct display_5
     : public RLOpcode<IntConstant_T, IntConstant_T, IntConstant_T> {
   void operator()(RLMachine& machine, int dc, int effectNum, int time) {
-    auto sel_record = GetSelRecord(machine.GetSystem().gameexe(), effectNum);
+    auto sel_record =
+        lop::GetSelRecord(machine.GetSystem().gameexe(), effectNum);
     sel_record.duration = time;
     DisplayEffect(machine, dc, sel_record);
   }
@@ -991,11 +996,11 @@ struct zoom : public RLOpcode<Rect_T<SPACE>,
     Haikei& haikei = machine.haikei();
     haikei.set_graphics_background(BACKGROUND_DC0);
 
-    LongOperation* zoomOp =
-        new ZoomLongOperation(machine, haikei.GetDC(0), haikei.GetDC(srcDC),
-                              frect, trect, drect, time);
-    auto blitOp = std::make_shared<BlitAfterEffectFinishes>(
-        zoomOp, haikei.GetDC(srcDC), haikei.GetDC(0), trect, drect);
+    lop::LongOperation* zoomOp = new lop::ZoomLongOperation(
+        machine, haikei.GetDC(0), haikei.GetDC(srcDC), frect, trect, drect,
+        time);
+    auto blitOp = std::make_shared<lop::BlitAfterEffectFinishes>(
+        machine, zoomOp, haikei.GetDC(srcDC), haikei.GetDC(0), trect, drect);
     machine.PushLongOperation(blitOp);
   }
 };

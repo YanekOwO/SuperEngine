@@ -26,7 +26,7 @@
 
 #include "core/mask.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
@@ -134,7 +134,7 @@ void BindMask(SiglusMachine& runtime) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return MakePollingWaitFuture(vm, check, false, h->event_);
+        return lop::MakePollingWaitFuture(vm, check, false, h->event_);
       },
       sb::vararg);
   event_class.def(
@@ -143,7 +143,7 @@ void BindMask(SiglusMachine& runtime) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return MakePollingWaitFuture(vm, check, true, h->event_);
+        return lop::MakePollingWaitFuture(vm, check, true, h->event_);
       },
       sb::vararg);
 

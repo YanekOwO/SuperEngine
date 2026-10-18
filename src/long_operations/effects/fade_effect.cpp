@@ -1,13 +1,11 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2006, 2007 Elliot Glaysher
+// Copyright (C) 2006 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,38 +23,32 @@
 //
 // -----------------------------------------------------------------------
 
-#include "machine/long_operation.hpp"
+#include "long_operations/effects/fade_effect.hpp"
 
-#include "machine/rlmachine.hpp"
-#include "systems/system.hpp"
-#include "systems/event_system.hpp"
+#include "systems/sdl/sdl_surface.hpp"
 
-// -----------------------------------------------------------------------
-// LongOperation
-// -----------------------------------------------------------------------
-
-LongOperation::LongOperation() : EventListener() {}
-
-LongOperation::~LongOperation() {}
+namespace lop {
 
 // -----------------------------------------------------------------------
-// PerformAfterLongOperationDecorator
+// FadeEffect
 // -----------------------------------------------------------------------
 
-PerformAfterLongOperationDecorator::PerformAfterLongOperationDecorator(
-    LongOperation* in_op)
-    : operation_(in_op) {}
+FadeEffect::FadeEffect(RLMachine& machine,
+                       std::shared_ptr<SDLSurface> to,
+                       std::shared_ptr<SDLSurface> from,
+                       const Size& screen_size,
+                       int time)
+    : EffectLongOperation(machine, to, from, screen_size, time) {}
 
-PerformAfterLongOperationDecorator::~PerformAfterLongOperationDecorator() {}
+FadeEffect::~FadeEffect() {}
 
-void PerformAfterLongOperationDecorator::OnEvent(std::shared_ptr<Event> event) {
-  operation_->OnEvent(event);
+void FadeEffect::PerformEffectForTime(int currentTime) {
+  // Blit the source image to the screen with the opacity
+  int opacity = int((float(currentTime) / duration()) * 255);
+
+  src_surface().RenderToScreen(Rect(0, 0, size()), Rect(0, 0, size()), opacity);
 }
 
-bool PerformAfterLongOperationDecorator::operator()(RLMachine& machine) {
-  bool ret_val = (*operation_)(machine);
-  if (ret_val)
-    PerformAfterLongOperation(machine);
+bool FadeEffect::BlitOriginalImage() const { return true; }
 
-  return ret_val;
-}
+}  // namespace lop

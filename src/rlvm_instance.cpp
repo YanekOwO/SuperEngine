@@ -27,10 +27,12 @@
 #include "core/memory.hpp"
 #include "libreallive/game_loader.hpp"
 #include "log/domain_logger.hpp"
+#include "long_operations/reallive_task.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/serialization.hpp"
 #include "platforms/implementor.hpp"
+#include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/system_error.hpp"
@@ -40,6 +42,7 @@
 #include "utilities/gettext.hpp"
 #include "utilities/string_utilities.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -73,45 +76,46 @@ int RLVMInstance::Main(const std::filesystem::path& gameroot) {
   }
 
   try {
-    Clock clock;
+    const auto clock = machine_->GetSystem().event().GetClock();
+    constexpr auto frame_time =
+        std::chrono::duration_cast<Clock::timepoint_t::duration>(
+            std::chrono::seconds(1) / 144.0);
+    auto next_update = clock->GetTime();
 
     while (!machine_->IsHalted()) {
-      // Give SDL a chance to respond to events, redraw the screen,
-      // etc.
-      machine_->Update();
+      auto& system = machine_->GetSystem();
+      if (clock->GetTime() >= next_update || system.ShouldFastForward()) {
+        // Service input, rendering and audio even when an operation has a
+        // distant deadline. Earlier operation wakeups need not render again.
+        system.set_force_wait(false);
+        machine_->Update();
+        next_update = clock->GetTime() + frame_time;
+      }
       if (machine_->IsHalted() || machine_->GetSystem().IsQuitRequested())
         break;
 
-      constexpr auto frame_time = std::chrono::seconds(1) / 144.0;
-      auto start = clock.GetTime();
-      auto end = start;
-
-      for (bool should_continue = true; should_continue;) {
-        // In one cycle in game loop, execute long operation at most once
-        if (machine_->CurrentLongOperation() != nullptr)
-          should_continue = false;
-
+      for (;;) {
+        // Starting a task or delivering one due wait is the entire operation
+        // step. In particular, WaitFor(0) yields to a later iteration.
+        const bool long_operation = machine_->CurrentLongOperation() != nullptr;
         Step();
 
-        end = clock.GetTime();
-
-        if (machine_->IsHalted() || machine_->GetSystem().IsQuitRequested() ||
-            machine_->GetSystem().force_wait() || (end - start) >= frame_time)
-          should_continue = false;
+        if (long_operation || machine_->IsHalted() ||
+            system.IsQuitRequested() || system.force_wait() ||
+            clock->GetTime() >= next_update)
+          break;
       }
 
-      // Sleep to be nice to the processor and to give the GPU a chance to
-      // catch up.
-      if (!machine_->GetSystem().ShouldFastForward()) {
-        auto real_sleep_time = frame_time - (end - start);
-        using std::chrono_literals::operator""ms;
-        if (real_sleep_time < 1ms)
-          real_sleep_time = 1ms;
-
-        std::this_thread::sleep_for(real_sleep_time);
+      if (machine_->IsHalted() || system.IsQuitRequested())
+        break;
+      if (!system.ShouldFastForward()) {
+        auto wake_at = next_update;
+        if (!system.force_wait()) {
+          if (auto task = machine_->CurrentLongOperation())
+            wake_at = std::min(wake_at, task->ReadyUntil());
+        }
+        std::this_thread::sleep_until(wake_at);
       }
-
-      machine_->GetSystem().set_force_wait(false);
     }
 
     Serialization::saveGlobalMemory(*machine_);
@@ -137,12 +141,8 @@ void RLVMInstance::Step() {
   static DomainLogger logger("RLVMInstance::Step");
 
   try {
-    if (auto long_op = machine_->CurrentLongOperation()) {
-      const bool finished = machine_->ExecuteLongop(long_op);
-
-      if (finished)
-        machine_->GetCallStack().Pop();
-
+    if (machine_->CurrentLongOperation()) {
+      machine_->ExecuteLongop();
     } else {
       std::shared_ptr<Instruction> instruction = machine_->ReadInstruction();
       machine_->AdvanceIP();

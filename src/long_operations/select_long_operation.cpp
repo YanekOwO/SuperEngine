@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -26,30 +23,27 @@
 
 #include "long_operations/select_long_operation.hpp"
 
-#include <iostream>
-#include <memory>
-#include <string>
-#include <vector>
-
 #include "core/gameexe.hpp"
 #include "core/rlevent_listener.hpp"
 #include "libreallive/expression.hpp"
 #include "libreallive/parser.hpp"
 #include "log/domain_logger.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
-#include "systems/renderable.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
-#include "systems/event_system.hpp"
 #include "utilities/string_utilities.hpp"
 
-using libreallive::CommandElement;
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace lop {
+
 using libreallive::SelectElement;
-using std::placeholders::_1;
 
 // -----------------------------------------------------------------------
 // SelectLongOperation
@@ -155,13 +149,11 @@ std::vector<std::string> SelectLongOperation::GetOptions() const {
   return opt;
 }
 
-bool SelectLongOperation::operator()(RLMachine& machine) {
-  if (return_value_ != -1) {
-    machine.set_store_register(return_value_);
-    return true;
-  } else {
-    return false;
-  }
+Task<int> SelectLongOperation::Run(WaitContext& waits) {
+  while (return_value_ == -1)
+    co_await waits.Schedule();
+  machine_.set_store_register(return_value_);
+  co_return return_value_;
 }
 
 // -----------------------------------------------------------------------
@@ -515,3 +507,5 @@ void ButtonSelectLongOperation::RenderTextSurface(
   Rect text_bounding_rect = text_surface->GetSize().CenteredIn(bounding_rect);
   text_surface->RenderToScreen(text_surface->GetRect(), text_bounding_rect);
 }
+
+}  // namespace lop

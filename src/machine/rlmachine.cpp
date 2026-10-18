@@ -31,8 +31,8 @@
 #include "core/stage.hpp"
 #include "libreallive/parser.hpp"
 #include "log/domain_logger.hpp"
+#include "long_operations/reallive_task.hpp"
 #include "long_operations/textout_long_operation.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/reallive_dll.hpp"
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
@@ -78,8 +78,7 @@ RLMachine::RLMachine(std::shared_ptr<Gameexe> gameexe,
       scriptor_(std::move(scriptor)),
       call_stack_(*memory_),
       savepoint_call_stack_(*memory_) {
-  if (!gexe_ || !system_ || !stage_ || !local_config_ ||
-      !global_config_)
+  if (!gexe_ || !system_ || !stage_ || !local_config_ || !global_config_)
     throw std::invalid_argument(
         "RLMachine requires game configuration, system, and stage");
 
@@ -148,9 +147,8 @@ std::shared_ptr<Instruction> RLMachine::ReadInstruction() const {
   return scriptor_->ResolveInstruction(top_frame->pos);
 }
 
-bool RLMachine::ExecuteLongop(std::shared_ptr<LongOperation> long_op) {
-  auto lock = call_stack_.GetLock();
-  return (*long_op)(*this);
+void RLMachine::ExecuteLongop() {
+  lop::AdvanceLongOperation(call_stack_, GetSystem().ShouldFastForward());
 }
 
 void RLMachine::ExecuteInstruction(std::shared_ptr<Instruction> instruction) {
@@ -272,12 +270,14 @@ void RLMachine::ClearFrameCounter(int layer, int idx) {
 }
 
 void RLMachine::PushLongOperation(
-    std::shared_ptr<LongOperation> long_operation) {
+    std::shared_ptr<lop::LongOperation> long_operation) {
   const auto top_frame = call_stack_.Top();
   auto pos = top_frame->pos;
   pos.location_offset--;  // location associated with this longop is previous
                           // location of the instruction pointer.
-  call_stack_.Push(StackFrame(pos, long_operation));
+  call_stack_.Push(StackFrame(
+      pos, std::make_shared<lop::RealliveTask>(
+               std::move(long_operation), GetSystem().event().GetClock())));
 }
 
 void RLMachine::Reset() {
@@ -298,7 +298,7 @@ void RLMachine::LocalReset() {
   GetSystem().Reset();
 }
 
-std::shared_ptr<LongOperation> RLMachine::CurrentLongOperation() const {
+std::shared_ptr<lop::RealliveTask> RLMachine::CurrentLongOperation() const {
   auto top = call_stack_.Top();
   if (top && top->frame_type == StackFrame::TYPE_LONGOP)
     return top->long_op;
@@ -381,7 +381,7 @@ void RLMachine::PerformTextout(std::string cp932str) {
 
   std::string utf8str = cp932toUTF8(name_parsed_text, GetTextEncoding());
   // Display UTF-8 characters
-  auto ptr = std::make_shared<TextoutLongOperation>(*this, utf8str);
+  auto ptr = std::make_shared<lop::TextoutLongOperation>(*this, utf8str);
 
   if (GetSystem().ShouldFastForward() ||
       EffectiveMessageNowait(GetLocalConfig(), GetGlobalConfig())) {

@@ -1,14 +1,12 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2024 Serina Sakurai
 // Copyright (C) 2006 Elliot Glaysher
+// Copyright (C) 2024 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,10 +26,12 @@
 
 #pragma once
 
-#include "effects/effect.hpp"
+#include "long_operations/effects/effect.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
 #include <string>
+
+namespace lop {
 
 namespace DrawerEffectDetails {
 
@@ -154,3 +154,5 @@ class DrawerEffect : public EffectLongOperation {
  private:
   DrawerEffectDetails::Direction direction_;
 };
+
+}  // namespace lop

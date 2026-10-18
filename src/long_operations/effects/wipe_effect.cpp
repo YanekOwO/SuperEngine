@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -25,14 +22,16 @@
 //
 // -----------------------------------------------------------------------
 
-#include "effects/wipe_effect.hpp"
+#include "long_operations/effects/wipe_effect.hpp"
 
 #include <cmath>
 
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // WipeEffect base class
@@ -227,3 +226,5 @@ void WipeRightToLeftEffect::PerformEffectForTime(int currentTime) {
         opacity);
   }
 }
+
+}  // namespace lop

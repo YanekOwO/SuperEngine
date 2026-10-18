@@ -26,8 +26,8 @@
 #include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
 #include "libsiglus/siglus_machine.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
@@ -126,9 +126,10 @@ static sr::Value WaitQuake(QuakeHandle* h,
     quake->End(0);
     RefreshQuake(system);
   };
-  return MakePollingWaitFuture(vm, std::move(done), key_skip,
-                               system ? system->event_ptr().get() : nullptr,
-                               std::chrono::milliseconds(5), std::move(on_key));
+  return lop::MakePollingWaitFuture(
+      vm, std::move(done), key_skip,
+      system ? system->event_ptr().get() : nullptr,
+      std::chrono::milliseconds(5), std::move(on_key));
 }
 
 void BindQuake(SiglusMachine& runtime) {

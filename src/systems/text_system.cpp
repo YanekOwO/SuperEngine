@@ -1065,11 +1065,6 @@ bool TextSystem::CurrentlySkipping() const {
   return kidoku_read_ && skip_mode();
 }
 
-bool RestoreTextSystemVisibility::operator()(RLMachine& machine) {
-  machine.GetSystem().text().set_system_visible(true);
-  return true;
-}
-
 // ------------------------------------------------------------------------------
 // Resolve an absolute or game-relative filename, then consult indexed assets.
 // Siglus FONT_FILE entries often give only a basename for a file under dat/.

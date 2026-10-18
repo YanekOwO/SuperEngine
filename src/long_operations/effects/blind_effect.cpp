@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2006, 2007 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,11 +23,13 @@
 //
 // -----------------------------------------------------------------------
 
-#include "effects/blind_effect.hpp"
+#include "long_operations/effects/blind_effect.hpp"
 
 #include <cstdlib>
 
 #include "systems/sdl/sdl_surface.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // BlindEffect
@@ -176,3 +176,5 @@ void BlindRightToLeftEffect::RenderPolygon(int polyStart, int polyEnd) {
   src_surface().RenderToScreen(Rect::GRP(polyEnd, 0, polyStart, height()),
                                Rect::GRP(polyEnd, 0, polyStart, height()), 255);
 }
+
+}  // namespace lop

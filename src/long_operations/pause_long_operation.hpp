@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -27,7 +24,11 @@
 
 #pragma once
 
-#include "machine/long_operation.hpp"
+#include "long_operations/after_long_operation.hpp"
+
+class RLMachine;
+
+namespace lop {
 
 // Main pause function. Exported for TextoutLongOperation to abuse.
 class PauseLongOperation : public LongOperation {
@@ -39,7 +40,7 @@ class PauseLongOperation : public LongOperation {
   virtual void OnEvent(std::shared_ptr<Event> event) override;
 
   // Overridden from LongOperation:
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  private:
   // Internal implementation of event handling
@@ -71,7 +72,7 @@ class PauseLongOperation : public LongOperation {
 // -----------------------------------------------------------------------
 class NewPageAfterLongop : public PerformAfterLongOperationDecorator {
  public:
-  explicit NewPageAfterLongop(LongOperation* inOp);
+  NewPageAfterLongop(RLMachine& machine, LongOperation* inOp);
   virtual ~NewPageAfterLongop();
 
  private:
@@ -83,7 +84,7 @@ class NewPageAfterLongop : public PerformAfterLongOperationDecorator {
 // -----------------------------------------------------------------------
 class NewPageOnAllAfterLongop : public PerformAfterLongOperationDecorator {
  public:
-  explicit NewPageOnAllAfterLongop(LongOperation* inOp);
+  NewPageOnAllAfterLongop(RLMachine& machine, LongOperation* inOp);
   virtual ~NewPageOnAllAfterLongop();
 
  private:
@@ -95,9 +96,11 @@ class NewPageOnAllAfterLongop : public PerformAfterLongOperationDecorator {
 // -----------------------------------------------------------------------
 class NewParagraphAfterLongop : public PerformAfterLongOperationDecorator {
  public:
-  explicit NewParagraphAfterLongop(LongOperation* inOp);
+  NewParagraphAfterLongop(RLMachine& machine, LongOperation* inOp);
   virtual ~NewParagraphAfterLongop();
 
  private:
   virtual void PerformAfterLongOperation(RLMachine& machine) override;
 };
+
+}  // namespace lop

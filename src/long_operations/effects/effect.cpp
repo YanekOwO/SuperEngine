@@ -25,13 +25,15 @@
 //
 // -----------------------------------------------------------------------
 
-#include "effects/effect.hpp"
+#include "long_operations/effects/effect.hpp"
 
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
 #include "systems/event_system.hpp"
+#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // EffectLongOperation
@@ -55,31 +57,34 @@ EffectLongOperation::~EffectLongOperation() {
   machine_.GetSystem().graphics().set_is_responsible_for_update(true);
 }
 
-bool EffectLongOperation::operator()(RLMachine& machine) {
-  // TODO: this is ugly. Currently we have to manually manage the state of the
-  // graphic system, and prevent it from automatically drawing during effects.
-  // But when we have more than 2 effects queued up, the first one will change
-  // the state of the graphic system to enable update in its destructor.
-  // Consider introducing a concept of render layers later to make this cleaner.
-  machine.GetSystem().graphics().set_is_responsible_for_update(false);
+Task<int> EffectLongOperation::Run(WaitContext& waits) {
+  for (;;) {
+    // TODO: this is ugly. Currently we have to manually manage the state of the
+    // graphic system, and prevent it from automatically drawing during effects.
+    // But when we have more than 2 effects queued up, the first one will change
+    // the state of the graphic system to enable update in its destructor.
+    // Consider introducing a concept of render layers later to make this
+    // cleaner.
+    machine_.GetSystem().graphics().set_is_responsible_for_update(false);
 
-  unsigned int time = machine.GetSystem().event().GetTicks();
-  unsigned int current_frame = time - start_time_;
+    unsigned int time = machine_.GetSystem().event().GetTicks();
+    unsigned int current_frame = time - start_time_;
 
-  bool fast_forward = machine.GetSystem().ShouldFastForward();
+    bool fast_forward = machine_.GetSystem().ShouldFastForward();
 
-  if (current_frame >= duration_ || fast_forward) {
-    return true;
-  } else {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-    graphics.RenderCustomFrame([&]() {
-      if (BlitOriginalImage()) {
-        dst_surface().RenderToScreen(Rect(Point(0, 0), size()),
-                                     Rect(Point(0, 0), size()), 255);
-      }
-      PerformEffectForTime(current_frame);
-    });
-    return false;
+    if (current_frame >= duration_ || fast_forward) {
+      co_return 0;
+    } else {
+      GraphicsSystem& graphics = machine_.GetSystem().graphics();
+      graphics.RenderCustomFrame([&]() {
+        if (BlitOriginalImage()) {
+          dst_surface().RenderToScreen(Rect(Point(0, 0), size()),
+                                       Rect(Point(0, 0), size()), 255);
+        }
+        PerformEffectForTime(current_frame);
+      });
+      co_await waits.Schedule();
+    }
   }
 }
 
@@ -87,12 +92,14 @@ bool EffectLongOperation::operator()(RLMachine& machine) {
 // BlitAfterEffectFinishes
 // -----------------------------------------------------------------------
 
-BlitAfterEffectFinishes::BlitAfterEffectFinishes(LongOperation* in,
-                                                 std::shared_ptr<SDLSurface> src,
-                                                 std::shared_ptr<SDLSurface> dst,
-                                                 const Rect& srcRect,
-                                                 const Rect& destRect)
-    : PerformAfterLongOperationDecorator(in),
+BlitAfterEffectFinishes::BlitAfterEffectFinishes(
+    RLMachine& machine,
+    LongOperation* in,
+    std::shared_ptr<SDLSurface> src,
+    std::shared_ptr<SDLSurface> dst,
+    const Rect& srcRect,
+    const Rect& destRect)
+    : PerformAfterLongOperationDecorator(machine, in),
       src_surface_(src),
       dst_surface_(dst),
       src_rect_(srcRect),
@@ -107,3 +114,5 @@ void BlitAfterEffectFinishes::PerformAfterLongOperation(RLMachine& machine) {
   // Now force a screen refresh
   machine.GetSystem().graphics().ForceRefresh();
 }
+
+}  // namespace lop

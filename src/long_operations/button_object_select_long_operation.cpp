@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2013 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -31,6 +32,8 @@
 #include "systems/system.hpp"
 
 #include <optional>
+
+namespace lop {
 
 ButtonObjectSelectLongOperation::ButtonObjectSelectLongOperation(
     RLMachine& machine,
@@ -150,13 +153,11 @@ void ButtonObjectSelectLongOperation::OnEvent(std::shared_ptr<Event> event) {
     *event = std::monostate();
 }
 
-bool ButtonObjectSelectLongOperation::operator()(RLMachine& machine) {
-  if (has_return_value_) {
-    machine.set_store_register(return_value_);
-    return true;
-  } else {
-    return false;
-  }
+Task<int> ButtonObjectSelectLongOperation::Run(WaitContext& waits) {
+  while (!has_return_value_)
+    co_await waits.Schedule();
+  machine_.set_store_register(return_value_);
+  co_return return_value_;
 }
 
 void ButtonObjectSelectLongOperation::SetButtonOverride(GraphicsObject* object,
@@ -185,3 +186,5 @@ void ButtonObjectSelectLongOperation::SetButtonOverride(GraphicsObject* object,
       selected_state->rep_pos.y(), selected_state->rep_tr,
       selected_state->rep_bright, selected_state->rep_dark);
 }
+
+}  // namespace lop

@@ -4,7 +4,7 @@
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2026 RLVM contributors
+// Copyright (C) 2026 Serina Sakurai
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,19 +23,29 @@
 
 #pragma once
 
-#include <optional>
+#include "long_operations/long_operation.hpp"
 
-namespace libsiglus::binding {
+#include <string>
 
-struct WipeCompletion {
-  // Completion requests specify a minimum total number of traversals since
-  // the wipe started. They always leave at least one traversal still to run.
-  void RequestFinish(int result, int minimum_total_boundaries = 1);
-  bool AfterFrameActions();
+class System;
+struct LocalConfig;
 
-  int regular_boundaries = 0;
-  std::optional<int> finish_after_boundary;
-  int result = 0;
+namespace lop {
+
+class SiglusTextoutOperation final : public LongOperation {
+ public:
+  SiglusTextoutOperation(System* system,
+                         LocalConfig& local_config,
+                         std::string text);
+  Task<int> Run(WaitContext& waits) override;
+
+ private:
+  bool ShouldFlushText() const;
+
+  System* system_;
+  LocalConfig& local_config_;
+  std::string text_;
+  bool flush_ = false;
 };
 
-}  // namespace libsiglus::binding
+}  // namespace lop

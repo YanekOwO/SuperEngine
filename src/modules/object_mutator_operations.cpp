@@ -247,7 +247,7 @@ Op_MutatorWaitNormal::Op_MutatorWaitNormal(const std::string& name)
 Op_MutatorWaitNormal::~Op_MutatorWaitNormal() {}
 
 void Op_MutatorWaitNormal::operator()(RLMachine& machine, int obj) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnEvent(
       std::bind(MutatorIsDone, std::ref(machine), this, obj, -1, name_));
   machine.PushLongOperation(wait_op);
@@ -261,7 +261,7 @@ Op_MutatorWaitRepNo::Op_MutatorWaitRepNo(const std::string& name)
 Op_MutatorWaitRepNo::~Op_MutatorWaitRepNo() {}
 
 void Op_MutatorWaitRepNo::operator()(RLMachine& machine, int obj, int repno) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnEvent(
       std::bind(MutatorIsDone, std::ref(machine), this, obj, repno, name_));
   machine.PushLongOperation(wait_op);
@@ -275,7 +275,7 @@ Op_MutatorWaitCNormal::Op_MutatorWaitCNormal(const std::string& name)
 Op_MutatorWaitCNormal::~Op_MutatorWaitCNormal() {}
 
 void Op_MutatorWaitCNormal::operator()(RLMachine& machine, int obj) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnClicks();
   wait_op->BreakOnEvent(std::bind(ObjectMutatorIsWorking, std::ref(machine),
                                   this, obj, -1, name_));
@@ -290,7 +290,7 @@ Op_MutatorWaitCRepNo::Op_MutatorWaitCRepNo(const std::string& name)
 Op_MutatorWaitCRepNo::~Op_MutatorWaitCRepNo() {}
 
 void Op_MutatorWaitCRepNo::operator()(RLMachine& machine, int obj, int repno) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnClicks();
   wait_op->BreakOnEvent(std::bind(ObjectMutatorIsWorking, std::ref(machine),
                                   this, obj, repno, name_));

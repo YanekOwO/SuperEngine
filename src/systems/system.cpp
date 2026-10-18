@@ -23,13 +23,14 @@
 // -----------------------------------------------------------------------
 
 #include "systems/system.hpp"
+#include "long_operations/reallive_operations.hpp"
 
 #include "core/gameexe.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/rlevent_listener.hpp"
-#include "effects/fade_effect.hpp"
 #include "libreallive/alldefs.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/effects/fade_effect.hpp"
+#include "long_operations/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
 #include "modules/jump.hpp"
@@ -73,19 +74,6 @@ const std::vector<std::string> ALL_FILETYPES = {
     "ovk", "koe", "nwk", "wmv", "asf", "avi", "mpg", "mpeg"};
 
 }  // namespace
-
-class MenuReseter : public LongOperation {
- public:
-  explicit MenuReseter(System& sys) : sys_(sys) {}
-
-  bool operator()(RLMachine& machine) override {
-    sys_.in_menu_ = false;
-    return true;
-  }
-
- private:
-  System& sys_;
-};
 
 class QuitEventListener : public EventListener {
  public:
@@ -195,9 +183,9 @@ void System::RestoreSelectionSnapshot(RLMachine& machine) {
         machine.GetSystem().graphics().RenderToSurface();
 
     constexpr int duration = 250;
-    machine.PushLongOperation(std::make_shared<FadeEffect>(
+    machine.PushLongOperation(std::make_shared<lop::FadeEffect>(
         machine, after, black_screen, screen_size, duration));
-    machine.PushLongOperation(std::make_shared<FadeEffect>(
+    machine.PushLongOperation(std::make_shared<lop::FadeEffect>(
         machine, black_screen, before, screen_size, duration));
   }
 }
@@ -261,7 +249,7 @@ void System::ShowSyscomMenu(RLMachine& machine) {
       // Multiple right clicks shouldn't spawn multiple copies of the menu
       // system on top of each other.
       in_menu_ = true;
-      machine.PushLongOperation(std::make_shared<MenuReseter>(*this));
+      machine.PushLongOperation(std::make_shared<lop::MenuReseter>(*this));
 
       const std::vector<int> cancelcall = gexe("CANCELCALL").ToIntVec();
       Farcall(machine, cancelcall.at(0), cancelcall.at(1));
@@ -430,7 +418,8 @@ void System::InvokeSaveOrLoad(RLMachine& machine,
     int entrypoint = save_loc->at(1);
 
     text().set_system_visible(false);
-    machine.PushLongOperation(std::make_shared<RestoreTextSystemVisibility>());
+    machine.PushLongOperation(
+        std::make_shared<lop::RestoreTextSystemVisibility>(text()));
     Farcall(machine, scenario, entrypoint);
   }
 }

@@ -26,6 +26,7 @@
 // -----------------------------------------------------------------------
 
 #include "modules/module_sel.hpp"
+#include "long_operations/reallive_operations.hpp"
 
 #include <iterator>
 #include <string>
@@ -68,7 +69,7 @@ struct Sel_select : public RLOp_SpecialCase {
 
     const SelectElement& element = dynamic_cast<const SelectElement&>(ce);
     machine.PushLongOperation(
-        std::make_shared<NormalSelectLongOperation>(machine, element));
+        std::make_shared<lop::NormalSelectLongOperation>(machine, element));
   }
 };
 
@@ -79,20 +80,9 @@ struct Sel_select_s : public RLOp_SpecialCase {
 
     const SelectElement& element = dynamic_cast<const SelectElement&>(ce);
     auto btn_select =
-        std::make_shared<ButtonSelectLongOperation>(machine, element, 0);
+        std::make_shared<lop::ButtonSelectLongOperation>(machine, element, 0);
     machine.PushLongOperation(btn_select);
     machine.GetSystem().graphics().AddRenderable(btn_select);
-  }
-};
-
-struct ClearAndRestoreWindow : public LongOperation {
-  int to_restore_;
-  explicit ClearAndRestoreWindow(int in) : to_restore_(in) {}
-
-  bool operator()(RLMachine& machine) override {
-    machine.GetSystem().text().HideAllTextWindows();
-    machine.GetSystem().text().set_active_window(to_restore_);
-    return true;
   }
 };
 
@@ -117,10 +107,10 @@ struct Sel_select_w : public RLOp_SpecialCase {
     text.HideAllTextWindows();
     text.set_active_window(window);
     machine.PushLongOperation(
-        std::make_shared<ClearAndRestoreWindow>(active_window));
+        std::make_shared<lop::ClearAndRestoreWindow>(text, active_window));
 
     machine.PushLongOperation(
-        std::make_shared<NormalSelectLongOperation>(machine, element));
+        std::make_shared<lop::NormalSelectLongOperation>(machine, element));
   }
 };
 
@@ -130,7 +120,7 @@ struct Sel_select_objbtn : public RLOpcode<IntConstant_T> {
       MarkSavepoint(machine);
 
     machine.PushLongOperation(
-        std::make_shared<ButtonObjectSelectLongOperation>(machine, group));
+        std::make_shared<lop::ButtonObjectSelectLongOperation>(machine, group));
   }
 };
 
@@ -140,7 +130,7 @@ struct Sel_select_objbtn_cancel_0 : public RLOpcode<IntConstant_T> {
       MarkSavepoint(machine);
 
     auto obj =
-        std::make_shared<ButtonObjectSelectLongOperation>(machine, group);
+        std::make_shared<lop::ButtonObjectSelectLongOperation>(machine, group);
     obj->set_cancelable();
     machine.PushLongOperation(obj);
   }
@@ -153,7 +143,7 @@ struct Sel_select_objbtn_cancel_1
       MarkSavepoint(machine);
 
     auto obj =
-        std::make_shared<ButtonObjectSelectLongOperation>(machine, group);
+        std::make_shared<lop::ButtonObjectSelectLongOperation>(machine, group);
     obj->set_cancelable();
     machine.PushLongOperation(obj);
   }
@@ -173,7 +163,7 @@ struct Sel_select_objbtn_cancel_2 : public RLOpcode<> {
       }
 
     auto obj =
-        std::make_shared<ButtonObjectSelectLongOperation>(machine, group);
+        std::make_shared<lop::ButtonObjectSelectLongOperation>(machine, group);
     obj->set_cancelable();
     machine.PushLongOperation(obj);
   }

@@ -1,13 +1,10 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2006 Elliot Glaysher
+// Copyright (C) 2006, 2007 Elliot Glaysher
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,9 +26,11 @@
 
 #include <memory>
 
-#include "effects/effect.hpp"
+#include "long_operations/effects/effect.hpp"
 
 class GraphicsSystem;
+
+namespace lop {
 
 // Base class for the four classess that implement \#SEL transition
 // style #10, Wipe. There are four direct subclasses from WipeEffect
@@ -118,3 +117,5 @@ class WipeRightToLeftEffect : public WipeEffect {
  protected:
   virtual void PerformEffectForTime(int currentTime) final;
 };
+
+}  // namespace lop

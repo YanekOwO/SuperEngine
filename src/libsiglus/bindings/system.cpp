@@ -23,8 +23,8 @@
 
 #include "systems/system.hpp"
 #include "libsiglus/bindings/registry.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
 #include "log/domain_logger.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
@@ -72,7 +72,7 @@ void BindSystem(SiglusMachine& runtime) {
       "wait",
       [&runtime, sys](sr::VM& vm, int msecs) -> sr::Value {
         if (!sys || msecs <= 0)
-          return MakeResolvedFuture(*vm.gc_);
+          return lop::MakeResolvedFuture(*vm.gc_);
 
         auto counter = runtime.CreateCounter();
         counter->StartGame();
@@ -82,14 +82,14 @@ void BindSystem(SiglusMachine& runtime) {
 
           return counter->Get() >= msecs;
         };
-        return MakePollingWaitFuture(vm, std::move(done));
+        return lop::MakePollingWaitFuture(vm, std::move(done));
       },
       sb::arg("msecs") = 0);
   gm.def(
       "wait_key",
       [&runtime, sys](sr::VM& vm, int msecs) -> sr::Value {
         if (!sys)
-          return MakeResolvedFuture(*vm.gc_);
+          return lop::MakeResolvedFuture(*vm.gc_);
 
         const bool has_timeout = msecs > 0;
         auto counter = has_timeout ? runtime.CreateCounter() : nullptr;
@@ -101,8 +101,8 @@ void BindSystem(SiglusMachine& runtime) {
 
           return counter && counter->Get() >= msecs;
         };
-        return MakePollingWaitFuture(vm, std::move(done), true,
-                                     sys->event_ptr().get());
+        return lop::MakePollingWaitFuture(vm, std::move(done), true,
+                                          sys->event_ptr().get());
       },
       sb::arg("msecs") = 0);
   gm.def("set_title", [sys](std::string title) {

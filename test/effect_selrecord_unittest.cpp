@@ -25,7 +25,7 @@
 #include <gtest/gtest.h>
 
 #include "core/gameexe.hpp"
-#include "effects/sel_record.hpp"
+#include "long_operations/effects/sel_record.hpp"
 
 class SelRecordTest : public ::testing::Test {
  protected:
@@ -45,13 +45,13 @@ class SelRecordTest : public ::testing::Test {
 };
 
 TEST_F(SelRecordTest, GetSEL) {
-  auto record = GetSelRecord(gexe, 0);
+  auto record = lop::GetSelRecord(gexe, 0);
   EXPECT_EQ(record.ToString(),
             "(100,50,1380,1010)(0,0) 500 50 0 0 0 0 0 0 255 0");
 }
 
 TEST_F(SelRecordTest, GetSELR) {
-  auto record = GetSelRecord(gexe, 12);
+  auto record = lop::GetSelRecord(gexe, 12);
   EXPECT_EQ(record.ToString(),
             "(100,50,1380,1010)(10,50) 2000 194 0 2 2 500 0 0 255 0");
 }
@@ -59,6 +59,6 @@ TEST_F(SelRecordTest, GetSELR) {
 TEST_F(SelRecordTest, Fallback) {
   Gameexe empty;
   empty.parseLine("#SCREENSIZE_MOD=0");
-  auto record = GetSelRecord(empty, 77);
+  auto record = lop::GetSelRecord(empty, 77);
   EXPECT_EQ(record.ToString(), "(0,0,640,480)(0,0) 1000 0 0 0 0 0 0 0 255 0");
 }

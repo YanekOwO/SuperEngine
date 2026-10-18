@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -39,8 +36,9 @@
 
 #include <utf8.h>
 
-#include <algorithm>
 #include <string>
+
+namespace lop {
 
 // Timing information must stay the same between individual
 // TextoutLongOperations. rlBabel compiled games will always display one
@@ -54,11 +52,12 @@ int TextoutLongOperation::next_character_countdown_ = 0;
 
 TextoutLongOperation::TextoutLongOperation(RLMachine& machine,
                                            const std::string& utf8string)
-    : utf8_string_(utf8string),
+    : machine_(machine),
+      utf8_string_(utf8string),
       current_codepoint_(0),
       current_position_(utf8_string_.begin()),
       no_wait_(false) {
-  // Retrieve the first character (prime the loop in operator())
+  // Retrieve the first character to prime the output loop.
   string::iterator tmp = current_position_;
   if (tmp == utf8_string_.end()) {
     current_char_ = "";
@@ -203,7 +202,7 @@ bool TextoutLongOperation::DisplayOneMoreCharacter(RLMachine& machine,
       if (page.IsFull()) {
         paused = true;
         machine.PushLongOperation(std::make_shared<NewPageAfterLongop>(
-            new PauseLongOperation(machine)));
+            machine, new PauseLongOperation(machine)));
       }
 
       return false;
@@ -215,27 +214,37 @@ bool TextoutLongOperation::DisplayOneMoreCharacter(RLMachine& machine,
   }
 }
 
-bool TextoutLongOperation::operator()(RLMachine& machine) {
-  // Check to make sure we're not trying to do a textout (impossible!)
-  if (!machine.GetSystem().text().system_visible())
-    throw rlvm::Exception("Trying to Textout while TextSystem is hidden!");
-
-  if (no_wait_) {
-    return DisplayAsMuchAsWeCanThenPause(machine);
-  } else {
-    int current_time = machine.GetSystem().event().GetTicks();
-    int time_since_last_pass = current_time - time_at_last_pass_;
-    time_at_last_pass_ = current_time;
-
-    next_character_countdown_ -= time_since_last_pass;
-    if (next_character_countdown_ <= 0) {
-      bool paused = false;
-      next_character_countdown_ = EffectiveMessageSpeed(
-          machine.GetLocalConfig(), machine.GetGlobalConfig());
-      return DisplayOneMoreCharacter(machine, paused);
-    } else {
-      // Let's sleep a bit and then try again.
-      return false;
+Task<int> TextoutLongOperation::Run(WaitContext& waits) {
+  while (true) {
+    if (!machine_.GetSystem().text().system_visible())
+      throw rlvm::Exception("Trying to Textout while TextSystem is hidden!");
+    if (no_wait_) {
+      if (DisplayAsMuchAsWeCanThenPause(machine_))
+        co_return 0;
+      // A full page has pushed a pause operation. Yield to that stack frame.
+      co_await waits.Schedule();
+      continue;
     }
+
+    const int now = machine_.GetSystem().event().GetTicks();
+    next_character_countdown_ -= now - time_at_last_pass_;
+    time_at_last_pass_ = now;
+    if (next_character_countdown_ > 0) {
+      co_await waits.WaitFor(
+          std::chrono::milliseconds(next_character_countdown_), true);
+      continue;
+    }
+    next_character_countdown_ = EffectiveMessageSpeed(
+        machine_.GetLocalConfig(), machine_.GetGlobalConfig());
+    bool paused = false;
+    if (DisplayOneMoreCharacter(machine_, paused))
+      co_return 0;
+    if (paused)
+      co_await waits.Schedule();
+    else
+      co_await waits.WaitFor(
+          std::chrono::milliseconds(next_character_countdown_), true);
   }
 }
+
+}  // namespace lop

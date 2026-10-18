@@ -49,6 +49,10 @@ class EventListener;
 class RLEventListener;
 class MwndConfig;
 
+namespace lop {
+class MenuReseter;
+}
+
 struct SystemOptions {
   bool fast_forward = false;
 };
@@ -289,5 +293,5 @@ class System {
   std::shared_ptr<std::stringstream> previous_selection_;
 
   // Implementation detail which resets in_menu_;
-  friend class MenuReseter;
+  friend class lop::MenuReseter;
 };

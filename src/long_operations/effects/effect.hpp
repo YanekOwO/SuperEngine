@@ -31,10 +31,12 @@
 #include <memory>
 
 #include "core/rect.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/after_long_operation.hpp"
 
 class SDLSurface;
 class RLMachine;
+
+namespace lop {
 
 // SEL/SELR transition effects:
 //
@@ -71,7 +73,7 @@ class EffectLongOperation : public LongOperation {
   // track of the current time and calls PerformEffectForTime() until
   // time > duration_, when the default implementation simply sets
   // the current dc0 to the original dc0, then blits dc1 onto it.
-  virtual bool operator()(RLMachine& machine);
+  Task<int> Run(WaitContext& waits) override;
 
   // Accessors for which surfaces we're composing. These are public as
   // an ugly hack for ScrollOnScrollOff.cpp.
@@ -121,7 +123,8 @@ class EffectLongOperation : public LongOperation {
 // case the Blit doesn't happen.
 class BlitAfterEffectFinishes : public PerformAfterLongOperationDecorator {
  public:
-  BlitAfterEffectFinishes(LongOperation* in,
+  BlitAfterEffectFinishes(RLMachine& machine,
+                          LongOperation* in,
                           std::shared_ptr<SDLSurface> src,
                           std::shared_ptr<SDLSurface> dst,
                           const Rect& srcRect,
@@ -141,3 +144,5 @@ class BlitAfterEffectFinishes : public PerformAfterLongOperationDecorator {
 
   Rect src_rect_, dest_rect_;
 };
+
+}  // namespace lop

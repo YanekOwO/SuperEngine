@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -25,21 +22,23 @@
 //
 // -----------------------------------------------------------------------
 
-#include "effects/effect_factory.hpp"
+#include "long_operations/effects/effect_factory.hpp"
 
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 
-#include "effects/blind_effect.hpp"
-#include "effects/drawer_effect.hpp"
-#include "effects/fade_effect.hpp"
-#include "effects/sel_record.hpp"
-#include "effects/wipe_effect.hpp"
+#include "long_operations/effects/blind_effect.hpp"
+#include "long_operations/effects/drawer_effect.hpp"
+#include "long_operations/effects/fade_effect.hpp"
+#include "long_operations/effects/sel_record.hpp"
+#include "long_operations/effects/wipe_effect.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
+
+namespace lop {
 
 enum ScreenDirection {
   TOP_TO_BOTTOM = 0,  // From the top to the bottom
@@ -223,3 +222,5 @@ EffectLongOperation* EffectFactory::Build(RLMachine& machine,
       return new FadeEffect(machine, src, dst, screen_size, time);
   }
 }
+
+}  // namespace lop

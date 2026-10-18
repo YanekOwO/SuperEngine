@@ -47,7 +47,10 @@
 namespace libreallive {
 class IntMemRef;
 };  // namespace libreallive
+namespace lop {
 class LongOperation;
+class RealliveTask;
+}  // namespace lop
 class Memory;
 class RLModule;
 class RealLiveDLL;
@@ -191,11 +194,12 @@ class RLMachine {
   // Pushes a long operation onto the function stack. Control will be passed to
   // this LongOperation instead of normal bytecode passing until the
   // LongOperation gives control up.
-  virtual void PushLongOperation(std::shared_ptr<LongOperation> long_operation);
+  virtual void PushLongOperation(
+      std::shared_ptr<lop::LongOperation> long_operation);
 
   // Returns a pointer to the currently running LongOperation when the top of
   // the call stack is a LongOperation. NULL otherwise.
-  std::shared_ptr<LongOperation> CurrentLongOperation() const;
+  std::shared_ptr<lop::RealliveTask> CurrentLongOperation() const;
 
   // Increments the stack pointer in the current frame. If we have run
   // off the end of the current scenario, set the halted bit.
@@ -217,7 +221,7 @@ class RLMachine {
   // -----------------------------------------------------------------------
   // machine execution wrapper functions
   std::shared_ptr<Instruction> ReadInstruction() const;
-  bool ExecuteLongop(std::shared_ptr<LongOperation> long_op);
+  void ExecuteLongop();
   void ExecuteInstruction(std::shared_ptr<Instruction> instruction);
 
   // -----------------------------------------------------------------------

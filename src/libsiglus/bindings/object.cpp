@@ -39,8 +39,8 @@
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
 #include "libsiglus/siglus_machine.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
@@ -378,8 +378,9 @@ sr::Value WaitMovie(std::shared_ptr<GraphicsObject> object,
     const auto* data = object->GetDrawer<ObjectMovieData>();
     return !data || !data->CheckMovie();
   };
-  return MakePollingWaitFuture(vm, std::move(done), key_skip,
-                               system ? system->event_ptr().get() : nullptr);
+  return lop::MakePollingWaitFuture(
+      vm, std::move(done), key_skip,
+      system ? system->event_ptr().get() : nullptr);
 }
 
 int EventRepno(const ObjectEventHandle* h) { return -1; }
@@ -466,7 +467,7 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
       auto done = [object = h->object, repno = EventRepno(h), name = h->name] {
         return !object->IsMutatorRunningMatching(repno, name);
       };
-      return MakePollingWaitFuture(
+      return lop::MakePollingWaitFuture(
           vm, std::move(done), key_skip,
           system ? system->event_ptr().get() : nullptr);
     };
@@ -922,12 +923,11 @@ void BindObject(SiglusMachine& runtime) {
                                    ObjectRepnoEventHandle::Getter getter,
                                    ObjectRepnoEventHandle::Setter setter) {
     object.add_gc_root(repno_event_list);
-    object.prop_r(
-        name, [list = repno_event_list, name = std::string(name),
-               getter = std::move(getter),
-               setter = std::move(setter)](ObjectHandle* h) mutable {
-          return sr::Value(list.make_inst(h->object, name, getter, setter));
-        });
+    object.prop_r(name, [list = repno_event_list, name = std::string(name),
+                         getter = std::move(getter),
+                         setter = std::move(setter)](ObjectHandle* h) mutable {
+      return sr::Value(list.make_inst(h->object, name, getter, setter));
+    });
   };
   bind_repno_event_list("x_rep_eve",
                         CreateGetter<&ObjectParameter::adjustment_offsets_x>(),
@@ -997,7 +997,7 @@ void BindObject(SiglusMachine& runtime) {
         if (CreateMovie(*h->object, system, asset_scanner, std::move(args),
                         false, true, false))
           return WaitMovie(h->object, system, vm, false);
-        return MakeResolvedFuture(*vm.gc_);
+        return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   object.def(
@@ -1007,7 +1007,7 @@ void BindObject(SiglusMachine& runtime) {
         if (CreateMovie(*h->object, system, asset_scanner, std::move(args),
                         false, true, true))
           return WaitMovie(h->object, system, vm, true);
-        return MakeResolvedFuture(*vm.gc_);
+        return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   object.def("load_gan",
@@ -1207,8 +1207,9 @@ void BindObject(SiglusMachine& runtime) {
   });
   object.def("alleve_wait", [system](ObjectHandle* h, sr::VM& vm) {
     auto done = [object = h->object] { return object->CountMutators() == 0; };
-    return MakePollingWaitFuture(vm, std::move(done), false,
-                                 system ? system->event_ptr().get() : nullptr);
+    return lop::MakePollingWaitFuture(
+        vm, std::move(done), false,
+        system ? system->event_ptr().get() : nullptr);
   });
   object.def("alleve_check", [](ObjectHandle* h) -> int {
     GraphicsObject& o = *h->object;

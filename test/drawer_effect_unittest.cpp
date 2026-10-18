@@ -25,9 +25,9 @@
 #include <gtest/gtest.h>
 
 #include "core/rect.hpp"
-#include "effects/drawer_effect.hpp"
+#include "long_operations/effects/drawer_effect.hpp"
 
-using namespace DrawerEffectDetails;
+using namespace lop::DrawerEffectDetails;
 
 TEST(RotatorTest, RotateSize) {
   Size screen(1920, 1080);

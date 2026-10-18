@@ -46,7 +46,7 @@
 #include "core/gameexe.hpp"
 #include "core/haikei.hpp"
 #include "core/rlevent_listener.hpp"
-#include "effects/fade_effect.hpp"
+#include "long_operations/effects/fade_effect.hpp"
 #include "machine/general_operations.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
@@ -439,10 +439,10 @@ void Sys_MenuReturn::operator()(RLMachine& machine) {
   int scenario = machine.GetSystem().gameexe()("SEEN_MENU").ToInt();
   Jump(machine, scenario, 0);
 
-  // Now we push a LongOperation on top of the stack; when this
+  // Now we push a lop::LongOperation on top of the stack; when this
   // ends, we'll be at SEEN_MENU.
-  auto effect = std::make_shared<FadeEffect>(machine, after, before,
-                                             after->GetSize(), 1000);
+  auto effect = std::make_shared<lop::FadeEffect>(machine, after, before,
+                                                  after->GetSize(), 1000);
   machine.PushLongOperation(effect);
 }
 

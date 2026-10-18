@@ -25,12 +25,11 @@
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/game_config.hpp"
-#include "core/gameexe.hpp"
 #include "core/rect.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
+#include "long_operations/siglus_mwnd_wait.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
-#include "systems/event_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_factory.hpp"
@@ -39,14 +38,11 @@
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
 #include "vm/future.hpp"
-#include "vm/object.hpp"
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
 #include <utf8.h>
 
-#include <algorithm>
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -89,17 +85,6 @@ struct MwndObjectList {
   }
 };
 
-bool MessageNowait(System* system) {
-  return !system || system->ShouldFastForward() ||
-         EffectiveMessageNowait(system->local_config(),
-                                system->global_config());
-}
-
-bool AutoModeEnabled(System* system) {
-  return system &&
-         EffectiveAutoMode(system->local_config(), system->global_config());
-}
-
 struct KoeCallParams {
   int koe = 0;
   int character = -1;
@@ -127,134 +112,6 @@ struct KoeCallParams {
   }
 };
 
-class MwndWaitTask : public CoroutineTask {
- public:
-  enum class AfterWait { None, Paragraph, Clear };
-
-  MwndWaitTask(sr::VM& vm,
-               SiglusMachine& runtime,
-               std::shared_ptr<TextWindow> window,
-               std::shared_ptr<MwndMessageState> message_state,
-               AfterWait after_wait)
-      : CoroutineTask(
-            vm,
-            runtime.system ? runtime.system->event_ptr().get() : nullptr),
-        runtime_(runtime),
-        system_(runtime.system.get()),
-        window_(std::move(window)),
-        local_config_(runtime.local_config),
-        message_state_(std::move(message_state)),
-        after_wait_(after_wait) {}
-
-  TaskCoroutine Run() override {
-    if (!system_ || MessageNowait(system_)) {
-      FinishWait();
-      co_return 0;
-    }
-
-    PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
-
-    try {
-      auto counter = runtime_.CreateCounter();
-      counter->StartGame();
-      const int auto_time = EffectiveAutoTime(
-          local_config_, system_->global_config(), AutoModeCharCount());
-
-      while (true) {
-        if ((co_await WaitFor(std::chrono::milliseconds(5), true)) ==
-            WaitOutcome::InterruptedByInput) {
-          pause.Reset();
-          FinishWait();
-          co_return 1;
-        }
-
-        if (MessageNowait(system_)) {
-          pause.Reset();
-          FinishWait();
-          co_return 0;
-        }
-
-        if (AutoModeEnabled(system_)) {
-          if (counter->Get() >= std::max(auto_time, 0)) {
-            pause.Reset();
-            FinishWait();
-            co_return 0;
-          }
-        }
-      }
-    } catch (...) {
-      pause.Reset();
-      throw;
-    }
-  }
-
- private:
-  class PauseGuard {
-   public:
-    PauseGuard(TextSystem& text,
-               std::shared_ptr<TextWindow> window,
-               bool page_icon)
-        : text_(&text), window_(std::move(window)) {
-      text_->set_in_pause_state(true);
-      window_->ShowWaitIcon(page_icon);
-    }
-
-    ~PauseGuard() { Reset(); }
-
-    void Reset() {
-      if (!text_)
-        return;
-
-      window_->HideWaitIcon();
-      text_->set_in_pause_state(false);
-      text_ = nullptr;
-    }
-
-   private:
-    TextSystem* text_;
-    std::shared_ptr<TextWindow> window_;
-  };
-
-  void FinishWait() {
-    if (!system_ || !message_state_)
-      return;
-    switch (after_wait_) {
-      case AfterWait::None:
-        return;
-      case AfterWait::Paragraph: {
-        message_state_->MarkNovelClear(Page());
-        TextPage& page = Page();
-        page.ResetIndentation();
-        page.HardBrake();
-        return;
-      }
-      case AfterWait::Clear:
-        message_state_->MarkMessageClearReady(Page());
-        return;
-    }
-  }
-
-  int AutoModeCharCount() {
-    const int configured_count = local_config_.auto_mode_moji_cnt;
-    if (configured_count > 0)
-      return configured_count;
-
-    const int current_count = Page().number_of_chars_on_page();
-    if (!message_state_)
-      return current_count;
-    return std::max(current_count - message_state_->auto_mode_base_chars, 0);
-  }
-
-  TextPage& Page() { return system_->text().GetPageOnWindow(window_); }
-
-  SiglusMachine& runtime_;
-  System* system_;
-  std::shared_ptr<TextWindow> window_;
-  LocalConfig& local_config_;
-  std::shared_ptr<MwndMessageState> message_state_;
-  AfterWait after_wait_;
-};
-
 struct MwndHandle {
   std::shared_ptr<TextWindow> mwnd;
 };
@@ -275,15 +132,18 @@ void BindMwnd(SiglusMachine& runtime) {
   auto page = [sys, get](const MwndHandle* h) -> TextPage& {
     return sys->text().GetPageOnWindow(get(h));
   };
-  auto context = std::make_shared<PendingCoroutineTasks>();
+  auto context = std::make_shared<lop::PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
-  auto wait = [&runtime, get, context](MwndHandle* h, sr::VM& vm,
-                                       MwndWaitTask::AfterWait after_wait) {
+  auto wait = [&runtime, get, context](
+                  MwndHandle* h, sr::VM& vm,
+                  lop::SiglusMwndWaitOperation::AfterWait after_wait) {
     auto window = get(h);
     auto message_state = window->message_state();
-    auto task = std::make_unique<MwndWaitTask>(
-        vm, runtime, std::move(window), std::move(message_state), after_wait);
-    return sr::Value(context->MakeFuture(*vm.gc_, std::move(task)));
+    auto task = std::make_unique<lop::SiglusMwndWaitOperation>(
+        runtime, std::move(window), std::move(message_state), after_wait);
+    return sr::Value(context->MakeFuture(
+        vm, std::move(task),
+        runtime.system ? runtime.system->event_ptr().get() : nullptr));
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -333,8 +193,9 @@ void BindMwnd(SiglusMachine& runtime) {
       },
       sb::arg("size"));
 
-  mwnd.prop("layer", [get](MwndHandle* h) { return get(h)->sorter().second; },
-            [get](MwndHandle* h, int layer) { get(h)->set_layer(layer); });
+  mwnd.prop(
+      "layer", [get](MwndHandle* h) { return get(h)->sorter().second; },
+      [get](MwndHandle* h, int layer) { get(h)->set_layer(layer); });
 
   auto open = [get](MwndHandle* h) { get(h)->SetVisible(true); };
   auto close = [get, sys](MwndHandle* h) {
@@ -454,21 +315,23 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("msg_pp_block", [state, page](MwndHandle* h) {
     state(h)->auto_mode_base_chars = page(h).number_of_chars_on_page();
   });
-  mwnd.def("msg_wait",
-           [](MwndHandle*, sr::VM& vm) { return MakeResolvedFuture(*vm.gc_); });
+  mwnd.def("msg_wait", [](MwndHandle*, sr::VM& vm) {
+    return lop::MakeResolvedFuture(*vm.gc_);
+  });
   mwnd.def("pp", [wait](MwndHandle* h, sr::VM& vm) {
-    return wait(h, vm, MwndWaitTask::AfterWait::None);
+    return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::None);
   });
-  mwnd.def("r", [get, wait, cfg = &runtime.local_config](MwndHandle* h,
-                                                         sr::VM& vm) {
-    if (cfg->ignore_r)
-      return MakeResolvedFuture(*vm.gc_);
-    return wait(h, vm,
-                get(h)->action_on_pause() ? MwndWaitTask::AfterWait::Paragraph
-                                          : MwndWaitTask::AfterWait::Clear);
-  });
+  mwnd.def(
+      "r", [get, wait, cfg = &runtime.local_config](MwndHandle* h, sr::VM& vm) {
+        if (cfg->ignore_r)
+          return lop::MakeResolvedFuture(*vm.gc_);
+        return wait(h, vm,
+                    get(h)->action_on_pause()
+                        ? lop::SiglusMwndWaitOperation::AfterWait::Paragraph
+                        : lop::SiglusMwndWaitOperation::AfterWait::Clear);
+      });
   mwnd.def("page", [wait](MwndHandle* h, sr::VM& vm) {
-    return wait(h, vm, MwndWaitTask::AfterWait::Clear);
+    return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::Clear);
   });
   mwnd.def("indent", [page](MwndHandle* h) { page(h).SetIndentation(); });
   mwnd.def("clear_indent",
@@ -564,7 +427,7 @@ void BindMwnd(SiglusMachine& runtime) {
   };
   mwnd.def("koe", play_koe, sb::vararg);
   auto wait_koe = [sys](sr::VM& vm, bool key_skip) {
-    return MakePollingWaitFuture(
+    return lop::MakePollingWaitFuture(
         vm, [sys] { return !sys->sound().KoePlaying(); }, key_skip,
         sys->event_ptr().get());
   };

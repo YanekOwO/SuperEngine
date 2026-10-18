@@ -59,11 +59,11 @@ struct rlm_pause : public RLOpcode<> {
     std::shared_ptr<TextWindow> textWindow = text.GetMwnd(windowNum);
 
     if (textWindow->action_on_pause()) {
-      machine.PushLongOperation(std::make_shared<NewParagraphAfterLongop>(
-          new PauseLongOperation(machine)));
+      machine.PushLongOperation(std::make_shared<lop::NewParagraphAfterLongop>(
+          machine, new lop::PauseLongOperation(machine)));
     } else {
-      machine.PushLongOperation(std::make_shared<NewPageOnAllAfterLongop>(
-          new PauseLongOperation(machine)));
+      machine.PushLongOperation(std::make_shared<lop::NewPageOnAllAfterLongop>(
+          machine, new lop::PauseLongOperation(machine)));
     }
   }
 };
@@ -72,8 +72,8 @@ struct rlm_pause : public RLOpcode<> {
 // don't show up in planetarian.
 struct rlm_page : public RLOpcode<> {
   void operator()(RLMachine& machine) {
-    machine.PushLongOperation(
-        std::make_shared<NewPageAfterLongop>(new PauseLongOperation(machine)));
+    machine.PushLongOperation(std::make_shared<lop::NewPageAfterLongop>(
+        machine, new lop::PauseLongOperation(machine)));
   }
 };
 

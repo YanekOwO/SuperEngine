@@ -37,7 +37,7 @@
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
 #include "core/stage.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 #include "machine/properties.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"

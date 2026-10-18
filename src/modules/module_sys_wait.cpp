@@ -41,7 +41,7 @@ struct Sys_wait : public RLOpcode<IntConstant_T> {
 
   void operator()(RLMachine& machine, int time) {
     // Simply set the long operation
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->WaitMilliseconds(time);
     if (cancelable_)
       wait_op->BreakOnClicks();
@@ -54,7 +54,7 @@ struct Sys_wait : public RLOpcode<IntConstant_T> {
 
 struct Sys_waitkey : public RLOpcode<> {
   void operator()(RLMachine& machine) {
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->BreakOnClicks();
 
     machine.PushLongOperation(wait_op);
@@ -67,7 +67,7 @@ struct Sys_GetClick : public RLOpcode<IntReference_T, IntReference_T> {
   void operator()(RLMachine& machine,
                   IntReferenceIterator x,
                   IntReferenceIterator y) {
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->SaveClickLocation(x, y);
     machine.PushLongOperation(wait_op);
   }
@@ -82,7 +82,7 @@ struct Sys_WaitClick
                   int time,
                   IntReferenceIterator x,
                   IntReferenceIterator y) {
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->WaitMilliseconds(time);
     wait_op->SaveClickLocation(x, y);
     machine.PushLongOperation(wait_op);

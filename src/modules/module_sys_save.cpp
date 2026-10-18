@@ -38,10 +38,10 @@
 #include "core/colour.hpp"
 #include "core/memory.hpp"
 #include "core/memory_internal/serialization_global.hpp"
-#include "effects/fade_effect.hpp"
 #include "libreallive/intmemref.hpp"
+#include "long_operations/effects/fade_effect.hpp"
+#include "long_operations/long_operation.hpp"
 #include "machine/general_operations.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
@@ -327,9 +327,9 @@ struct Sys_load : public RLOpcode<IntConstant_T> {
     // smooth out transformation
     // Note: this creates new stack frame, so push in reversed order
     constexpr int duration = 250;
-    machine.PushLongOperation(std::make_shared<FadeEffect>(
+    machine.PushLongOperation(std::make_shared<lop::FadeEffect>(
         machine, after, black_screen, screen_size, duration));
-    machine.PushLongOperation(std::make_shared<FadeEffect>(
+    machine.PushLongOperation(std::make_shared<lop::FadeEffect>(
         machine, black_screen, before, screen_size, duration));
   }
 };

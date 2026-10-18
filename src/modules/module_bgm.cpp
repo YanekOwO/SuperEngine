@@ -30,9 +30,9 @@
 #include <functional>
 #include <string>
 
+#include "long_operations/long_operation.hpp"
 #include "long_operations/wait_long_operation.hpp"
 #include "machine/general_operations.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
@@ -46,17 +46,11 @@ bool BgmWait(RLMachine& machine) {
   return !machine.GetSystem().sound().BgmPlaying();
 }
 
-std::shared_ptr<LongOperation> MakeBgmWait(RLMachine& machine) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+std::shared_ptr<lop::LongOperation> MakeBgmWait(RLMachine& machine) {
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnEvent(std::bind(BgmWait, std::ref(machine)));
   return wait_op;
 }
-
-struct LongOp_bgmWait : public LongOperation {
-  bool operator()(RLMachine& machine) override {
-    return !machine.GetSystem().sound().BgmPlaying();
-  }
-};
 
 struct bgmLoop_0 : public RLOpcode<StrConstant_T> {
   void operator()(RLMachine& machine, string filename) {

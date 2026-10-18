@@ -28,7 +28,6 @@ set(RLVM_REQUIRED_LIBRARIES
 # -------------------------------------------------------------------
 file(GLOB_RECURSE RLVM_SRC_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/effects/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/encodings/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/libreallive/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/libsiglus/*.cpp"

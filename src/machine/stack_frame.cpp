@@ -28,7 +28,7 @@
 #include "machine/stack_frame.hpp"
 
 #include "libreallive/archive.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/reallive_task.hpp"
 
 #include <iostream>
 #include <typeinfo>
@@ -38,7 +38,7 @@ StackFrame::StackFrame() : pos(), frame_type() {}
 StackFrame::StackFrame(ScriptLocation it, FrameType t)
     : pos(it), frame_type(t) {}
 
-StackFrame::StackFrame(ScriptLocation it, std::shared_ptr<LongOperation> op)
+StackFrame::StackFrame(ScriptLocation it, std::shared_ptr<lop::RealliveTask> op)
     : pos(it), long_op(op), frame_type(TYPE_LONGOP) {}
 
 StackFrame::~StackFrame() = default;

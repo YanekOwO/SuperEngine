@@ -22,14 +22,14 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include "libsiglus/bindings/wipe.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "long_operations/siglus_wipe.hpp"
 
 #include "core/frame_action.hpp"
 #include "core/frame_counter.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
@@ -55,27 +55,6 @@
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
-
-void WipeCompletion::RequestFinish(int requested_result,
-                                   int minimum_total_boundaries) {
-  if (finish_after_boundary) {
-    // Input interruption takes precedence over natural completion.
-    if (requested_result != 0) {
-      result = requested_result;
-      finish_after_boundary =
-          std::min(*finish_after_boundary, regular_boundaries + 1);
-    }
-    return;
-  }
-  result = requested_result;
-  finish_after_boundary =
-      std::max(std::max(1, minimum_total_boundaries), regular_boundaries + 1);
-}
-
-bool WipeCompletion::AfterFrameActions() {
-  ++regular_boundaries;
-  return finish_after_boundary && regular_boundaries >= *finish_after_boundary;
-}
 
 constexpr int kWipeOptionMax = 8;
 
@@ -204,13 +183,6 @@ struct SiglusWipe {
   // Teardown invalidates the external hook before releasing coroutine state.
   ~SiglusWipe() { control_->owner = nullptr; }
 
-  struct ActiveWipe {
-    std::shared_ptr<sr::Promise> promise;
-    int key_wait_mode = -1;
-    bool cancelled = false;
-    WipeCompletion completion;
-  };
-
   FrameCounter MakeWipeFrameCounter(const WipeParams& params) {
     auto source = runtime_.CreateCounter();
     source->StartGame();
@@ -222,120 +194,6 @@ struct SiglusWipe {
                        std::chrono::milliseconds(params.start_time));
     return counter;
   }
-
-  struct WipeTask final : CoroutineTask {
-    WipeTask(sr::VM& vm,
-             System* system,
-             Stage* stage,
-             WipeParams params,
-             std::weak_ptr<ActiveWipe> active,
-             FrameCounter progress_counter,
-             const GlobalConfig& global_config,
-             std::function<void(int, int)> finish_stage)
-        : CoroutineTask(vm, system ? system->event_ptr().get() : nullptr),
-          system_(system),
-          stage_(stage),
-          params_(std::move(params)),
-          active_(std::move(active)),
-          progress_counter_(std::move(progress_counter)),
-          global_config_(global_config),
-          finish_stage_(std::move(finish_stage)) {}
-
-    TaskCoroutine Run() override {
-      // Polling starts after the priming interval. Start handles
-      // already-terminal wipes separately so their exact two regular
-      // frame-action boundaries do not depend on timer phase.
-      const WaitOutcome primed =
-          co_await WaitFor(kPollInterval, ShouldInterruptOnInput());
-      if (primed == WaitOutcome::InterruptedByInput) {
-        FinishStage(1);
-        co_return 1;
-      }
-
-      while (true) {
-        if (IsCancelled())
-          co_return CurrentResult();
-
-        if (!system_ || !stage_) {
-          FinishStage(0);
-          co_return 0;
-        }
-
-        const bool fast_forward = system_->ShouldFastForward();
-        if (fast_forward && params_.wait_flag) {
-          // Legacy's wipe-wait process explicitly ends a skipped wipe before
-          // its next regular traversal. StartPrepared pre-schedules this case
-          // when skipping is already active; this also handles it becoming
-          // active later.
-          FinishStage(0, 1);
-          co_return 0;
-        }
-
-        // Non-waiting wipes follow the game delta supplied by the machine,
-        // including changes to fast-forward while a wipe is in progress.
-        const float progress = progress_counter_.ReadFrame();
-        if (progress_counter_.IsFinished()) {
-          FinishStage(0, 3);
-          co_return 0;
-        }
-
-        stage_->SetTransitionRenderAlpha(progress, 1.0 - progress);
-
-        const WaitOutcome outcome =
-            co_await WaitFor(kPollInterval, ShouldInterruptOnInput());
-        if (outcome == WaitOutcome::InterruptedByInput) {
-          FinishStage(1);
-          co_return 1;
-        }
-      }
-    }
-
-   private:
-    static constexpr std::chrono::milliseconds kPollInterval =
-        std::chrono::milliseconds(5);
-
-    bool IsCancelled() const {
-      std::shared_ptr<ActiveWipe> active = active_.lock();
-      if (!active)
-        return true;
-      if (active->cancelled)
-        return true;
-      return active->promise && active->promise->HasResult();
-    }
-
-    int CurrentResult() const {
-      if (std::shared_ptr<ActiveWipe> active = active_.lock())
-        return active->completion.result;
-      return 0;
-    }
-
-    bool ShouldInterruptOnInput() const {
-      std::shared_ptr<ActiveWipe> active = active_.lock();
-      if (!active)
-        return false;
-
-      const int key_wait_mode = active->key_wait_mode;
-      if (key_wait_mode == 0)
-        return false;
-      if (key_wait_mode == 1)
-        return true;
-
-      return global_config_.system.skip_wipe_anime;
-    }
-
-    void FinishStage(int result, int regular_boundaries = 1) {
-      if (finish_stage_)
-        finish_stage_(result, regular_boundaries);
-    }
-
-    System* system_ = nullptr;
-    Stage* stage_ = nullptr;
-    WipeParams params_;
-    std::weak_ptr<ActiveWipe> active_;
-    FrameCounter progress_counter_;
-    const GlobalConfig& global_config_;
-    std::function<void(int, int)> finish_stage_;
-  };
 
   static void CancelObjectActions(
       const std::shared_ptr<GraphicsObject>& object) {
@@ -379,7 +237,7 @@ struct SiglusWipe {
       EndCurrent(active_->completion.result);
   }
 
-  void ScheduleFinishActive(const std::shared_ptr<ActiveWipe>& active,
+  void ScheduleFinishActive(const std::shared_ptr<lop::SiglusWipeState>& active,
                             int result,
                             int regular_boundaries = 1) {
     if (!active || active_ != active || active->cancelled)
@@ -390,7 +248,7 @@ struct SiglusWipe {
   sr::Value Start(sr::VM& vm, WipeParams params) {
     EndCurrent(0);
     if (!stage_)
-      return MakeResolvedFuture(*vm.gc_);
+      return lop::MakeResolvedFuture(*vm.gc_);
 
     // Wipe clones old foreground actions into Next. Cancel only allocations
     // displaced by the swap, after their transition copies have been made.
@@ -411,10 +269,10 @@ struct SiglusWipe {
 
     if (!system_ || global_config_.system.disable_wipe_anime) {
       ClearWipeState();
-      return MakeResolvedFuture(*vm.gc_);
+      return lop::MakeResolvedFuture(*vm.gc_);
     }
 
-    auto active = std::make_shared<ActiveWipe>();
+    auto active = std::make_shared<lop::SiglusWipeState>();
     active->promise = std::make_shared<sr::Promise>();
     active->key_wait_mode = params.wait_flag ? params.key_wait_mode : -1;
     active_ = active;
@@ -436,27 +294,22 @@ struct SiglusWipe {
       ScheduleFinishActive(active, 0, 1);
     }
 
-    std::weak_ptr<ActiveWipe> weak_active = active;
-    auto task = std::make_unique<WipeTask>(
-        vm, system_, stage_, std::move(params), active,
-        std::move(progress_counter), global_config_,
-        [control = control_, weak_active](int result, int regular_boundaries) {
-          if (control->owner) {
-            control->owner->ScheduleFinishActive(weak_active.lock(), result,
-                                                 regular_boundaries);
-          }
-        });
-    FutureBackedCoroutineTask pending(std::move(task));
+    auto task = std::make_unique<lop::SiglusWipeOperation>(
+        system_, stage_, params.wait_flag, active, std::move(progress_counter),
+        global_config_);
+    lop::FutureBackedCoroutineTask pending(vm, std::move(task),
+                                           system_->event_ptr().get());
     pending.Start();
     sr::Future* future = pending_.MakeFuture(*vm.gc_, std::move(pending));
     vm.TrackPendingPromise(future->promise);
 
-    return wait_flag ? MakeFutureForActive(vm) : MakeResolvedFuture(*vm.gc_);
+    return wait_flag ? MakeFutureForActive(vm)
+                     : lop::MakeResolvedFuture(*vm.gc_);
   }
 
   sr::Value Wait(sr::VM& vm, int key_wait_mode) {
     if (!IsActive())
-      return MakeResolvedFuture(*vm.gc_);
+      return lop::MakeResolvedFuture(*vm.gc_);
     active_->key_wait_mode = key_wait_mode;
     return MakeFutureForActive(vm);
   }
@@ -487,8 +340,8 @@ struct SiglusWipe {
   Stage* stage_ = nullptr;
   const GlobalConfig& global_config_;
   std::shared_ptr<Control> control_;
-  std::shared_ptr<ActiveWipe> active_;
-  PendingCoroutineTasks pending_;
+  std::shared_ptr<lop::SiglusWipeState> active_;
+  lop::PendingCoroutineTasks pending_;
 };
 
 void BindWipe(SiglusMachine& runtime) {

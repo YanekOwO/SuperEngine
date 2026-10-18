@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2013 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,9 +28,13 @@
 #include <vector>
 
 #include "core/button_action_table.hpp"
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 
 class GraphicsObject;
+
+class RLMachine;
+
+namespace lop {
 
 // LongOperation that uses GraphicsObjects to present a choice to the
 // user. This doesn't derive from SelectLongOperation because these commands
@@ -45,7 +50,7 @@ class ButtonObjectSelectLongOperation : public LongOperation {
   virtual void OnEvent(std::shared_ptr<Event> event) override;
 
   // Overridden from LongOperation:
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  private:
   enum class ButtonState { Normal, Hit, Push };
@@ -82,3 +87,5 @@ class ButtonObjectSelectLongOperation : public LongOperation {
   // mousedown and mouseup in the same button, we consider that a mouse press.
   GraphicsObject* currently_pressed_button_;
 };
+
+}  // namespace lop

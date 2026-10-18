@@ -34,8 +34,8 @@
 #include "core/haikei.hpp"
 #include "core/hik.hpp"
 #include "core/stage.hpp"
-#include "effects/effect.hpp"
-#include "effects/effect_factory.hpp"
+#include "long_operations/effects/effect.hpp"
+#include "long_operations/effects/effect_factory.hpp"
 #include "machine/general_operations.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rloperation.hpp"
@@ -78,8 +78,8 @@ struct bgrLoadHaikei_blank : public RLOpcode<IntConstant_T> {
 
     std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
 
-    std::shared_ptr<LongOperation> effect(
-        EffectFactory::BuildFromSEL(machine, after, before, sel));
+    std::shared_ptr<lop::LongOperation> effect(
+        lop::EffectFactory::BuildFromSEL(machine, after, before, sel));
     machine.PushLongOperation(effect);
   }
 };
@@ -125,8 +125,8 @@ struct bgrLoadHaikei_main : RLOpcode<StrConstant_T, IntConstant_T> {
 
       std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
 
-      std::shared_ptr<LongOperation> effect(
-          EffectFactory::BuildFromSEL(machine, after, before, sel));
+      std::shared_ptr<lop::LongOperation> effect(
+          lop::EffectFactory::BuildFromSEL(machine, after, before, sel));
       machine.PushLongOperation(effect);
     }
   }
@@ -243,8 +243,8 @@ struct bgrMulti_1
       machine.stage().Wipe();
 
     std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
-    std::shared_ptr<LongOperation> effect(
-        EffectFactory::BuildFromSEL(machine, after, before, effectNum));
+    std::shared_ptr<lop::LongOperation> effect(
+        lop::EffectFactory::BuildFromSEL(machine, after, before, effectNum));
     machine.PushLongOperation(effect);
   }
 };

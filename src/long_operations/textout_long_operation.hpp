@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -29,9 +26,11 @@
 
 #include <string>
 
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 
 class RLMachine;
+
+namespace lop {
 
 class TextoutLongOperation : public LongOperation {
  public:
@@ -44,9 +43,11 @@ class TextoutLongOperation : public LongOperation {
   void OnEvent(std::shared_ptr<Event> event) override;
 
   // Overriden from LongOperation:
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  private:
+  RLMachine& machine_;
+
   bool OnMouseButtonStateChanged(MouseButton mouseButton, bool pressed);
   bool OnKeyStateChanged(KeyCode keyCode, bool pressed);
 
@@ -72,3 +73,5 @@ class TextoutLongOperation : public LongOperation {
   // A countdown in milliseconds until we display the next character.
   static int next_character_countdown_;
 };
+
+}  // namespace lop

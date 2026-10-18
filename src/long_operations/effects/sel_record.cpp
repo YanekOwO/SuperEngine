@@ -22,13 +22,15 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include "effects/sel_record.hpp"
+#include "long_operations/effects/sel_record.hpp"
 
 #include "core/gameexe.hpp"
 #include "utilities/graphics.hpp"
 
 #include <sstream>
 #include <stdexcept>
+
+namespace lop {
 
 selRecord::selRecord() {}
 
@@ -98,3 +100,5 @@ selRecord GetSelRecord(Gameexe& gexe, int selNum) {
 
   return result;
 }
+
+}  // namespace lop

@@ -33,7 +33,9 @@
 
 #include <memory>
 
-class LongOperation;
+namespace lop {
+class RealliveTask;
+}
 
 // -----------------------------------------------------------------------
 // Stack Frame
@@ -64,13 +66,13 @@ struct StackFrame {
   StackFrame(ScriptLocation it, FrameType t);
 
   // Constructor for frames that are just LongOperations.
-  StackFrame(ScriptLocation it, std::shared_ptr<LongOperation> op);
+  StackFrame(ScriptLocation it, std::shared_ptr<lop::RealliveTask> op);
 
   ~StackFrame();
 
   ScriptLocation pos;
-  // Pointer to the owned LongOperation if this is of TYPE_LONGOP.
-  std::shared_ptr<LongOperation> long_op;
+  // Copies of this frame share one operation and its suspended coroutine.
+  std::shared_ptr<lop::RealliveTask> long_op;
 
   FrameType frame_type;
 

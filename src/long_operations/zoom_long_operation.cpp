@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -28,10 +25,12 @@
 #include "long_operations/zoom_long_operation.hpp"
 
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
 #include "systems/event_system.hpp"
+#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // ZoomLongOperation
@@ -45,7 +44,8 @@ ZoomLongOperation::ZoomLongOperation(
     const Rect& trect,
     const Rect& drect,
     const int time)
-    : orig_surface_(origSurface),
+    : machine_(machine),
+      orig_surface_(origSurface),
       src_surface_(srcSurface),
       frect_(frect),
       trect_(trect),
@@ -55,30 +55,34 @@ ZoomLongOperation::ZoomLongOperation(
 
 ZoomLongOperation::~ZoomLongOperation() {}
 
-bool ZoomLongOperation::operator()(RLMachine& machine) {
-  unsigned int time = machine.GetSystem().event().GetTicks();
-  unsigned int currentFrame = time - start_time_;
+Task<int> ZoomLongOperation::Run(WaitContext& waits) {
+  for (;;) {
+    unsigned int time = machine_.GetSystem().event().GetTicks();
+    unsigned int currentFrame = time - start_time_;
 
-  bool fastForward = machine.GetSystem().ShouldFastForward();
+    bool fastForward = machine_.GetSystem().ShouldFastForward();
 
-  if (currentFrame >= duration_ || fastForward) {
-    return true;
-  } else {
-    // Render to the screen
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-    graphics.RenderCustomFrame([&]() {
-      // First blit the original dc0 to the screen
-      orig_surface_->RenderToScreen(orig_surface_->GetRect(),
-                                    orig_surface_->GetRect(), 255);
+    if (currentFrame >= duration_ || fastForward) {
+      co_return 0;
+    } else {
+      // Render to the screen
+      GraphicsSystem& graphics = machine_.GetSystem().graphics();
+      graphics.RenderCustomFrame([&]() {
+        // First blit the original dc0 to the screen
+        orig_surface_->RenderToScreen(orig_surface_->GetRect(),
+                                      orig_surface_->GetRect(), 255);
 
-      // figure out the new coordinates for the zoom.
-      float ratio = currentFrame / float(duration_);
-      Point zPt =
-          frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
-      Size zSize = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
+        // figure out the new coordinates for the zoom.
+        float ratio = currentFrame / float(duration_);
+        Point zPt =
+            frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
+        Size zSize = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
 
-      src_surface_->RenderToScreen(Rect(zPt, zSize), drect_, 255);
-    });
-    return false;
+        src_surface_->RenderToScreen(Rect(zPt, zSize), drect_, 255);
+      });
+      co_await waits.Schedule();
+    }
   }
 }
+
+}  // namespace lop

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -8,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2006 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,9 +25,11 @@
 
 #pragma once
 
-#include "effects/effect.hpp"
+#include "long_operations/effects/effect.hpp"
 
 // Simple fade in.
+namespace lop {
+
 class FadeEffect : public EffectLongOperation {
  public:
   FadeEffect(RLMachine& machine,
@@ -45,3 +45,5 @@ class FadeEffect : public EffectLongOperation {
  private:
   virtual bool BlitOriginalImage() const final;
 };
+
+}  // namespace lop

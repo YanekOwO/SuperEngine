@@ -30,9 +30,9 @@
 #include <functional>
 #include <string>
 
+#include "long_operations/long_operation.hpp"
 #include "long_operations/wait_long_operation.hpp"
 #include "machine/general_operations.hpp"
-#include "machine/long_operation.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 
@@ -43,7 +43,7 @@ bool NoLongerPlaying(RLMachine& machine, int channel) {
 }
 
 void addPcmWait(RLMachine& machine, int channel) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnEvent(std::bind(NoLongerPlaying, std::ref(machine), channel));
   machine.PushLongOperation(wait_op);
 }

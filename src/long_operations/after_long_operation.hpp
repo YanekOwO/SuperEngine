@@ -1,11 +1,10 @@
 // -----------------------------------------------------------------------
 //
-// This file is part of RLVM, a RealLive virtual machine clone.
+// This file is part of RLVM
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2024 Serina Sakurai
-// Copyright (C) 2009 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,27 +23,27 @@
 
 #pragma once
 
-#include "core/rect.hpp"
+#include "long_operations/long_operation.hpp"
 
-#include <string>
-#include <vector>
+#include <memory>
 
-class Gameexe;
+class RLMachine;
 
-struct selRecord {
-  Rect rect;
-  Point point;
-  int duration;
-  int dsp;
-  int direction;
-  int op[5];
-  int transparency;
-  int lv;
+namespace lop {
 
-  selRecord();
-  explicit selRecord(std::vector<int> selEffect);
+// Owns a child operation and performs an action after its coroutine completes.
+class PerformAfterLongOperationDecorator : public LongOperation {
+ public:
+  PerformAfterLongOperationDecorator(RLMachine& machine,
+                                     LongOperation* operation);
+  ~PerformAfterLongOperationDecorator() override = default;
+  void OnEvent(std::shared_ptr<Event> event) override;
+  Task<int> Run(WaitContext& waits) override;
 
-  std::string ToString() const;
+ private:
+  virtual void PerformAfterLongOperation(RLMachine& machine) = 0;
+  RLMachine& machine_;
+  std::unique_ptr<LongOperation> operation_;
 };
 
-selRecord GetSelRecord(Gameexe& gexe, int selNum);
+}  // namespace lop

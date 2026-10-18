@@ -26,12 +26,13 @@
 // -----------------------------------------------------------------------
 
 #include "modules/module_gan.hpp"
+#include "long_operations/reallive_operations.hpp"
 
 #include "core/object.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/stage.hpp"
+#include "long_operations/long_operation.hpp"
 #include "long_operations/wait_long_operation.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/properties.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rlmodule.hpp"
@@ -66,69 +67,10 @@ struct objWaitAll : public RLOpcode<> {
   }
 
   void operator()(RLMachine& machine) {
-    auto wait_op = std::make_shared<WaitLongOperation>(machine);
+    auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
     wait_op->BreakOnEvent(std::bind(WaitUntilDone, std::ref(machine)));
     machine.PushLongOperation(wait_op);
   }
-};
-
-// Save the screen update mode and change it to automatic when entering a
-// blocking animation, restoring when we leave.
-//
-// When I actually started paying attention to DrawManual()/DrawAuto(), I
-// stopped forcing a refresh of the screen on each and instead obeyed the
-// DCScreenUpdateMode, I broke the OP of Kanon.
-//
-// I don't know if this is the correct solution. If this breaks things, the
-// solution is that things like AnmGraphicsObjectData force screen refreshes,
-// ignoring whatever the current screen update mode is.
-struct WaitForGanToFinish : public LongOperation {
-  WaitForGanToFinish(GraphicsSystem& system, int fgbg, int parent, int inBuf)
-      : system_(system),
-        mode_(system_.screen_update_mode()),
-        fgbg_(fgbg),
-        parent_(parent),
-        buf_(inBuf) {
-    system_.SetScreenUpdateMode(GraphicsSystem::SCREENUPDATEMODE_AUTOMATIC);
-  }
-
-  bool operator()(RLMachine& machine) override {
-    GraphicsObject& obj = GetObject(machine);
-    bool done = true;
-
-    if (obj.HasDrawer()) {
-      const GraphicsObjectData& data = obj.GetDrawer();
-      if (data.IsAnimation())
-        done = !data.GetAnimator()->IsPlaying();
-    }
-
-    if (done) {
-      // Restore whatever mode we were in before.
-      system_.SetScreenUpdateMode(mode_);
-    }
-
-    return done;
-  }
-
-  GraphicsObject& GetObject(RLMachine& machine) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-    Stage& stage = machine.stage();
-
-    if (parent_ != -1) {
-      GraphicsObject& parent = stage.GetObject(fgbg_, parent_);
-      EnsureIsParentObject(parent, graphics.GetObjectLayerSize());
-      return parent.TouchChild(buf_);
-    } else {
-      return stage.GetObject(fgbg_, buf_);
-    }
-  }
-
-  GraphicsSystem& system_;
-  GraphicsSystem::DCScreenUpdateMode mode_;
-
-  int fgbg_;
-  int parent_;
-  int buf_;
 };
 
 struct ganPlay : public RLOpcode<IntConstant_T, IntConstant_T> {
@@ -156,8 +98,8 @@ struct ganPlay : public RLOpcode<IntConstant_T, IntConstant_T> {
           if (!GetProperty(P_PARENTOBJ, parent_object))
             parent_object = -1;
 
-          machine.PushLongOperation(std::make_shared<WaitForGanToFinish>(
-              machine.GetSystem().graphics(), fgbg, parent_object, buf));
+          machine.PushLongOperation(std::make_shared<lop::WaitForGanToFinish>(
+              machine, fgbg, parent_object, buf));
         }
       }
     }
@@ -174,8 +116,8 @@ struct ganWait : public RLOpcode<IntConstant_T> {
     if (!GetProperty(P_PARENTOBJ, parent_object))
       parent_object = -1;
 
-    machine.PushLongOperation(std::make_shared<WaitForGanToFinish>(
-        machine.GetSystem().graphics(), fgbg, parent_object, buf));
+    machine.PushLongOperation(std::make_shared<lop::WaitForGanToFinish>(
+        machine, fgbg, parent_object, buf));
   }
 };
 

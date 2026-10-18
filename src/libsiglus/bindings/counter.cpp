@@ -24,7 +24,7 @@
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/counter.hpp"
-#include "libsiglus/bindings/wait_helpers.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
@@ -97,14 +97,14 @@ void BindCounter(SiglusMachine& runtime) {
     auto check = [counter = *h, value] {
       return counter.Get()->Get() >= value;
     };
-    return MakePollingWaitFuture(vm, check, false, event);
+    return lop::MakePollingWaitFuture(vm, check, false, event);
   });
   counter_class.def("wait_key",
                     [event](CounterHandle* h, sr::VM& vm, int value) {
                       auto check = [counter = *h, value] {
                         return counter.Get()->Get() >= value;
                       };
-                      return MakePollingWaitFuture(vm, check, true, event);
+                      return lop::MakePollingWaitFuture(vm, check, true, event);
                     });
   counter_class.def("check_value", [](const CounterHandle* h, int value) {
     return h->Get()->Get() >= value ? 1 : 0;

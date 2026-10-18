@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -27,18 +24,17 @@
 
 #include "long_operations/pause_long_operation.hpp"
 
-#include <vector>
-
-#include "core/gameexe.hpp"
 #include "core/rlevent_listener.hpp"
 #include "machine/rlmachine.hpp"
+#include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
-#include "systems/event_system.hpp"
+
+namespace lop {
 
 // -----------------------------------------------------------------------
 // PauseLongOperation
@@ -191,25 +187,19 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
   return handled;
 }
 
-bool PauseLongOperation::operator()(RLMachine& machine) {
-  // Check to see if we're done because of the auto mode timer
-  if (EffectiveAutoMode(machine_.GetLocalConfig(),
-                        machine_.GetGlobalConfig())) {
-    if (AutomodeTimerFired() && !machine_.GetSystem().sound().KoePlaying())
+Task<int> PauseLongOperation::Run(WaitContext& waits) {
+  while (!is_done_) {
+    if (EffectiveAutoMode(machine_.GetLocalConfig(),
+                          machine_.GetGlobalConfig()) &&
+        AutomodeTimerFired() && !machine_.GetSystem().sound().KoePlaying())
       is_done_ = true;
+    if (machine_.GetSystem().ShouldFastForward())
+      is_done_ = true;
+    if (!is_done_)
+      co_await waits.Schedule();
   }
-
-  // Check to see if we're done because we're being asked to pause on a piece
-  // of text we've already hit.
-  if (machine_.GetSystem().ShouldFastForward())
-    is_done_ = true;
-
-  if (is_done_) {
-    // Stop all voices before continuing.
-    machine_.GetSystem().sound().KoeStop();
-  }
-
-  return is_done_;
+  machine_.GetSystem().sound().KoeStop();
+  co_return 0;
 }
 
 bool PauseLongOperation::AutomodeTimerFired() {
@@ -231,8 +221,8 @@ bool PauseLongOperation::AutomodeTimerFired() {
 // -----------------------------------------------------------------------
 // NewPageAfterLongop
 // -----------------------------------------------------------------------
-NewPageAfterLongop::NewPageAfterLongop(LongOperation* inOp)
-    : PerformAfterLongOperationDecorator(inOp) {}
+NewPageAfterLongop::NewPageAfterLongop(RLMachine& machine, LongOperation* inOp)
+    : PerformAfterLongOperationDecorator(machine, inOp) {}
 
 NewPageAfterLongop::~NewPageAfterLongop() {}
 
@@ -246,8 +236,9 @@ void NewPageAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
 // -----------------------------------------------------------------------
 // NewPageOnAllAfterLongop
 // -----------------------------------------------------------------------
-NewPageOnAllAfterLongop::NewPageOnAllAfterLongop(LongOperation* inOp)
-    : PerformAfterLongOperationDecorator(inOp) {}
+NewPageOnAllAfterLongop::NewPageOnAllAfterLongop(RLMachine& machine,
+                                                 LongOperation* inOp)
+    : PerformAfterLongOperationDecorator(machine, inOp) {}
 
 NewPageOnAllAfterLongop::~NewPageOnAllAfterLongop() {}
 
@@ -263,8 +254,9 @@ void NewPageOnAllAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
 // -----------------------------------------------------------------------
 // NewParagraphAfterLongop
 // -----------------------------------------------------------------------
-NewParagraphAfterLongop::NewParagraphAfterLongop(LongOperation* inOp)
-    : PerformAfterLongOperationDecorator(inOp) {}
+NewParagraphAfterLongop::NewParagraphAfterLongop(RLMachine& machine,
+                                                 LongOperation* inOp)
+    : PerformAfterLongOperationDecorator(machine, inOp) {}
 
 NewParagraphAfterLongop::~NewParagraphAfterLongop() {}
 
@@ -273,3 +265,5 @@ void NewParagraphAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
   page.ResetIndentation();
   page.HardBrake();
 }
+
+}  // namespace lop

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -28,10 +25,14 @@
 
 #include <functional>
 
-#include "machine/long_operation.hpp"
+#include "long_operations/long_operation.hpp"
 #include "machine/reference.hpp"
 
 class Point;
+
+class RLMachine;
+
+namespace lop {
 
 // Pauses interpretation, waiting for input, an event or a user click.
 class WaitLongOperation : public LongOperation {
@@ -59,7 +60,7 @@ class WaitLongOperation : public LongOperation {
   void RecordMouseCursorPosition();
 
   // Overridden from LongOperation:
-  virtual bool operator()(RLMachine& machine) override;
+  Task<int> Run(WaitContext& waits) override;
 
  private:
   void OnMouseMotion(const Point&);
@@ -86,3 +87,5 @@ class WaitLongOperation : public LongOperation {
   IntReferenceIterator x_;
   IntReferenceIterator y_;
 };
+
+}  // namespace lop

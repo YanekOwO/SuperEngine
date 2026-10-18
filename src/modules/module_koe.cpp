@@ -29,9 +29,9 @@
 
 #include <functional>
 
+#include "long_operations/long_operation.hpp"
 #include "long_operations/wait_long_operation.hpp"
 #include "machine/general_operations.hpp"
-#include "machine/long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/default_value_t.hpp"
@@ -51,7 +51,7 @@ bool koeIsPlaying(RLMachine& machine) {
 }
 
 void addKoeWaitC(RLMachine& machine) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnClicks();
   wait_op->BreakOnEvent(std::bind(koeIsPlaying, std::ref(machine)));
 
@@ -59,7 +59,7 @@ void addKoeWaitC(RLMachine& machine) {
 }
 
 void addKoeWait(RLMachine& machine) {
-  auto wait_op = std::make_shared<WaitLongOperation>(machine);
+  auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
   wait_op->BreakOnEvent(std::bind(koeIsPlaying, std::ref(machine)));
 
   machine.PushLongOperation(wait_op);

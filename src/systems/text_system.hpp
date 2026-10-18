@@ -28,7 +28,6 @@
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
 #include "core/mwnd_config.hpp"
-#include "machine/long_operation.hpp"
 
 #include <boost/serialization/split_member.hpp>
 #include <boost/serialization/string.hpp>
@@ -336,9 +335,3 @@ class TextSystem final : public EventListener {
 // text is in CP932 encoding, and will need to be generalized when we try to
 // support other hacks on top of cp932.
 std::string parseNames(MemoryHandle& memory, const std::string& input);
-
-// LongOperation which just calls text().set_system_visible(true) and removes
-// itself from the callstack.
-struct RestoreTextSystemVisibility : public LongOperation {
-  virtual bool operator()(RLMachine& machine) override;
-};
