@@ -1020,17 +1020,32 @@ void BindObject(SiglusMachine& runtime) {
         StartGan(*h->object, std::move(args));
       },
       sb::vararg);
-  object.def("create_rect",
-             [](ObjectHandle* h, int left, int top, int right, int down, int r,
-                int g, int b, int alpha, int display) {
-               h->object->Reset();
-               auto& param = h->object->Param();
-               param.blend_colour = RGBAColour(r, g, b, alpha);
-               h->object->SetDrawer(std::make_unique<ColourFilterObjectData>(
-                   Rect::GRP(left, top, right, down)));
-               h->object->ClearFilePath();
-               param.SetVisible(display);
-             });
+  object.def(
+      "create_rect",
+      [](ObjectHandle* h, std::vector<sr::Value> raw_args) {
+        if (raw_args.size() != 8 && raw_args.size() != 9 &&
+            raw_args.size() != 11) {
+          throw sr::RuntimeError(
+              "Object.create_rect expects 8, 9, or 11 arguments");
+        }
+        std::vector<int> args;
+        args.reserve(raw_args.size());
+        for (const auto& value : raw_args)
+          args.push_back(RequireInt(value, "Object.create_rect argument"));
+
+        h->object->Reset();
+        auto& param = h->object->Param();
+        param.blend_colour = RGBAColour(args[4], args[5], args[6], args[7]);
+        h->object->SetDrawer(std::make_unique<ColourFilterObjectData>(
+            Rect::GRP(args[0], args[1], args[2], args[3])));
+        if (args.size() >= 9)
+          param.SetVisible(args[8]);
+        if (args.size() == 11) {
+          param.SetX(args[9]);
+          param.SetY(args[10]);
+        }
+      },
+      sb::vararg);
   object.def("exist_type",
              [](ObjectHandle* h) { return h->object->HasDrawer() ? 1 : 0; });
   object.def(

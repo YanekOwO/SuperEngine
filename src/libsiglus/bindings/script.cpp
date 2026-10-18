@@ -158,7 +158,7 @@ void BindScript(SiglusMachine& rt) {
   add_bool(&LocalConfig::bgmfade, "start_bgmfade", "end_bgmfade");
   add_flag(&LocalConfig::wait_display_vsync_off, "set_vsync_wait_off_flag",
            "get_vsync_wait_off_flag");
-  add_bool(&LocalConfig::skip_trigger, {}, {}, "set_skip_trigger");
+  add_bool(&LocalConfig::skip_trigger, "set_skip_trigger", {});
   add_bool(&LocalConfig::ignore_r, "ignore_r_on", "ignore_r_off");
   add_int(&LocalConfig::cursor_no, "set_cursor_no", "get_cursor_no");
   add_flag(&LocalConfig::time_stop, "set_time_stop_flag",
