@@ -89,8 +89,12 @@ std::optional<Rect> TextLayout::PlaceRubyText(std::string_view ruby) {
     return std::nullopt;
   }
 
-  int ruby_end = insertion_x - x_spacing;
   int ruby_begin = std::exchange(ruby_begin_x, std::nullopt).value();
+  // Empty annotations close the span without drawing any ruby.
+  if (ruby.empty())
+    return std::nullopt;
+
+  int ruby_end = insertion_x - x_spacing;
   if (ruby_begin > ruby_end) {
     // TODO: this is not a reliable way of detecting line break
     logger(Severity::Error)

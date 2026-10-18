@@ -156,3 +156,35 @@ TEST_F(TextLayoutEngineTest, RubySpanCoversBaseTextAndIsConsumed) {
   EXPECT_EQ(*area, Rect(Point(0, 0), Point(70, 15)));
   EXPECT_FALSE(engine.ruby_begin_x.has_value());
 }
+
+TEST_F(TextLayoutEngineTest, EmptyRubyConsumesSpanWithoutPlacement) {
+  engine.ruby_font_size = 10;
+  engine.reserve_ruby_space = false;
+
+  for (int spacing : {0, 2}) {
+    for (bool has_base_text : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "spacing=" << spacing
+                                        << ", has_base_text=" << has_base_text);
+      engine.x_spacing = spacing;
+      engine.Reset();
+      engine.RubyBegin();
+      if (has_base_text) {
+        ASSERT_TRUE(engine.PlaceCharacter('x', std::nullopt, {}));
+      }
+
+      const Point insertion = engine.GetInsertionPoint();
+      EXPECT_FALSE(engine.PlaceRubyText(""));
+      EXPECT_FALSE(engine.ruby_begin_x.has_value());
+      EXPECT_EQ(engine.GetInsertionPoint(), insertion);
+
+      engine.RubyBegin();
+      ASSERT_TRUE(engine.PlaceCharacter('x', std::nullopt, {}));
+      const std::optional<Rect> area = engine.PlaceRubyText("ruby");
+      ASSERT_TRUE(area);
+      EXPECT_EQ(area->origin(),
+                Point(insertion.x(), insertion.y() - engine.ruby_font_size));
+      EXPECT_GT(area->size().width(), 0);
+      EXPECT_FALSE(engine.ruby_begin_x.has_value());
+    }
+  }
+}
