@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -127,8 +128,20 @@ void BindIntSequenceMethods(sb::class_<SiglusIntListFacade>& ilist) {
       sb::arg("idx"), sb::vararg);
   ilist.def("resize", &SiglusIntListFacade::resize, sb::arg("size"));
   ilist.def("size", &SiglusIntListFacade::size);
-  ilist.def("fill", &SiglusIntListFacade::fill, sb::arg("begin"),
-            sb::arg("end"), sb::arg("val"));
+  ilist.def(
+      "fill",
+      +[](SiglusIntListFacade* self, Fiber& fib, int begin, int end,
+          int value) {
+        // Siglus includes the end index; the facade uses a half-open range.
+        if (begin > end)
+          return;
+        const int size = self->size(fib);
+        if (end >= size)
+          throw std::out_of_range(std::format(
+              "integer list fill end {} out of range for size {}", end, size));
+        self->fill(fib, begin, end + 1, value);
+      },
+      sb::arg("begin"), sb::arg("end"), sb::arg("val") = 0);
 }
 
 void BindStrSequenceMethods(sb::class_<SiglusStrListFacade>& slist) {

@@ -23,31 +23,23 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
-#include "libsiglus/bindings/bootstrap.hpp"
 #include "libsiglus/bindings/util.hpp"
-
-#include <format>
-#include <utility>
 
 namespace libsiglus::binding {
 
 void BindScreen(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
 
-  std::string src = std::format(kLazyArrayClass, "__SiglusLazyArray");
-  src += R"(
+  Execute(vm, R"(
 class Screen {
   fn __init__(self){
     self.quake = ScreenQuakeArray();
-    self.effect = nil;
-    try{ self.effect = __SiglusLazyArray(Effect); }
-    catch(e){ print("Siglus screen.effect binding unavailable:", e); }
+    self.effect = ScreenEffectArray();
   }
 }
 
 screen = Screen();
-)";
-  Execute(vm, std::move(src));
+)");
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "1_screen", BindScreen)

@@ -36,6 +36,7 @@ Stage::Stage(int object_size, int effect_size, int group_size, int quake_size)
     : objects(object_size),
       groups(group_size),
       effects(effect_size),
+      screen_effects(effect_size),
       quakes(quake_size),
       saved_foreground_objects(object_size),
       saved_background_objects(object_size) {}
@@ -46,6 +47,9 @@ void Stage::Reset() {
   objects.Clear();
   groups.Clear();
   effects.Clear();
+  for (auto& effect : screen_effects)
+    if (effect)
+      effect->Reset();
   quakes.Clear();
   ClearTransitionRenderState();
 }
@@ -268,6 +272,21 @@ void Stage::ResizeEffects(int layer, int size) {
   EffectsForLayer(layer).resize(static_cast<size_t>(size));
 }
 
+std::shared_ptr<Effect> Stage::GetScreenEffect(int index) {
+  if (index < 0)
+    throw std::out_of_range("Negative screen effect index");
+  auto& effect = screen_effects.at(static_cast<size_t>(index));
+  if (!effect)
+    effect = std::make_shared<Effect>();
+  return effect;
+}
+
+void Stage::ResizeScreenEffects(int size) {
+  if (size < 0)
+    throw std::runtime_error("Negative screen effect count");
+  screen_effects.resize(static_cast<size_t>(size));
+}
+
 std::shared_ptr<QuakeState> Stage::GetQuake(int layer, int index) {
   if (index < 0)
     throw std::out_of_range("Negative stage quake index");
@@ -351,6 +370,9 @@ void Stage::InitializeAllObjectParams() {
 }
 
 void Stage::Execute() {
+  for (auto& effect : screen_effects)
+    if (effect)
+      effect->Execute();
   for (auto& layer_effects : effects.storage) {
     for (auto& effect : layer_effects) {
       if (effect)

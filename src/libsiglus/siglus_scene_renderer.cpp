@@ -217,6 +217,8 @@ void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
                      if (!obj)
                        return;
                      GraphicsObject& go = *obj;
+                     ScopedRenderParameters screen_parameters(
+                         go, stage_.screen_effects);
                      ScopedRenderParameters parameters(
                          go, stage_.EffectsForLayer(stage_layer));
                      std::optional<ParentObjState> quake_parent;

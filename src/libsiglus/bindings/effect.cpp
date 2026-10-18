@@ -52,8 +52,8 @@ struct EffectEventHandle {
 
 void BindEffect(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  Stage* stage_state = runtime.stage.get();
-  if (!stage_state)
+  Stage* stage = runtime.stage.get();
+  if (!stage)
     throw std::runtime_error("Effect requires a stage");
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
@@ -132,14 +132,14 @@ void BindEffect(SiglusMachine& runtime) {
 
   sb::class_<EffectHandle> effect(m, "Effect");
   effect.add_gc_root(event);
-  effect.def(
-      sb::init([stage_state](int layer, int index) {
-        if (index < 0)
-          throw std::out_of_range("Negative stage effect index");
-        std::shared_ptr<Effect> e = stage_state->effects.Get(layer, index);
-        return std::make_unique<EffectHandle>(e);
-      }),
-      sb::arg("layer") = static_cast<int>(kLayerFg), sb::arg("index") = 0);
+  effect.def(sb::init([stage](int layer, int index) {
+               if (index < 0)
+                 throw std::out_of_range("Negative stage effect index");
+               std::shared_ptr<Effect> e = stage->effects.Get(layer, index);
+               return std::make_unique<EffectHandle>(e);
+             }),
+             sb::arg("layer") = static_cast<int>(kLayerFg),
+             sb::arg("index") = 0);
   effect.def("init", [](EffectHandle* h) { h->effect->Reset(); });
   for (int i = 0; i <= 34; ++i) {
     try {
@@ -176,19 +176,41 @@ void BindEffect(SiglusMachine& runtime) {
       sb::arg("layer"));
   effect_array.def(
       "__getitem__",
-      [stage_state, effect](EffectListHandle* h, int index) mutable {
-        std::shared_ptr<Effect> e = stage_state->effects.Get(h->layer, index);
+      [stage, effect](EffectListHandle* h, int index) mutable {
+        std::shared_ptr<Effect> e = stage->effects.Get(h->layer, index);
         sr::NativeInstance* inst = effect.make_inst(e);
         return sr::Value(inst);
       },
       sb::arg("index"));
-  effect_array.def("size", [stage_state](EffectListHandle* h) -> int {
-    return stage_state->effects[h->layer].size();
+  effect_array.def("size", [stage](EffectListHandle* h) -> int {
+    return stage->effects[h->layer].size();
   });
   effect_array.def(
       "resize",
-      [stage_state](EffectListHandle* h, int size) {
-        return stage_state->effects[h->layer].resize(size);
+      [stage](EffectListHandle* h, int size) {
+        return stage->effects[h->layer].resize(size);
+      },
+      sb::arg("size"));
+
+  struct ScreenEffectListHandle {};
+  sb::class_<ScreenEffectListHandle> screen_effect_array(m,
+                                                         "ScreenEffectArray");
+  screen_effect_array.add_gc_root(effect);
+  screen_effect_array.def(
+      sb::init([] { return std::make_unique<ScreenEffectListHandle>(); }));
+  screen_effect_array.def(
+      "__getitem__",
+      [stage, effect](ScreenEffectListHandle*, int index) mutable {
+        return sr::Value(effect.make_inst(stage->GetScreenEffect(index)));
+      },
+      sb::arg("index"));
+  screen_effect_array.def("size", [stage](ScreenEffectListHandle*) -> int {
+    return stage->screen_effects.size();
+  });
+  screen_effect_array.def(
+      "resize",
+      [stage](ScreenEffectListHandle*, int size) {
+        stage->ResizeScreenEffects(size);
       },
       sb::arg("size"));
 }

@@ -138,6 +138,9 @@ class Stage {
   // Foreground, background and next stage effects.
   StageElement<Effect> effects;
 
+  // Screen effects apply to every stage layer and survive wipes.
+  StageElement<Effect>::layer_type screen_effects;
+
   // Foreground, background and next stage quakes.
   StageElement<QuakeState> quakes;
 
@@ -225,6 +228,8 @@ class Stage {
   }
   Effect& GetEffect(int layer, int effect_number);
   void ResizeEffects(int layer, int size);
+  std::shared_ptr<Effect> GetScreenEffect(int index);
+  void ResizeScreenEffects(int size);
 
   inline const StageElement<QuakeState>::layer_type& QuakesForLayer(
       int layer) const {
