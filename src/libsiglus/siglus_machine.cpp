@@ -60,6 +60,29 @@ SiglusMachine::~SiglusMachine() {
   vm.reset();
 }
 
+void SiglusMachine::Start(std::optional<int> start_scene) {
+  if (!vm || !loader || !gameexe)
+    throw std::logic_error(
+        "SiglusMachine::Start requires a VM, loader and Gameexe");
+
+  sr::Function* script = nullptr;
+  if (start_scene.has_value()) {
+    // An explicit --scene ID starts at the scene's main script.
+    sr::Module* mod = loader->Load(*start_scene);
+    const auto it = mod->globals->find("%%script");
+    if (it != mod->globals->end())
+      script = it->second.Get_if<sr::Function>();
+    if (!script)
+      throw sr::RuntimeError(
+          std::format("Scene {}: %%script not found", *start_scene));
+  } else {
+    auto start = (*gameexe)("START_SCENE");
+    script = binding::ResolveSceneEntry(
+        *loader, start.StrAt(0).value_or("_start"), start.IntAt(1).value_or(0));
+  }
+  vm->ScheduleExecute(script);
+}
+
 void SiglusMachine::Update(std::chrono::milliseconds real_delta,
                            std::chrono::milliseconds game_delta) {
   using ms = std::chrono::milliseconds;

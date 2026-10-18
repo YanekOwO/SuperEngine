@@ -45,6 +45,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -132,6 +133,8 @@ struct SiglusMachine {
   SiglusMachine(SiglusMachine&&) noexcept = delete;
   SiglusMachine& operator=(SiglusMachine&&) noexcept = delete;
 
+  // Schedule the configured startup scene, or an explicit scene ID override.
+  void Start(std::optional<int> start_scene = std::nullopt);
   void Run();
 
   // Advance one frame using given deltas.
