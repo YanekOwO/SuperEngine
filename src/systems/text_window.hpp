@@ -39,7 +39,6 @@
 class GraphicsSystem;
 class Point;
 class RLMachine;
-class SelectionElement;
 class SDLSurface;
 class System;
 class TextSystem;
@@ -138,6 +137,7 @@ class TextWindow {
   void SetFontColor(const std::vector<int>& colour_data);
   inline void SetDefaultTextColor(RGBColour rgb) { default_colour_ = rgb; }
   inline void SetFontColor(RGBColour rgb) { font_colour_ = rgb; }
+  RGBColour GetFontColor() const { return font_colour_; }
 
   void SetWindowPosition(const std::vector<int>& pos_data);
 
@@ -147,6 +147,8 @@ class TextWindow {
   // for one squashed kinsoku character.
   Size GetTextWindowSize() const;
   Size GetTextSurfaceSize() const;
+  void SetSelectionSize(std::optional<Size> size) { selection_size_ = size; }
+  Size GetWakuContentSize() const;
 
   Rect GetWindowRect() const;
   Rect GetWindowRect(Size waku_size) const;
@@ -262,20 +264,13 @@ class TextWindow {
   void MarkRubyBegin();
   void DisplayRubyText(const std::string& utf8str);
 
-  struct Selection {
-    std::string text;
-    std::function<void()> callback;
-  };
-  void StartSelection(std::vector<Selection> choices);
-
-  void EndSelection();
 
  private:
   std::pair<int, int> sorter_;
   std::unique_ptr<TextPage> page_;
   std::shared_ptr<MwndMessageState> message_state_ =
       std::make_shared<MwndMessageState>();
-  std::vector<std::unique_ptr<SelectionElement>> selections_;
+  std::optional<Size> selection_size_;
 
   // Render faces implementation.
   void RenderFaces(int behind);
@@ -391,12 +386,6 @@ class TextWindow {
 
   // The number of characters in the window (or |minimum_namebox_size_|).
   int namebox_characters_;
-
-  enum class State {
-    Normal,
-    Selection /* see select long operation */
-  };
-  State state_;
 
   bool next_char_italic_;
 

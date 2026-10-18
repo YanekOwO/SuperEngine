@@ -24,6 +24,7 @@
 #include "libsiglus/xorkey.hpp"
 
 #include <bitset>
+#include <limits>
 #include <span>
 #include <string>
 

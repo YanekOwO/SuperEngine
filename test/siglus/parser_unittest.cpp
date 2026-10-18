@@ -118,6 +118,55 @@ TEST_F(SiglusParserTest, Gosub) {
             Assign{.ltype_ = Type::Int, .rtype_ = Type::Int, .v1_ = 1}));
 }
 
+TEST_F(SiglusParserTest, SelectionTrailersDoNotConsumeTheFollowingInstruction) {
+  for (int id : {19, 101, 100, 102, 76, 77, 126, 128, 127, 162, 1005, 1051,
+                 1050, 1052}) {
+    SCOPED_TRACE(id);
+    rawdata.clear();
+    const bool member = id >= 1000;
+    const bool ready = id == 126 || id == 128;
+    const bool getter = id == 162;
+    const bool trailer = !ready && !getter;
+    AppendRawByte(ByteCode::Marker);
+    if (member) {
+      for (int element : {38, 3, -1, 1, id - 1000})
+        AppendRawPush(Type::Int, element);
+    } else {
+      AppendRawPush(Type::Int, id);
+    }
+    AppendRawByte(ByteCode::Cmd);
+    AppendRawInt(0);  // overload
+    AppendRawInt(0);  // positional types
+    AppendRawInt(0);  // named arguments
+    AppendRawInt(static_cast<int>(getter  ? Type::String
+                                  : ready ? Type::None
+                                          : Type::Int));
+    if (trailer)
+      AppendRawInt(0x1234);
+    AppendRawPush(Type::Int, 7);
+    AppendRawPush(Type::Int, 9);
+    AppendRawByte(ByteCode::Op2);
+    AppendRawInt(static_cast<int>(Type::Int));
+    AppendRawInt(static_cast<int>(Type::Int));
+    rawdata += static_cast<char>(OperatorCode::Plus);
+    AppendRawByte(ByteCode::End);
+    ResetParser();
+    auto parsed = parser->ParseAll();
+    ASSERT_TRUE(parsed) << parsed.error();
+    ASSERT_EQ(parsed->first.size(), 3u);
+    const auto* command = std::get_if<token::Command>(&parsed->first[0].token);
+    ASSERT_NE(command, nullptr);
+    EXPECT_EQ(command->chain.kidoku,
+              trailer ? std::optional<int>(0x1234) : std::nullopt);
+    const auto* addition =
+        std::get_if<token::Operate2>(&parsed->first[1].token);
+    ASSERT_NE(addition, nullptr);
+    ASSERT_TRUE(addition->val);
+    EXPECT_EQ(AsInt(*addition->val), 16);
+    EXPECT_TRUE(parsed->second.empty());
+  }
+}
+
 TEST_F(SiglusParserTest, ParseAllLabelsAndZlabels) {
   rawdata = std::string(1, static_cast<char>(ByteCode::End));
   labels = {0};

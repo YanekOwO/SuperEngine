@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "core/stage.hpp"
+#include "core/selection.hpp"
 
 #include "core/object_internal/objdrawer.hpp"
 #include "systems/text_window.hpp"
@@ -41,6 +42,7 @@ Stage::Stage(int object_size, int effect_size, int group_size, int quake_size)
 
 void Stage::Reset() {
   mwnd.Clear();
+  selection = {};
   objects.Clear();
   groups.Clear();
   effects.Clear();
@@ -57,7 +59,7 @@ void Stage::Wipe(int begin_order,
                  int end_order,
                  int begin_layer,
                  int end_layer) {
-  // TODO(siglus): Promote btnsel and world stage state
+  // TODO(siglus): Promote world stage state
   // when those core Siglus element implementations exist.
 
   // Promote objects
@@ -131,6 +133,22 @@ void Stage::Wipe(int begin_order,
     mwnd.Move(kLayerFg, i, kLayerBg, i);
     if (fg_mwnd[i])
       fg_mwnd[i]->ClearMouseCapture();
+  }
+
+  selection[kLayerNext].reset();
+  const auto selection_order = selection[kLayerFg]
+                                   ? selection[kLayerFg]->sorter
+                                   : std::make_pair(mwnd_order, 0);
+  if (InWipeRange(selection_order)) {
+    if (selection[kLayerFg]) {
+      selection[kLayerNext] = selection[kLayerFg]->Clone();
+      if (selection[kLayerNext]->window) {
+        const auto index = selection[kLayerNext]->window->window_number();
+        if (index >= 0 && static_cast<std::size_t>(index) < next_mwnd.size())
+          selection[kLayerNext]->window = next_mwnd[index];
+      }
+    }
+    selection[kLayerFg] = std::move(selection[kLayerBg]);
   }
 
   // promote groups

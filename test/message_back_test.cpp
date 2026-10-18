@@ -66,6 +66,20 @@ TEST(MessageBackTest, StartsEmptyAndResetRestoresAnEmptyUsableState) {
   EXPECT_TRUE(message_back.GetEntries().empty());
 }
 
+TEST(MessageBackTest, SelectionSeparatorIsASeparateImageEntry) {
+  MessageBack back;
+  back.AddMessage("before");
+  back.InsertImage("sys_bk_selline00", 12);
+  back.AddMessage("after");
+  const auto entries = back.GetEntries();
+  ASSERT_EQ(entries.size(), 3u);
+  EXPECT_EQ(entries[0].msg, "before");
+  EXPECT_TRUE(entries[1].pct_flag);
+  EXPECT_EQ(entries[1].image_file, "sys_bk_selline00");
+  EXPECT_EQ(entries[1].image_x, 12);
+  EXPECT_EQ(entries[2].msg, "after");
+}
+
 TEST(MessageBackTest, NewEntriesUseExpectedDefaults) {
   MessageBack message_back;
   message_back.ReadyMsg();

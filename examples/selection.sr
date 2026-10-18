@@ -1,0 +1,112 @@
+
+sel_mwnd = Mwnd(0);
+sel_popup = Mwnd(1);
+sel_bg = Object(0, 0);
+
+fn selection_message(title, text) {
+  sel_mwnd.clear();
+  sel_mwnd.msg_block();
+  sel_mwnd.open();
+  sel_mwnd.print(title);
+  sel_mwnd.nl();
+  sel_mwnd.print(text);
+}
+
+fn selection_result(title, index, explanation) {
+  // Retrieve this before starting another choice, which replaces the result.
+  chosen = get_last_sel_msg();
+  print("[selection] RESULT", title, "index:", index, "text:", chosen);
+  if (index == -1) {
+    selection_message(title, "Cancelled (-1). " + explanation);
+  } else {
+    selection_message(title, "Chosen: " + chosen + ". " + explanation);
+  }
+  sel_mwnd.nl();
+  sel_mwnd.print("Click or press Enter to continue.");
+  print("[selection] CONTINUE", title);
+  await sel_mwnd.pp();
+}
+
+fn selection_buttons_scene() {
+  selection_message("1 / Button choices", "Choose a route with arrows + Enter, or click a button.");
+  print("[selection] WAIT buttons");
+  // The next 0 is the SELBTN.000 template number, not an option index.
+  index = await selbtn(-1, -1, 0, "Forest", "Bridge");
+  if (index == 0) {
+    selection_result("1 / Button choices", index, "You follow the forest path.");
+  } else {
+    selection_result("1 / Button choices", index, "You cross the bridge.");
+  }
+}
+
+fn sel_mwnds_scene() {
+  selection_message("2 / Window choices: sel", "The choices use the configured selection window (window 1).");
+  print("[selection] WAIT sel");
+  index = await sel(-1, -1, "Explore the garden", "Rest in the shade");
+  print("[selection] sel window open:", sel_popup.check_open()); // 0
+  selection_result("2 / Window choices: sel", index, "The choice window closed.");
+
+  selection_message("2 / Window choices: selmsg", "Choose below; the current message window stays open.");
+  print("[selection] WAIT selmsg");
+  index = await selmsg(-1, -1, "Ask about the garden", "Ask about the house");
+  print("[selection] selmsg window open:", sel_mwnd.check_open()); // 1
+  selection_result("2 / Window choices: selmsg", index, "The message window stayed open.");
+
+  sel_popup.clear();
+  selection_message("2 / Explicit window: Mwnd(1)", "Choose an option, or press Escape / right-click to cancel.");
+  print("[selection] WAIT member_cancel");
+  index = await sel_popup.selmsg_cancel(-1, -1, "Look upstairs", "Look downstairs");
+  print("[selection] member window open:", sel_popup.check_open()); // 1
+  sel_popup.close();
+  selection_result("2 / Explicit window: Mwnd(1)", index, "The script closes this window.");
+}
+
+fn selection_states_scene() {
+  selection_message("3 / Option states and cancellation", "Only Leave (index 1) and Golden key (index 4) can be chosen.");
+  print("[selection] WAIT states_cancel");
+  // An option is [text, type, optional COLOR_TABLE index]. Nested lists flatten.
+  // Types: 0 = off (no slot), 1 = enabled, 2 = disabled, 3 = hidden (keeps slot).
+  // Returned indices still count EVERY entry, including off and hidden entries.
+  index = await selbtn_cancel(-1, -1, 0, [
+    ["Off: no slot", 0],
+    ["Leave", 1],
+    ["Locked door (disabled)", 2],
+    ["Hidden: reserved slot", 3],
+    ["Golden key", 1, 5]
+  ]);
+  selection_result("3 / Option states and cancellation", index, "Original option indices are preserved.");
+}
+
+fn selection_prepared_scene() {
+  selection_message("4 / Prepared button choices", "Preparing choices... they remain hidden for one second.");
+  selbtn_ready(0, "Set out now", "Wait until morning");
+  print("[selection] PREPARED ready (hidden)");
+  await async.Sleep(1000);
+  selection_message("4 / Prepared button choices", "selbtn_start now opens the prepared choices and waits.");
+  print("[selection] WAIT ready");
+  index = await selbtn_start(-1, -1);
+  selection_result("4 / Prepared button choices", index, "Preparation and input are separate.");
+
+  selection_message("4 / Prepared cancellable choices", "Preparing again... this time Escape / right-click can cancel.");
+  selbtn_cancel_ready(0, "Accept the invitation", "Decline the invitation");
+  print("[selection] PREPARED cancel_ready (hidden)");
+  await async.Sleep(1000);
+  print("[selection] WAIT cancel_ready");
+  index = await selbtn_start(-1, -1);
+  selection_result("4 / Prepared cancellable choices", index, "The ready command enables cancellation.");
+}
+
+// Ordinary functions run on the calling fiber; their internal awaits suspend it.
+// Each result waits for acknowledgement before the next scene.
+sel_popup.close();
+sel_bg.create("bg", 1, 0, 0);
+sel_bg.order = 0;
+print("[selection] BEGIN guided demo");
+selection_buttons_scene();
+sel_mwnds_scene();
+selection_states_scene();
+selection_prepared_scene();
+sel_mwnd.close();
+sel_popup.close();
+sel_bg.free();
+print("[selection] COMPLETE - run examples/selection.sr again to replay, or enter exit.");

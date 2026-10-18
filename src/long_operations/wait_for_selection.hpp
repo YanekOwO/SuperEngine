@@ -4,7 +4,7 @@
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2007 Elliot Glaysher
+// Copyright (C) 2009 Elliot Glaysher
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -19,51 +19,37 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
-//
 // -----------------------------------------------------------------------
 
 #pragma once
 
+#include "core/selection.hpp"
+#include "long_operations/long_operation.hpp"
+
 #include <functional>
 #include <memory>
 
-#include "core/rect.hpp"
+namespace lop {
 
-class SDLSurface;
-
-// Represents a clickable element inside TextWindows.
-class SelectionElement {
+class WaitForSelection final : public LongOperation {
  public:
-  SelectionElement(std::shared_ptr<SDLSurface> normal_image,
-                   std::shared_ptr<SDLSurface> highlighted_image,
-                   Point pos);
+  WaitForSelection(
+      std::shared_ptr<SelState> state,
+      std::shared_ptr<Selection> sel,
+      std::function<void(std::shared_ptr<Selection>)> finish_cb,
+      std::function<void(std::shared_ptr<Selection>)> cancel_cb = {},
+      std::function<void(std::shared_ptr<Event>)> event_cb = {});
+  ~WaitForSelection() override;
 
-  void SetMousePosition(const Point& pos);
-  bool HandleMouseClick(const Point& pos, bool pressed);
-
-  void Render();
-
-  inline void OnMouseover(std::function<void()> mouseover_callback) {
-    on_mouseover_ = std::move(mouseover_callback);
-  }
-
-  inline void OnSelect(std::function<void()> selection_callback) {
-    selection_callback_ = std::move(selection_callback);
-  }
+  Task<int> Run(WaitContext& waits) override;
+  void OnEvent(std::shared_ptr<Event> event) override;
 
  private:
-  bool IsHighlightedAt(const Point& p);
-
-  bool is_highlighted_;
-
-  Point upper_right_;
-
-  std::shared_ptr<SDLSurface> normal_image_;
-  std::shared_ptr<SDLSurface> highlighted_image_;
-
-  // Callback function for when item is selected.
-  std::function<void()> selection_callback_;
-
-  // Callback function when cursor is over the selection item
-  std::function<void()> on_mouseover_;
+  std::shared_ptr<SelState> state_;
+  std::shared_ptr<Selection> sel_;
+  std::function<void(std::shared_ptr<Selection>)> finish_cb_;
+  std::function<void(std::shared_ptr<Selection>)> cancel_cb_;
+  std::function<void(std::shared_ptr<Event>)> event_cb_;
 };
+
+}  // namespace lop

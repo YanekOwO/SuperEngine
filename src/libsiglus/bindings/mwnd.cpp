@@ -26,7 +26,9 @@
 
 #include "core/game_config.hpp"
 #include "core/rect.hpp"
+#include "libsiglus/bindings/selection.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "long_operations/wait_for_selection.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
@@ -156,6 +158,43 @@ void BindMwnd(SiglusMachine& runtime) {
            }),
            sb::arg("index"));
   mwnd.inst("mwnd", nullptr);  // Top-level mwnd resolves the active window.
+
+  const auto bind_selection = [&](const char* name, bool cancel, bool close) {
+    mwnd.def(
+        name,
+        [&rt = runtime, get, cancel, close](MwndHandle* h,
+                                            std::vector<sr::Value> raw) {
+          if (!rt.selection_state)
+            throw sr::RuntimeError("Selection runtime is unavailable");
+          auto request =
+              DecodeSelectionRequest(std::move(raw), false, cancel, true);
+          request.close_window = close;
+          if (rt.selection_state->active_ &&
+              !rt.selection_state->active_->CanResume())
+            throw sr::RuntimeError("An active selection is already waiting");
+
+          std::shared_ptr<Selection> sel =
+              Build(rt, std::move(request), get(h));
+          rt.StartSelection(sel);
+          std::shared_ptr<SelState> state = rt.selection_state;
+          auto wait = std::make_unique<lop::WaitForSelection>(
+              state, sel,
+              [&rt](std::shared_ptr<Selection> sel) {
+                rt.FinishSelection(sel);
+              },
+              [&rt](std::shared_ptr<Selection> sel) {
+                rt.CancelSelection(sel);
+              });
+          sr::Future* fut = state->pending_->MakeFuture(
+              *rt.vm, std::move(wait), rt.system->event_ptr().get());
+          return sr::Value(fut);
+        },
+        sb::vararg);
+  };
+  bind_selection("sel", false, true);
+  bind_selection("sel_cancel", true, true);
+  bind_selection("selmsg", false, false);
+  bind_selection("selmsg_cancel", true, false);
 
   sb::class_<MwndArrayHandle> array(m, "MwndArray");
   array.def(sb::init([stage = runtime.stage.get()](int layer) {

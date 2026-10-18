@@ -40,6 +40,8 @@ class MessageBack {
     int scene_no = -1;
     int line_no = -1;
     bool pct_flag = false;
+    std::string image_file;
+    int image_x = 0;
   };
 
   MessageBack();
@@ -47,6 +49,7 @@ class MessageBack {
   void Reset();
 
   void AddMessage(std::string msg);
+  void InsertImage(std::string file, int x = 0);
   void AddNamae(std::string name);
   void AddKoe(int koe_no, int chara_no);
 

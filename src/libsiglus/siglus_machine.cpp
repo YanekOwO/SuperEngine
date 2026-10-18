@@ -23,25 +23,40 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/bindings/flow.hpp"
 
 #include "core/input.hpp"
+#include "core/kidoku_table.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
+#include "systems/sound_system.hpp"
+#include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
+#include "vm/exception.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <memory>
 #include <stdexcept>
 #include <thread>
 
 namespace libsiglus {
+namespace sr = serilang;
 
 SiglusMachine::~SiglusMachine() {
   // Native VM instances and pending coroutine frames keep non-owning pointers
   // to runtime services. Finalize them before member destruction tears those
   // services down.
+  if (auto s = selection_state) {
+    s->pending_.reset();
+    if (s->active_)
+      CancelSelection(s->active_);
+    s->prepared_.reset();
+  }
+
   vm.reset();
 }
 
@@ -50,6 +65,8 @@ void SiglusMachine::Update(std::chrono::milliseconds real_delta,
   using ms = std::chrono::milliseconds;
   real_delta = std::max(ms::zero(), real_delta);
   game_delta = std::max(ms::zero(), game_delta);
+  if (selection_state && !local_config.time_stop)
+    UpdateSelection(game_delta.count());
 
   const bool time_stopped = local_config.time_stop;
   if (!time_stopped && !local_config.counter_time_stop && counter_list)
@@ -140,6 +157,158 @@ std::shared_ptr<Counter> SiglusMachine::CreateCounter() {
   auto ret = std::make_shared<Counter>();
   counters_.emplace_back(ret);
   return ret;
+}
+
+// ------------------------------------------------------------------------------
+void SiglusMachine::RegisterDebugSelectionChoice(int scene,
+                                                 int kidoku,
+                                                 int choice) {
+  if (choice < -1)
+    throw sr::RuntimeError(
+        "Selection choice must be -1 or a nonnegative index");
+  debug_selection_choices_.insert_or_assign({scene, kidoku}, choice);
+}
+
+void SiglusMachine::OnSelectionChosen(const Selection& s) {
+  const int index = s.result.value();
+  if (system) {
+    const int number = index < 0 ? 2 : 1;
+    if (system->sound().HasSe(number))
+      system->sound().PlaySe(number);
+  }
+  if (kidoku_table && s.request.scene >= 0 && s.request.kidoku >= 0)
+    kidoku_table->RecordKidoku(s.request.scene, s.request.kidoku);
+}
+
+void SiglusMachine::StartSelection(std::shared_ptr<Selection> s) {
+  std::shared_ptr<SelState>& sel = selection_state;
+  if (sel->active_ && !sel->active_->CanResume())
+    throw sr::RuntimeError("An active selection is already waiting");
+  sel->active_ = s;
+  sel->held_keys_.clear();
+  sel->cancel_pressed_ = false;
+
+  // Opening a menu transfers input ownership from message windows. Discard
+  // stale presses so the input that invoked it cannot also decide a choice.
+  sel->mouse_ = input_event_listener->mouse_pos;
+  input_event_listener->ReleaseAll();
+
+  for (const auto& w : stage->mwnd[kLayerFg]) {
+    if (!w)
+      continue;
+    w->ClearMouseCapture();
+  }
+  stage->selection[kLayerFg] = s;
+
+  system->text().set_in_selection_mode(true);
+
+  s->Start();
+  UpdateSelection(0);
+  sel->pending_->PruneDone();
+}
+
+void SiglusMachine::FinishSelection(std::shared_ptr<Selection> s) {
+  if (s->window) {
+    TextSystem& text = system->text();
+    s->window->SetSelectionSize(std::nullopt);
+    if (s->window->action_on_pause())
+      s->window->message_state()->MarkNovelClear(
+          text.GetPageOnWindow(s->window));
+    else
+      s->window->message_state()->MarkMessageClearReady(
+          text.GetPageOnWindow(s->window));
+    if (s->request.close_window)
+      s->window->SetVisible(false);
+  }
+
+  system->text().set_in_selection_mode(false);
+  system->graphics().ForceRefresh();
+}
+
+void SiglusMachine::CancelSelection(std::shared_ptr<Selection> s) {
+  if (selection_state->active_ != s)
+    return;
+  FinishSelection(s);
+
+  if (stage->selection[kLayerFg] == s)
+    stage->selection[kLayerFg].reset();
+  selection_state->active_.reset();
+}
+
+void SiglusMachine::UpdateSelection(int ms) {
+  if (!selection_state || updating_selection_)
+    return;
+  auto s = selection_state->active_;
+  if (!s)
+    return;
+
+  // Opening callbacks can enter script code and reenter the runtime. Defer
+  // nested updates until the outer hook has returned, including on failure.
+  updating_selection_ = true;
+  struct UpdateGuard {
+    bool& updating;
+    ~UpdateGuard() { updating = false; }
+  } guard{updating_selection_};
+
+  const auto displaced = [&] {
+    return stage && stage->selection[kLayerFg] != s && !s->result;
+  };
+  if (displaced()) {
+    CancelSelection(s);
+    return;
+  }
+
+  const bool was_visible = s->Visible();
+  s->Advance(ms);
+  if (s->phase() == Selection::Phase::Waiting && !s->open_hook_done) {
+    if (s->request.capture)
+      s->capture = system->graphics().RenderToSurface();
+
+    // Mark before entering script code so a reentrant update cannot run the
+    // capture/start hook twice.
+    s->open_hook_done = true;
+
+    if (s->request.capture && !s->request.start_scene.empty() &&
+        s->request.start_entry >= 0) {
+      if (!loader)
+        throw sr::RuntimeError(
+            "Selection start callback requires a scene loader");
+      auto* entry = binding::ResolveSceneEntry(*loader, s->request.start_scene,
+                                               s->request.start_entry);
+      vm->InvokeUntilBlocked(*entry, {});
+    }
+    for (std::size_t i = 0; i < s->items.size(); ++i)
+      if (s->request.options[i].type == 1) {
+        s->focused = static_cast<int>(i);
+        break;
+      }
+  }
+
+  if (was_visible || s->Visible())
+    system->graphics().ForceRefresh();
+
+  // A wipe can replace the stage's reference while its snapshot remains
+  // visible. The displaced, undecided session must stop owning input.
+  if (displaced()) {
+    CancelSelection(s);
+    return;
+  }
+
+  if (selection_state->active_ != s || !s->CanInput())
+    return;
+
+  // injected choice
+  const auto choice =
+      debug_selection_choices_.find({s->request.scene, s->request.kidoku});
+  if (choice == debug_selection_choices_.end())
+    return;
+  if (!selection_state->Choose(choice->second))
+    throw sr::RuntimeError(std::format(
+        "Invalid registered selection choice {} for scene {}, kidoku {}",
+        choice->second, s->request.scene, s->request.kidoku));
+  OnSelectionChosen(*s);
+  if (system)
+    system->graphics().ForceRefresh();
 }
 
 }  // namespace libsiglus

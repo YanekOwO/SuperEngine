@@ -28,7 +28,6 @@
 #include "systems/graphics_system.hpp"
 #include "systems/itext_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
-#include "systems/selection_element.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
@@ -118,7 +117,6 @@ TextWindow::TextWindow(System& system,
       name_size_(params.namebox.character_size),
       siglus_namebox_layout_(params.namebox.siglus_layout),
       namebox_characters_(0),
-      state_(State::Normal),
       next_char_italic_(false),
       system_(system) {
   ASSERTX_NE(text_impl, nullptr);
@@ -178,6 +176,7 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->window_num_ = window_num_;
   result->waku_set_ = waku_set_;
   result->layout_ = layout_;
+  result->selection_size_ = selection_size_;
   result->glyph_render_offset_ = glyph_render_offset_;
   result->last_token_was_name_ = last_token_was_name_;
   result->current_name_ = current_name_;
@@ -213,7 +212,6 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->name_size_ = name_size_;
   result->siglus_namebox_layout_ = siglus_namebox_layout_;
   result->namebox_characters_ = namebox_characters_;
-  result->state_ = state_;
   result->next_char_italic_ = next_char_italic_;
   result->koe_replay_button_ = koe_replay_button_;
 
@@ -230,14 +228,6 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   if (koe_replay_info_)
     result->koe_replay_info_ =
         std::make_unique<KoeReplayInfo>(*koe_replay_info_);
-  for (const auto& selection : selections_) {
-    auto clone = std::make_unique<SelectionElement>(*selection);
-    clone->OnMouseover([system = &system_] {
-      if (system->sound().HasSe(0))
-        system->sound().PlaySe(0);
-    });
-    result->selections_.push_back(std::move(clone));
-  }
   return result;
 }
 
@@ -286,8 +276,7 @@ bool TextWindow::IsTextboxWakuVisible() const {
 }
 
 bool TextWindow::IsNameboxWakuVisible() const {
-  return namebox_waku_ && IsTextboxWakuVisible() && name_surface_ &&
-         state_ == State::Normal;
+  return namebox_waku_ && IsTextboxWakuVisible() && name_surface_;
 }
 
 void TextWindow::ShowWaitIcon(bool page) {
@@ -378,15 +367,30 @@ void TextWindow::SetWindowPosition(const std::vector<int>& pos_data) {
   y_distance_from_origin_ = pos_data.at(2);
 }
 
-Size TextWindow::GetTextWindowSize() const { return layout_.GetNormalSize(); }
+Size TextWindow::GetTextWindowSize() const {
+  return selection_size_.value_or(layout_.GetNormalSize());
+}
 
 Size TextWindow::GetTextSurfaceSize() const {
-  return layout_.GetExtendedSize();
+  return selection_size_.value_or(layout_.GetExtendedSize());
+}
+
+Size TextWindow::GetWakuContentSize() const {
+  if (!selection_size_)
+    return GetTextSurfaceSize();
+  // Siglus MESSAGE_MARGIN is measured from the outside of the frame;
+  // the nine-slice renderer takes the size between its border pieces.
+  const Size outer =
+      *selection_size_ + Size(left_box_padding_ + right_box_padding_,
+                              upper_box_padding_ + lower_box_padding_);
+  const Size border = textbox_waku_->GetSize(Size(0, 0));
+  return Size(std::max(0, outer.width() - border.width()),
+              std::max(0, outer.height() - border.height()));
 }
 
 Rect TextWindow::GetWindowRect() const {
   ASSERTX_NE(textbox_waku_, nullptr);
-  Size waku_size = textbox_waku_->GetSize(GetTextSurfaceSize());
+  Size waku_size = textbox_waku_->GetSize(GetWakuContentSize());
   return GetWindowRect(waku_size);
 }
 
@@ -614,40 +618,30 @@ void TextWindow::Render() {
         GetTextSurfaceRect().origin() - Size(0, layout_.GetRubyTopPadding());
 
     textbox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
-    textbox_waku_->Render(box, GetTextSurfaceSize(), GetColour(),
+    textbox_waku_->Render(box, GetWakuContentSize(), GetColour(),
                           GetIsFilter());
     RenderFaces(1);
 
-    switch (state_) {
-      case State::Selection:
-        std::for_each(
-            selections_.begin(), selections_.end(),
-            [](std::unique_ptr<SelectionElement>& e) { e->Render(); });
-        break;
-      case State::Normal:
-        if (name_surface_) {
-          Rect r = GetNameboxWakuRect();
+    if (name_surface_) {
+      Rect r = GetNameboxWakuRect();
 
-          if (namebox_waku_) {
-            namebox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
-            // TODO(erg): The waku needs to be adjusted to be the minimum size
-            // of the window in characters
-            namebox_waku_->Render(r.origin(), GetNameboxTextArea(), GetColour(),
-                                  GetIsFilter());
-          }
+      if (namebox_waku_) {
+        namebox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
+        // TODO(erg): The waku needs to be adjusted to be the minimum size
+        // of the window in characters
+        namebox_waku_->Render(r.origin(), GetNameboxTextArea(), GetColour(),
+                              GetIsFilter());
+      }
 
-          name_surface_->RenderToScreen(name_surface_->GetRect(),
-                                        GetNameboxTextRect(), 255);
-        }
-
-        RenderFaces(0);
-        RenderKoeReplayButtons();
-
-        text_surface_->RenderToScreen(Rect(Point(0, 0), surface_size),
-                                      Rect(textOrigin, surface_size), 255);
-
-        break;
+      name_surface_->RenderToScreen(name_surface_->GetRect(),
+                                    GetNameboxTextRect(), 255);
     }
+
+    RenderFaces(0);
+    RenderKoeReplayButtons();
+
+    text_surface_->RenderToScreen(Rect(Point(0, 0), surface_size),
+                                  Rect(textOrigin, surface_size), 255);
   }
 }
 
@@ -809,13 +803,6 @@ void TextWindow::SetRGBAF(const std::vector<int>& attr) {
 }
 
 void TextWindow::SetMousePosition(const Point& pos, bool update_waku) {
-  if (state_ == State::Selection) {
-    for_each(selections_.begin(), selections_.end(),
-             [&](std::unique_ptr<SelectionElement>& e) {
-               e->SetMousePosition(pos);
-             });
-  }
-
   if (update_waku)
     textbox_waku_->SetMousePosition(pos);
   else
@@ -828,15 +815,6 @@ bool TextWindow::HasMwndButtonAt(const Point& pos) const {
 }
 
 bool TextWindow::HandleMouseClick(const Point& pos, bool pressed) {
-  if (state_ == State::Selection) {
-    bool found =
-        std::any_of(selections_.begin(), selections_.end(),
-                    [&](auto& e) { return e->HandleMouseClick(pos, pressed); });
-
-    if (found)
-      return true;
-  }
-
   for (const auto& it : koe_replay_button_) {
     Rect r = Rect(GetTextSurfaceRect().origin() + it.first,
                   koe_replay_info_->icon->GetSize());
@@ -854,47 +832,4 @@ bool TextWindow::HandleMouseClick(const Point& pos, bool pressed) {
   }
 
   return false;
-}
-
-void TextWindow::StartSelection(std::vector<Selection> choices) {
-  state_ = State::Selection;
-
-  std::shared_ptr<IFont> ifont = system_.text().LoadFont(font_size_in_pixels());
-
-  selections_.clear();
-  selections_.reserve(choices.size());
-  for (auto& choice : choices) {
-    std::shared_ptr<SDLSurface> normal =
-        text_impl_->RenderText(choice.text, FontFace(ifont), font_colour_);
-
-    // clone and create an inverted surface
-    auto inverted = normal->Clone();
-    inverted->Apply(
-        [](RGBAColour c) {
-          c.set_alpha(255 - c.a());
-          return c;
-        },
-        inverted->GetRect());
-
-    // Figure out xpos and ypos
-    Point position =
-        GetTextSurfaceRect().origin() + layout_.GetInsertionPoint();
-    layout_.insertion_y += layout_.GetLineHeight();
-
-    auto sel = std::make_unique<SelectionElement>(normal, inverted, position);
-    sel->OnMouseover([this]() {
-      constexpr int kHoverSoundEffect = 0;
-      if (system_.sound().HasSe(kHoverSoundEffect))
-        system_.sound().PlaySe(kHoverSoundEffect);
-    });
-    sel->OnSelect(std::move(choice.callback));
-
-    selections_.emplace_back(std::move(sel));
-  }
-}
-
-void TextWindow::EndSelection() {
-  state_ = State::Normal;
-  selections_.clear();
-  ClearWin();
 }

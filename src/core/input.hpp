@@ -52,6 +52,7 @@ struct InputListener : public EventListener {
   State cancel;
 
   void ResetState();
+  void ReleaseAll();
 
  private:
   std::set<KeyCode> decide_keys_down_;

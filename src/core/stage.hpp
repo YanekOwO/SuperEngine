@@ -107,6 +107,7 @@ struct StageElement {
 };
 
 class TextWindow;
+class Selection;
 
 class Stage {
  public:
@@ -124,6 +125,9 @@ class Stage {
   // RealLive uses foreground only; Siglus has three fixed-size window lists.
   StageElement<TextWindow> mwnd;
   int mwnd_order = 1;
+
+  // Each layer has only one selection
+  std::array<std::shared_ptr<Selection>, 3> selection;
 
   // Foreground, background and next objects
   StageElement<GraphicsObject> objects;

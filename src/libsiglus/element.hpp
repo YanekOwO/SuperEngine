@@ -116,16 +116,19 @@ struct CallFlags {
   bool is_nonsimple = false;
   // Calls that model blocking commands should return an awaitable.
   bool await_result = false;
+  bool context = false;
 
   constexpr CallFlags operator|(const CallFlags f) const {
     return {.is_explicit = is_explicit || f.is_explicit,
             .is_nonsimple = is_nonsimple || f.is_nonsimple,
-            .await_result = await_result || f.await_result};
+            .await_result = await_result || f.await_result,
+            .context = context || f.context};
   }
 };
 [[maybe_unused]] constexpr CallFlags EXPLICIT{.is_explicit = true};
 [[maybe_unused]] constexpr CallFlags NONSIMPLE{.is_nonsimple = true};
 [[maybe_unused]] constexpr CallFlags AWAIT{.await_result = true};
+[[maybe_unused]] constexpr CallFlags CONTEXT{.context = true};
 
 struct Member {
   std::string_view name;  // Reconstructed exported/native member name.
@@ -139,6 +142,7 @@ struct Member {
   bool is_simple = true;
   // Calls that model blocking commands should return an awaitable.
   bool await_result = false;
+  bool selection_context = false;
 
   std::string ToDebugString() const;
   bool operator==(const Member&) const = default;
@@ -157,6 +161,8 @@ struct Call {
   std::vector<std::pair<int, Value>> kwargs;
   bool is_simple = true;
   bool await_result = false;
+  bool context = false;
+  std::optional<int> kidoku;
   std::string ToDebugString() const;
   bool operator==(const Call&) const = default;
 };

@@ -149,6 +149,62 @@ TEST_F(ElementParserTest, MemoryBank) {
   EXPECT_EQ(chain(34, 3), "S.init()");
 }
 
+TEST_F(ElementParserTest, SelectionCommandsKeepReadFlagsAndResults) {
+  for (const auto& [id, name] :
+       std::vector<std::pair<int, std::string>>{{19, "sel"},
+                                                {101, "sel_cancel"},
+                                                {100, "selmsg"},
+                                                {102, "selmsg_cancel"},
+                                                {76, "selbtn"},
+                                                {77, "selbtn_cancel"},
+                                                {127, "selbtn_start"}}) {
+    SCOPED_TRACE(id);
+    SetKidoku({42});
+    ElementCode code{id};
+    code.ForceBind({0, {v("yes"), v("no")}, Type::Int});
+    const auto parsed = chain(code);
+    EXPECT_THAT(parsed.chain.ToDebugString(), HasSubstr(name));
+    EXPECT_EQ(parsed.chain.kidoku, 42);
+    EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+    ASSERT_FALSE(parsed.chain.nodes.empty());
+    const auto* call = std::get_if<Call>(&parsed.chain.nodes.back().var);
+    ASSERT_NE(call, nullptr);
+    EXPECT_TRUE(call->await_result);
+    EXPECT_EQ(kidoku_idx, 1);
+  }
+}
+
+TEST_F(ElementParserTest, PreparedSelectionsAndLastTextDoNotReadTrailers) {
+  for (const auto& [id, name] :
+       std::vector<std::pair<int, std::string>>{{126, "selbtn_ready"},
+                                                {128, "selbtn_cancel_ready"},
+                                                {162, "get_last_sel_msg"}}) {
+    SCOPED_TRACE(id);
+    ElementCode code{id};
+    code.ForceBind({0, {}, id == 162 ? Type::String : Type::None});
+    const auto parsed = chain(code);
+    EXPECT_THAT(parsed.chain.ToDebugString(), HasSubstr(name));
+    EXPECT_FALSE(parsed.chain.kidoku.has_value());
+    ASSERT_FALSE(parsed.chain.nodes.empty());
+    const auto* call = std::get_if<Call>(&parsed.chain.nodes.back().var);
+    ASSERT_NE(call, nullptr);
+    EXPECT_FALSE(call->await_result);
+  }
+}
+
+TEST_F(ElementParserTest, WindowSelectionsConsumeExactlyOneReadFlag) {
+  for (int id : {5, 51, 50, 52}) {
+    SCOPED_TRACE(id);
+    SetKidoku({99});
+    ElementCode code{38, 3, -1, 1, id};
+    code.ForceBind({0, {v("choice")}, Type::Int});
+    const auto parsed = chain(code);
+    EXPECT_EQ(parsed.chain.kidoku, 99);
+    EXPECT_EQ(kidoku_idx, 1);
+    EXPECT_THAT(parsed.CallFlags(), HasSubstr("a"));
+  }
+}
+
 TEST_F(ElementParserTest, PropertyBindsRejectInvalidArgumentsAndOverloads) {
   for (const auto& source :
        {ElementCode{38, 2, -1, 0, 3}, ElementCode{79, 0}}) {

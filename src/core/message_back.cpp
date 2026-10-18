@@ -73,6 +73,16 @@ void MessageBack::AddMessage(std::string msg) {
   entry.debug_msg = msg;
 }
 
+void MessageBack::InsertImage(std::string file, int x) {
+  GoNextMsg();
+  ReadyMsg();
+  auto& entry = entries_[current_msg_pos_];
+  entry.pct_flag = true;
+  entry.image_file = std::move(file);
+  entry.image_x = x;
+  GoNextMsg();
+}
+
 void MessageBack::ReadyMsg() {
   if (!new_msg_)
     return;

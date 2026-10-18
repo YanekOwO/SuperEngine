@@ -105,9 +105,9 @@ class WaitContext {
     return Awaiter(*this, delay, interrupt_on_input);
   }
 
-  inline Awaiter Schedule() {
+  inline Awaiter Schedule(bool interrupt_on_input = true) {
     constexpr auto kPollInterval = std::chrono::milliseconds(5);
-    return WaitFor(kPollInterval, true);
+    return WaitFor(kPollInterval, interrupt_on_input);
   }
 
  private:

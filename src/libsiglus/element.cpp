@@ -90,6 +90,7 @@ Node Node::BuildCall(Invoke inv, CallFlags flags) {
   Call call;
   call.is_simple = !flags.is_nonsimple;
   call.await_result = flags.await_result;
+  call.context = flags.context;
   call.overload_id = (!flags.is_explicit || !flags.is_nonsimple)
                          ? std::nullopt
                          : std::make_optional(inv.overload_id);

@@ -28,6 +28,7 @@
 #include "core/object.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mask.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sdl/glrenderer.hpp"
@@ -36,6 +37,7 @@
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
+#include "utilities/overload.hpp"
 
 #include <GL/glew.h>
 
@@ -180,15 +182,20 @@ void SiglusSceneRenderer::RenderObjects(int stage_layer, ObjectRange range) {
     const auto& param = objects[i]->Param();
     if (in_range({param.z_order, param.z_layer}))
       to_render_.emplace_back(param.z_order, param.z_layer, 0, param.z_depth,
-                              static_cast<int>(i), objects[i].get(), nullptr);
+                              static_cast<int>(i), objects[i].get());
   }
   const auto& windows = stage_.mwnd[stage_layer];
   for (size_t i = 0; i < windows.size(); ++i) {
     if (!windows[i] || !in_range(windows[i]->sorter()))
       continue;
     const auto [order, layer] = windows[i]->sorter();
-    to_render_.emplace_back(order, layer, 1, 0, static_cast<int>(i), nullptr,
+    to_render_.emplace_back(order, layer, 1, 0, static_cast<int>(i),
                             windows[i].get());
+  }
+  const auto& selection = stage_.selection[stage_layer];
+  if (selection && selection->Visible() && in_range(selection->sorter)) {
+    const auto [order, layer] = selection->sorter;
+    to_render_.emplace_back(order, layer, 2, 0, 0, selection.get());
   }
   RenderQueuedObjects(stage_layer);
 }
@@ -196,25 +203,36 @@ void SiglusSceneRenderer::RenderObjects(int stage_layer, ObjectRange range) {
 void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
   std::sort(to_render_.begin(), to_render_.end());
 
-  for (auto& object : to_render_) {
-    if (auto* window = std::get<6>(object)) {
-      system_.text().RenderWindow(*window);
-      continue;
-    }
-    GraphicsObject& graphics_object = *std::get<5>(object);
-    ScopedRenderParameters parameters(graphics_object,
-                                      stage_.EffectsForLayer(stage_layer));
-    std::optional<ParentObjState> quake_parent;
-    const QuakeTransform quake =
-        TransformForOrder(graphics_object.Param().z_order, stage_layer);
-    if (!quake.IsIdentity()) {
-      quake_parent = ParentObjState{};
-      quake_parent->render_state.pos_x = quake.translate_x;
-      quake_parent->render_state.pos_y = quake.translate_y;
-      quake_parent->render_state.scale_x = quake.scale;
-      quake_parent->render_state.scale_y = quake.scale;
-    }
-    RenderObject(graphics_object, mask_list_.get(), std::move(quake_parent));
+  for (auto& it : to_render_) {
+    std::visit(overload(
+                   [&](Selection* sel) {
+                     if (sel)
+                       SelState::Render(*sel, system_);
+                   },
+                   [&](TextWindow* mwnd) {
+                     if (mwnd)
+                       system_.text().RenderWindow(*mwnd);
+                   },
+                   [&](GraphicsObject* obj) {
+                     if (!obj)
+                       return;
+                     GraphicsObject& go = *obj;
+                     ScopedRenderParameters parameters(
+                         go, stage_.EffectsForLayer(stage_layer));
+                     std::optional<ParentObjState> quake_parent;
+                     const QuakeTransform quake =
+                         TransformForOrder(go.Param().z_order, stage_layer);
+                     if (!quake.IsIdentity()) {
+                       quake_parent = ParentObjState{};
+                       quake_parent->render_state.pos_x = quake.translate_x;
+                       quake_parent->render_state.pos_y = quake.translate_y;
+                       quake_parent->render_state.scale_x = quake.scale;
+                       quake_parent->render_state.scale_y = quake.scale;
+                     }
+                     RenderObject(go, mask_list_.get(),
+                                  std::move(quake_parent));
+                   }),
+               it.render);
   }
 }
 

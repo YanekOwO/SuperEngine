@@ -32,6 +32,7 @@
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
 #include "core/quake.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "srbind/srbind.hpp"
@@ -41,7 +42,9 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace serilang {
@@ -85,6 +88,18 @@ struct SiglusMachine {
   std::unique_ptr<System> system;
   std::unique_ptr<InteractionManager> interaction_manager;
 
+  std::shared_ptr<SelState> selection_state;
+  std::shared_ptr<EventListener> selection_event_listener;
+  void StartSelection(std::shared_ptr<Selection> session);
+  void FinishSelection(std::shared_ptr<Selection> session);
+  void CancelSelection(std::shared_ptr<Selection> session);
+  void UpdateSelection(int game_ms);
+  // Overrides this exact selection key for the lifetime of this machine.
+  // Choices are original option indices; -1 requests player cancellation.
+  void RegisterDebugSelectionChoice(int scene, int kidoku, int choice);
+  // Called once after input or automation accepts a new selection result.
+  void OnSelectionChosen(const Selection& session);
+
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
@@ -124,6 +139,8 @@ struct SiglusMachine {
   std::shared_ptr<Counter> CreateCounter();
 
  private:
+  std::map<std::pair<int, int>, int> debug_selection_choices_;
+  bool updating_selection_ = false;
   std::vector<std::weak_ptr<Counter>> counters_;
 };
 

@@ -27,6 +27,7 @@
 #include "core/haikei.hpp"
 #include "core/hik.hpp"
 #include "core/object.hpp"
+#include "core/selection.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/stage.hpp"
 #include "log/domain_logger.hpp"
@@ -93,6 +94,8 @@ void rlSceneRenderer::RenderScene() {
   // Render text
   if (!graphics.is_interface_hidden())
     system.text().Render();
+  if (auto selection = stage.selection[kLayerFg])
+    SelState::Render(*selection, system);
 }
 
 void rlSceneRenderer::RenderObject(GraphicsObject& root,

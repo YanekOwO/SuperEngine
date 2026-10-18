@@ -24,12 +24,15 @@
 #pragma once
 
 #include "core/quake.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
 #include "systems/scene_renderer.hpp"
+#include "systems/text_window.hpp"
 
+#include <compare>
 #include <memory>
 #include <tuple>
-#include <vector>
+#include <variant>
 
 class GraphicsObject;
 struct LocalConfig;
@@ -57,9 +60,14 @@ class SiglusSceneRenderer final : public ISceneRenderer {
 
  private:
   enum class ObjectRange { All, Below, Within, Above };
-  // Sort by order, layer, kind (objects before windows), depth, then index.
-  using ToRenderVec = std::vector<
-      std::tuple<int, int, int, int, int, GraphicsObject*, TextWindow*>>;
+  struct ToRender {
+    int order, layer, kind, depth, index;
+    std::variant<GraphicsObject*, TextWindow*, Selection*> render;
+    std::strong_ordering operator<=>(const ToRender& o) const {
+      return std::tie(order, layer, kind, depth, index) <=>
+             std::tie(o.order, o.layer, o.kind, o.depth, o.index);
+    }
+  };
 
   void RenderStageObjects();
   void RenderObjects(int stage_layer, ObjectRange range = ObjectRange::All);
@@ -72,8 +80,9 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   std::shared_ptr<MaskList> mask_list_;
   std::shared_ptr<::QuakeList> screen_quakes_;
   ::LocalConfig& local_config_;
-  ToRenderVec to_render_;
   std::shared_ptr<ScreenCanvas> transition_canvas_;
+
+  std::vector<ToRender> to_render_;
 };
 
 }  // namespace libsiglus

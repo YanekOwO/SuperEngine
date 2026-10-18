@@ -91,3 +91,11 @@ void InputListener::ResetState() {
   cancel.on_up = false;
   cancel.down_up = false;
 }
+
+void InputListener::ReleaseAll() {
+  decide_keys_down_.clear();
+  cancel_keys_down_.clear();
+  left_mouse_down = right_mouse_down = false;
+  decide = {};
+  cancel = {};
+}

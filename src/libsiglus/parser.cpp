@@ -424,11 +424,11 @@ void Parser::Add(lex::EndOfScene) {
 }
 
 void Parser::Add(lex::SelBegin) {
-  warnings_.emplace_back("selbegin not implemented yet");
+  // Compiler sentence markers carry no operands or runtime operation.
 }
 
 void Parser::Add(lex::SelEnd) {
-  warnings_.emplace_back("selend not implemented yet");
+  // Selection save/rollback is independent of these sentence boundaries.
 }
 
 void Parser::debug_assert_stack_empty() {

@@ -26,23 +26,28 @@
 // -----------------------------------------------------------------------
 
 #include "modules/module_sel.hpp"
-#include "long_operations/reallive_operations.hpp"
 
-#include <iterator>
+#include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/gameexe.hpp"
 #include "core/object.hpp"
+#include "core/rlevent_listener.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
 #include "libreallive/parser.hpp"
 #include "long_operations/button_object_select_long_operation.hpp"
-#include "long_operations/select_long_operation.hpp"
+#include "long_operations/wait_for_selection.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/rlop_store.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
+#include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
@@ -62,55 +67,183 @@ inline void MarkSavepoint(RLMachine& machine) {
   machine.AdvanceIP();
 }
 
+SelectionRequest DecodeSelection(RLMachine& machine,
+                                 const SelectElement& element,
+                                 SelectionRequest::Kind kind) {
+  SelectionRequest request;
+  request.kind = kind;
+  request.close_window = false;
+  const auto evaluate = [&](const std::string& expression) {
+    const char* location = expression.c_str();
+    return libreallive::ExpressionParser::GetExpression(location)
+        ->GetIntegerValue(machine);
+  };
+  for (const auto& param : element.raw_params()) {
+    SelectionOption option;
+    option.text = cp932toUTF8(libreallive::EvaluatePRINT(machine, param.text),
+                              machine.GetTextEncoding());
+    bool shown = true, enabled = true;
+    for (const auto& condition : param.cond_parsed) {
+      switch (condition.effect) {
+        case SelectElement::OPTION_HIDE:
+          shown =
+              !condition.condition.empty() && !evaluate(condition.condition);
+          break;
+        case SelectElement::OPTION_TITLE:
+          enabled =
+              !condition.condition.empty() && !evaluate(condition.condition);
+          option.color = !enabled && !condition.effect_argument.empty()
+                             ? evaluate(condition.effect_argument)
+                             : -1;
+          break;
+        default:
+          std::cerr << "Unsupported option in select statement (condition: "
+                    << libreallive::ParsableToPrintableString(
+                           condition.condition)
+                    << ", effect: " << condition.effect << ", effect_argument: "
+                    << libreallive::ParsableToPrintableString(
+                           condition.effect_argument)
+                    << ")" << std::endl;
+          break;
+      }
+    }
+    option.type = !shown ? 0 : enabled ? 1 : 2;
+    request.options.push_back(std::move(option));
+  }
+  return request;
+}
+
+void StartSelection(RLMachine& machine,
+                    const CommandElement& command,
+                    SelectionRequest::Kind kind,
+                    bool separate_window = false) {
+  if (machine.GetScenarioConfig().enable_selcom_savepoint)
+    MarkSavepoint(machine);
+  const auto& element = dynamic_cast<const SelectElement&>(command);
+  auto request = DecodeSelection(machine, element, kind);
+  auto config = BtnSelTemplate::ParseReallive(machine.GetGameexe(), 0);
+  TextSystem& text = machine.GetSystem().text();
+  std::optional<int> restore_window;
+  std::shared_ptr<TextWindow> window;
+  if (separate_window) {
+    const int computed =
+        element.GetWindowExpression()->GetIntegerValue(machine);
+    const int number = computed == -1
+                           ? text.mwnd_config().default_selection_window()
+                           : computed;
+    window = text.GetMwnd(number);
+    restore_window = text.active_window();
+    text.HideAllTextWindows();
+    text.set_active_window(number);
+  } else if (kind == SelectionRequest::Kind::Window) {
+    window = text.GetCurrentMwnd();
+  }
+
+  std::shared_ptr<Selection> s;
+  try {
+    s = BuildSelection(machine.GetSystem(), std::move(request), config, window);
+  } catch (...) {
+    if (restore_window) {
+      text.HideAllTextWindows();
+      text.set_active_window(*restore_window);
+    }
+    throw;
+  }
+  auto state = std::make_shared<SelState>();
+  state->active_ = s;
+  state->mouse_ = machine.GetSystem().rlEvent().GetCursorPos();
+  // A custom system menu may start another selection on top of this one.
+  auto previous_selection = machine.stage().selection[kLayerFg];
+  machine.stage().selection[kLayerFg] = s;
+  for (const auto& w : machine.stage().mwnd[kLayerFg])
+    if (w)
+      w->ClearMouseCapture();
+  text.set_in_selection_mode(true);
+  s->Start();
+  s->open_hook_done = true;
+  for (std::size_t i = 0; i < s->items.size(); ++i)
+    if (s->request.options[i].type == 1) {
+      s->focused = static_cast<int>(i);
+      break;
+    }
+
+  const auto cleanup = [&machine, state, previous_selection,
+                        restore_window](std::shared_ptr<Selection> selection) {
+    // Revoke input even when a child selection currently owns the stage. This
+    // prevents stack teardown from restoring an already-abandoned parent.
+    selection->open_hook_done = false;
+    state->active_.reset();
+    if (machine.stage().selection[kLayerFg] != selection)
+      return;
+    TextSystem& text = machine.GetSystem().text();
+    if (selection->window) {
+      selection->window->SetSelectionSize(std::nullopt);
+      selection->window->ClearWin();
+    }
+    auto& foreground = machine.stage().selection[kLayerFg];
+    foreground = previous_selection && previous_selection->CanInput()
+                     ? previous_selection
+                     : nullptr;
+    text.set_in_selection_mode(static_cast<bool>(foreground));
+    if (restore_window) {
+      text.HideAllTextWindows();
+      text.set_active_window(*restore_window);
+    }
+    machine.GetSystem().graphics().ForceRefresh();
+  };
+  const auto input = [&machine, state, s](std::shared_ptr<Event> event) {
+    if (!event || !s->Visible())
+      return;
+    if (machine.stage().selection[kLayerFg] != s) {
+      s->open_hook_done = false;
+      state->active_.reset();
+      return;
+    }
+    if (const auto* down = std::get_if<MouseDown>(event.get());
+        down && down->button == MouseButton::RIGHT) {
+      s->pressed.reset();
+      state->held_keys_.clear();
+      state->cancel_pressed_ = false;
+      machine.GetSystem().ShowSyscomMenu(machine);
+      *event = std::monostate();
+      return;
+    }
+    const auto feedback = state->HandleEvent(event);
+    auto& sound = machine.GetSystem().sound();
+    if (feedback.focus_changed && sound.HasSe(0))
+      sound.PlaySe(0);
+    if (feedback.choice) {
+      if (sound.HasSe(1))
+        sound.PlaySe(1);
+      machine.GetSystem().TakeSelectionSnapshot(machine);
+    }
+    machine.GetSystem().graphics().ForceRefresh();
+  };
+  machine.PushLongOperation(std::make_shared<lop::WaitForSelection>(
+      state, s,
+      [&machine, cleanup](std::shared_ptr<Selection> selection) {
+        machine.set_store_register(*selection->result);
+        cleanup(std::move(selection));
+      },
+      cleanup, input));
+  machine.GetSystem().graphics().ForceRefresh();
+}
+
 struct Sel_select : public RLOp_SpecialCase {
   void operator()(RLMachine& machine, const CommandElement& ce) override {
-    if (machine.GetScenarioConfig().enable_selcom_savepoint)
-      MarkSavepoint(machine);
-
-    const SelectElement& element = dynamic_cast<const SelectElement&>(ce);
-    machine.PushLongOperation(
-        std::make_shared<lop::NormalSelectLongOperation>(machine, element));
+    StartSelection(machine, ce, SelectionRequest::Kind::Window);
   }
 };
 
 struct Sel_select_s : public RLOp_SpecialCase {
   void operator()(RLMachine& machine, const CommandElement& ce) override {
-    if (machine.GetScenarioConfig().enable_selcom_savepoint)
-      MarkSavepoint(machine);
-
-    const SelectElement& element = dynamic_cast<const SelectElement&>(ce);
-    auto btn_select =
-        std::make_shared<lop::ButtonSelectLongOperation>(machine, element, 0);
-    machine.PushLongOperation(btn_select);
-    machine.GetSystem().graphics().AddRenderable(btn_select);
+    StartSelection(machine, ce, SelectionRequest::Kind::Buttons);
   }
 };
 
 struct Sel_select_w : public RLOp_SpecialCase {
   void operator()(RLMachine& machine, const CommandElement& ce) override {
-    if (machine.GetScenarioConfig().enable_selcom_savepoint)
-      MarkSavepoint(machine);
-
-    const SelectElement& element = dynamic_cast<const SelectElement&>(ce);
-
-    // Sometimes the RL bytecode will override DEFAULT_SEL_WINDOW.
-    int window =
-        machine.GetSystem().gameexe()("DEFAULT_SEL_WINDOW").Int().value_or(-1);
-    libreallive::Expression window_exp = element.GetWindowExpression();
-    int computed = window_exp->GetIntegerValue(machine);
-    if (computed != -1)
-      window = computed;
-
-    // Restore the previous text state after the select operation completes.
-    TextSystem& text = machine.GetSystem().text();
-    int active_window = text.active_window();
-    text.HideAllTextWindows();
-    text.set_active_window(window);
-    machine.PushLongOperation(
-        std::make_shared<lop::ClearAndRestoreWindow>(text, active_window));
-
-    machine.PushLongOperation(
-        std::make_shared<lop::NormalSelectLongOperation>(machine, element));
+    StartSelection(machine, ce, SelectionRequest::Kind::Window, true);
   }
 };
 

@@ -217,6 +217,7 @@ struct SiglusWipe {
   void ClearWipeState() {
     if (!stage_)
       return;
+    stage_->selection[kLayerNext].reset();
     for (auto& group : stage_->groups[kLayerNext])
       group.reset();
     for (auto& object : stage_->objects[kLayerNext]) {

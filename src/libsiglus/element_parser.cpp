@@ -106,16 +106,21 @@ struct CallableTarget {
 inline static Builder b_callable(std::string_view mem,
                                  Type return_type = Type::None,
                                  CallFlags flags = {}) {
-  return b(Type::Callable, Member{mem, return_type, !flags.is_explicit,
-                                  !flags.is_nonsimple, flags.await_result});
+  return b(Type::Callable,
+           Member{mem, return_type, !flags.is_explicit, !flags.is_nonsimple,
+                  flags.await_result, flags.context});
 }
 static Builder b_callable(std::initializer_list<CallableTarget> targets) {
   return Builder([targets =
                       std::vector<CallableTarget>(targets)](Builder::Ctx& ctx) {
     const int overload_id = ctx.elm.bind_ctx.overload_id;
     auto member_from_target = [](const CallableTarget& target) {
-      return Member{target.name, target.return_type, !target.flags.is_explicit,
-                    !target.flags.is_nonsimple, target.flags.await_result};
+      return Member{target.name,
+                    target.return_type,
+                    !target.flags.is_explicit,
+                    !target.flags.is_nonsimple,
+                    target.flags.await_result,
+                    target.flags.context};
     };
 
     const CallableTarget* fallback = nullptr;
@@ -1392,10 +1397,13 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[61] | b_callable("slide_msg", Type::None),
 
            // SEL
-           id[5] | b(Type::Callable, Member("sel")),
-           id[51] | b(Type::Callable, Member("sel_cancel")),
-           id[50] | b(Type::Callable, Member("selmsg")),
-           id[52] | b(Type::Callable, Member("selmsg_cancel")),
+           id[5] | b_callable("sel", Type::Int, AWAIT | NONSIMPLE | CONTEXT),
+           id[51] | b_callable("sel_cancel", Type::Int,
+                               AWAIT | NONSIMPLE | CONTEXT),
+           id[50] |
+               b_callable("selmsg", Type::Int, AWAIT | NONSIMPLE | CONTEXT),
+           id[52] | b_callable("selmsg_cancel", Type::Int,
+                               AWAIT | NONSIMPLE | CONTEXT),
            id[84] | b_callable({{0, "rep_pos_default"}, {1, "rep_pos"}}),
            id[7] | b_callable({{0, "size_default"}, {1, "size"}}),
            id[8] | b_callable({{0, "color_default"}, {1, "color"}}),
@@ -1571,9 +1579,18 @@ AccessChain ElementParser::Parse(ElementCode& elm) {
         // simple callable should be the default
         flags.is_nonsimple = !call_member->is_simple;
         flags.await_result = call_member->await_result;
+        flags.context = call_member->selection_context;
       }
       result.nodes.emplace_back(
           Node::BuildCall(std::move(elm.bind_ctx), flags));
+    }
+  }
+
+  if (!result.nodes.empty()) {
+    if (auto* call = std::get_if<Call>(&result.nodes.back().var);
+        call && call->context) {
+      result.kidoku = read_kidoku_();
+      call->kidoku = result.kidoku;
     }
   }
 
@@ -1689,25 +1706,40 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
 
       // ====== SEL ======
       // some needs kidoku flag
-    case 19:   // SEL
-    case 101:  // SEL_CANCEL
-      read_kidoku_();
-      break;
-
-    case 100:  // SELMSG
-    case 102:  // SELMSG_CANCEL
-      read_kidoku_();
-      break;
-
-    case 76:   // SELBTN
-    case 77:   // SELBTN_READY
-    case 126:  // SELBTN_CANCEL
-    case 128:  // SELBTN_CANCEL_READY
-    case 127:  // SELBTN_START
-    {
-      if (root == 76 || root == 126 || root == 127)
-        read_kidoku_();
-      break;
+    case 19:
+    case 101:
+    case 100:
+    case 102:
+    case 76:
+    case 77:
+    case 126:
+    case 128:
+    case 127:
+    case 162: {
+      const std::string_view name = root == 19    ? "sel"
+                                    : root == 101 ? "sel_cancel"
+                                    : root == 100 ? "selmsg"
+                                    : root == 102 ? "selmsg_cancel"
+                                    : root == 76  ? "selbtn"
+                                    : root == 77  ? "selbtn_cancel"
+                                    : root == 126 ? "selbtn_ready"
+                                    : root == 128 ? "selbtn_cancel_ready"
+                                    : root == 127 ? "selbtn_start"
+                                                  : "get_last_sel_msg";
+      const bool ready = root == 126 || root == 128;
+      const bool getter = root == 162;
+      const bool blocking = !ready && !getter;
+      const Type type = getter ? Type::String : ready ? Type::None : Type::Int;
+      Member member{name, type, true, getter, blocking, blocking};
+      return AccessChain{.root = std::monostate(),
+                         .nodes = {Node(Type::Callable, member)}};
+    }
+    case 114: {
+      return AccessChain{
+          .root = std::monostate(),
+          .nodes = {
+              Node(Type::Msgbk, Member{"msgbk"}),
+              Node(Type::Callable, Member{"insert_img", Type::None, true})}};
     }
 
       // ====== Title ======

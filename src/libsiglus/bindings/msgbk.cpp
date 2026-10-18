@@ -92,6 +92,18 @@ void BindMsgbk(SiglusMachine& runtime) {
       },
       sb::vararg);
   msgbk.def("go_next_msg", &MessageBack::GoNextMsg);
+  msgbk.def(
+      "insert_img",
+      [](MessageBack* msg, std::vector<sr::Value> raw) {
+        const auto packet = CallPacket::DecodeFrom(std::move(raw));
+        if (packet.args.empty())
+          return;
+        msg->InsertImage(AsString(packet.args[0]),
+                         packet.args.size() > 1
+                             ? RequireInt(packet.args[1], "backlog image x")
+                             : 0);
+      },
+      sb::vararg);
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "msgbk", BindMsgbk)

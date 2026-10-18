@@ -37,8 +37,7 @@ class RLMachine;
 namespace lop {
 
 // LongOperation that uses GraphicsObjects to present a choice to the
-// user. This doesn't derive from SelectLongOperation because these commands
-// are normal commands; they aren't like the select() family.
+// user. These opcodes operate on existing objects rather than text options.
 class ButtonObjectSelectLongOperation : public LongOperation {
  public:
   ButtonObjectSelectLongOperation(RLMachine& machine, int group);

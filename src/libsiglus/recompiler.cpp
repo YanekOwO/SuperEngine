@@ -1135,6 +1135,11 @@ void Recompiler::emit_elm_node(const elm::SetMember& nd) {
 }
 void Recompiler::emit_elm_node(const elm::Call& nd) {
   // (fn)
+  const unsigned context_count = nd.context ? 2 : 0;
+  if (nd.context) {
+    emit_const(scene_id_.value_or(-1));
+    emit_const(nd.kidoku.value_or(-1));
+  }
   if (nd.is_simple) {
     if (!nd.kwargs.empty()) {
       std::string msg = std::format(
@@ -1150,7 +1155,8 @@ void Recompiler::emit_elm_node(const elm::Call& nd) {
       emit_val(arg);
     // (fn, args...)
     emit(sr::Call(
-        {.argcnt = static_cast<uint32_t>(nd.args.size()), .kwargcnt = 0}));
+        {.argcnt = static_cast<uint32_t>(nd.args.size()) + context_count,
+         .kwargcnt = 0}));
     // -> (ret)
   } else {
     if (nd.overload_id)
@@ -1171,7 +1177,7 @@ void Recompiler::emit_elm_node(const elm::Call& nd) {
     emit(sr::MakeDict{.nelms = nd.kwargs.size()});
     // (fn, ol, args, kwargs)
 
-    emit(sr::Call{.argcnt = 3, .kwargcnt = 0});
+    emit(sr::Call{.argcnt = 3 + context_count, .kwargcnt = 0});
     // -> (ret)
   }
 
