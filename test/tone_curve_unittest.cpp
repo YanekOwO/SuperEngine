@@ -24,8 +24,10 @@
 
 #include <gtest/gtest.h>
 
+#include "core/gameexe.hpp"
 #include "core/tone_curve.hpp"
 #include "utilities/bytestream.hpp"
+#include "utilities/file.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -80,6 +82,28 @@ TEST_F(ToneCurveTest, SingleEffect) {
   EXPECT_EQ(result[0], r);
   EXPECT_EQ(result[1], g);
   EXPECT_EQ(result[2], b);
+}
+
+TEST_F(ToneCurveTest, CreateFromCaseInsensitiveDataDirectory) {
+  ToneCurveRGBMap effect{};
+  effect[0].fill(17);
+  effect[1].fill(42);
+  effect[2].fill(255);
+  const auto data = EncodeToneCurve({effect});
+
+  for (const char* directory : {"dat", "DAT", "Dat"}) {
+    SCOPED_TRACE(directory);
+    ScopedTemporary root;
+    WriteFile(root.dir() / directory / "ToneCurve.TCC", data);
+
+    Gameexe gameexe;
+    gameexe("__GAMEPATH") = root.dir().string();
+    gameexe("TONECURVE_FILENAME") = "tonecurve.tcc";
+
+    const auto curve = CreateToneCurve(gameexe);
+    EXPECT_EQ(curve.GetEffectCount(), 1);
+    EXPECT_EQ(curve.GetEffect(0), effect);
+  }
 }
 
 TEST_F(ToneCurveTest, NoEffects) {

@@ -46,31 +46,16 @@ namespace libreallive {
 namespace fs = std::filesystem;
 
 namespace {
-fs::path FindGameFile(const std::filesystem::path& gamerootPath,
-                      const std::string& filename) {
-  fs::path search_for = gamerootPath / filename;
-  fs::path corrected_path = CorrectPathCase(search_for);
-  if (corrected_path.empty()) {
-    throw std::runtime_error("Could not open " + search_for.string());
-  }
-
-  return corrected_path;
-}
 
 // AVG32 file checks. We can't run AVG32 games.
 static const std::vector<std::string> avg32_exes{"avg3216m.exe",
                                                  "avg3217m.exe"};
 
-// Siglus engine filenames. We can't run VisualArts' newer engine.
-static const std::vector<std::string> siglus_exes{
-    "siglus.exe", "siglusengine-ch.exe", "siglusengine.exe",
-    "siglusenginechs.exe"};
-
 void CheckBadEngine(const std::filesystem::path& gamerootPath,
                     const std::vector<std::string> filenames,
                     const std::string& message_text) {
   for (const auto& cur_file : filenames) {
-    if (fs::exists(CorrectPathCase(gamerootPath / cur_file))) {
+    if (fs::exists(CorrectPath(gamerootPath, cur_file))) {
       throw std::runtime_error(message_text);
     }
   }
@@ -81,12 +66,11 @@ void CheckBadEngine(const std::filesystem::path& gamerootPath,
 GameLoader::GameLoader(fs::path gameroot,
                        std::optional<int> start_scene,
                        bool fast_forward) {
-  fs::path gameexePath = FindGameFile(gameroot, "Gameexe.ini");
-  fs::path seenPath = FindGameFile(gameroot, "Seen.txt");
+  fs::path gameexePath = CorrectPath(gameroot, "Gameexe.ini");
+  fs::path seenPath = CorrectPath(gameroot, "Seen.txt");
 
-  // Check for VisualArt's older and newer engines, which we can't emulate:
+  // Check for VisualArt's older engines, which we can't emulate:
   CheckBadEngine(gameroot, avg32_exes, "Can't run AVG32 games");
-  CheckBadEngine(gameroot, siglus_exes, "Can't run Siglus games");
 
   gameexe_ = std::make_shared<Gameexe>();
   gameexe_->LoadFromFile(gameexePath);

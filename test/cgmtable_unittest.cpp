@@ -25,6 +25,8 @@
 #include <gtest/gtest.h>
 
 #include "core/cgm_table.hpp"
+#include "core/gameexe.hpp"
+#include "utilities/file.hpp"
 #include "utilities/mapped_file.hpp"
 
 #include "test_utils.hpp"
@@ -38,6 +40,23 @@ TEST(cgmTableTest, DisabledCgm) {
   EXPECT_EQ(table.GetTotal(), 0);
   EXPECT_EQ(table.GetViewed(), 0);
   EXPECT_EQ(table.GetPercent(), 0);
+}
+
+TEST(cgmTableTest, CreateFromCaseInsensitiveDataDirectory) {
+  const auto data = LoadFileStr(PathToTestCase("Gameroot/data/clannad.cgm"));
+  for (const char* directory : {"dat", "DAT", "Dat"}) {
+    SCOPED_TRACE(directory);
+    ScopedTemporary root;
+    WriteFile(root.dir() / directory / "Clannad.CGM", data);
+
+    Gameexe gameexe;
+    gameexe("__GAMEPATH") = root.dir().string();
+    gameexe("CGTABLE_FILENAME") = "clannad.cgm";
+
+    const auto table = CreateCGMTable(gameexe);
+    EXPECT_EQ(table.GetTotal(), 174);
+    EXPECT_EQ(table.GetFlag("FGNG01A"), 0);
+  }
 }
 
 TEST(cgmTableTest, ParseCgm) {

@@ -23,12 +23,14 @@
 
 #include "systems/system.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/bindings/util.hpp"
 #include "log/domain_logger.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/args.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
+#include "utilities/file.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
@@ -42,10 +44,9 @@
 namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
-
 namespace fs = std::filesystem;
 
-static void nop() {}
+static inline void nop() {}
 
 void BindSystem(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
@@ -58,12 +59,15 @@ void BindSystem(SiglusMachine& runtime) {
   m.def("window_active",
         [sys] { return sys->event().mouse_inside_window() ? 1 : 0; });
   m.def("time", +[]() { return static_cast<int>(std::time(nullptr)); });
-  m.def("check_file_exist", [root = runtime.base_pth](std::string filename) {
-    return fs::exists(root / filename);
-  });
+  m.def("check_file_exist",
+        [root = runtime.base_pth](std::string filename) -> int {
+          fs::path path = CorrectPath(root, std::move(filename));
+          return fs::exists(path) ? 1 : 0;
+        });
   m.def("check_save_file_exist",
-        [root = runtime.save_pth](std::string filename) {
-          return fs::exists(root / filename);
+        [root = runtime.save_pth](std::string filename) -> int {
+          fs::path path = CorrectPath(root, std::move(filename));
+          return fs::exists(path) ? 1 : 0;
         });
   m.def(
        "check_dummy", [](std::vector<sr::Value>) { nop(); }, sb::vararg)

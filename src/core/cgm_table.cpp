@@ -174,7 +174,7 @@ CGMTable CreateCGMTable(Gameexe& gameexe) {
   }
 
   fs::path basepath = gameexe("__GAMEPATH").ToStr();
-  fs::path filepath = CorrectPathCase(basepath / "dat" / cgtable);
+  fs::path filepath = CorrectPath(basepath, "dat/" + cgtable);
 
   MappedFile mfile(filepath);
   return CGMTable(mfile.Read());

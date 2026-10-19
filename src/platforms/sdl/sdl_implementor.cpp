@@ -90,9 +90,9 @@ fs::path SdlImplementor::SelectGameDirectory() {
       return {};
 
     auto detectGame = [](const fs::path& dir) -> bool {
-      if (!CorrectPathCase(dir / "Gameexe.ini").empty())  // likely reallive
+      if (!CorrectPath(dir, "Gameexe.ini").empty())  // likely reallive
         return true;
-      if (!CorrectPathCase(dir / "Gameexe.dat").empty())  // likely siglus
+      if (!CorrectPath(dir, "Gameexe.dat").empty())  // likely siglus
         return true;
       return false;
     };

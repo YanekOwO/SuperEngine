@@ -254,11 +254,10 @@ int main(int argc, char* argv[]) {
 
     // Some games hide data in a lower subdirectory.  A little hack to
     // make these behave as expected...
-    if (CorrectPathCase(gamerootPath / "Gameexe.ini").empty()) {
-      if (!CorrectPathCase(gamerootPath / "KINETICDATA" / "Gameexe.ini")
-               .empty()) {
+    if (CorrectPath(gamerootPath, "Gameexe.ini").empty()) {
+      if (!CorrectPath(gamerootPath / "KINETICDATA", "Gameexe.ini").empty()) {
         gamerootPath /= "KINETICDATA/";
-      } else if (!CorrectPathCase(gamerootPath / "REALLIVEDATA" / "Gameexe.ini")
+      } else if (!CorrectPath(gamerootPath / "REALLIVEDATA", "Gameexe.ini")
                       .empty()) {
         gamerootPath /= "REALLIVEDATA/";
       } else {

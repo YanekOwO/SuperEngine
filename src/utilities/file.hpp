@@ -34,15 +34,24 @@ class Gameexe;
 class RLMachine;
 class System;
 
-// On platforms with case-insensitive file systems, returns a copy of the input
-// unchanged. On less tolerant platforms, returns a copy of the input with
-// correct case, or the empty string if no solution could be found.
-std::filesystem::path CorrectPathCase(std::filesystem::path Path);
+// Returns the correctly capitalized native path.
+// Returns an empty path if the file cannot be found.
+// Assumes filename is a UTF-8, root-relative file path.
+std::filesystem::path CorrectPath(const std::filesystem::path& root,
+                                  std::string filename);
 
 std::vector<char> LoadFile(const std::filesystem::path& file_path);
 std::string LoadFileStr(const std::filesystem::path& file_path);
+// Creates any missing parent directories before writing.
 void WriteFile(const std::filesystem::path& file_path,
-               std::span<std::uint8_t> data);
+               std::span<const std::uint8_t> data);
+inline void WriteFile(const std::filesystem::path& file_path,
+                      std::string_view data) {
+  return WriteFile(
+      file_path,
+      std::span<const std::uint8_t>(
+          reinterpret_cast<const std::uint8_t*>(data.data()), data.size()));
+}
 
 class ScopedCurrentPath {
  public:

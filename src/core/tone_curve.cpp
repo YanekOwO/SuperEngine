@@ -171,7 +171,7 @@ ToneCurve CreateToneCurve(Gameexe& gameexe) {
   }
 
   fs::path basename = gameexe("__GAMEPATH").ToStr();
-  fs::path filename = CorrectPathCase(basename / "dat" / tonecurve);
+  fs::path filename = CorrectPath(basename, "dat/" + tonecurve);
 
   MappedFile mfile(filename);
   return ToneCurve(mfile.Read());

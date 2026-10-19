@@ -89,15 +89,15 @@ int main(int argc, char* argv[]) {
 
   // reallive game
   std::unique_ptr<IDumper> dumper = nullptr;
-  fs::path gameexe_path = CorrectPathCase(game_root / "Gameexe.ini");
-  fs::path seen_path = CorrectPathCase(game_root / "Seen.txt");
+  fs::path gameexe_path = CorrectPath(game_root, "Gameexe.ini");
+  fs::path seen_path = CorrectPath(game_root, "Seen.txt");
 
   if (fs::exists(gameexe_path) && fs::exists(seen_path)) {
     dumper = std::make_unique<Dumper>(gameexe_path, seen_path, game_root);
   } else {
     // siglus game
-    gameexe_path = CorrectPathCase(game_root / "Gameexe.dat");
-    seen_path = CorrectPathCase(game_root / "Scene.pck");
+    gameexe_path = CorrectPath(game_root, "Gameexe.dat");
+    seen_path = CorrectPath(game_root, "Scene.pck");
     dumper =
         std::make_unique<libsiglus::Dumper>(gameexe_path, seen_path, game_root);
   }

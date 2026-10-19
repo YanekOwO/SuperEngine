@@ -119,7 +119,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   sr::VM& vm = *rt.vm;
   std::shared_ptr<sr::GarbageCollector> gc = vm.gc_;
 
-  fs::path seen_path = CorrectPathCase(base_path_ / "scene.pck");
+  fs::path seen_path = CorrectPath(base_path_, "scene.pck");
   MappedFile archive_mf(seen_path);
   rt.archive = std::make_shared<Archive>(Archive::Create(archive_mf.Read()));
   rt.loader = std::make_unique<binding::Loader>(*rt.archive, vm, debug_);

@@ -51,54 +51,103 @@ ScopedCurrentPath::~ScopedCurrentPath() {
   fs::current_path(previous_, ec);
 }
 
-fs::path CorrectPathCase(fs::path Path) {
-  // If the path is OK as it stands, do nothing.
-  if (fs::exists(Path))
-    return Path;
-  // If the path doesn't seem to be OK, track backwards through it
-  // looking for the point at which the problem first arises.  Path
-  // will contain the parts of the path that exist on the current
-  // filesystem, and pathElts will contain the parts after that point,
-  // which may have incorrect case.
-  std::stack<std::string> pathElts;
-  while (!Path.empty() && !fs::exists(Path)) {
-    pathElts.push(Path.filename().string());
-    Path = Path.parent_path();
-  }
-  // Now proceed forwards through the possibly-incorrect elements.
-  while (!pathElts.empty()) {
-    // Does this element need to be a directory?
-    // (If we are searching for /foo/bar/baz, and /foo contains a file
-    // bar and a directory Bar, then we need to know which is the one
-    // we're looking for.  This will still be unreliable if /foo
-    // contains directories bar and Bar, but a full backtracking
-    // search would be complicated; for now this should be adequate!)
-    const bool needDir = pathElts.size() > 1;
-    std::string elt(pathElts.top());
-    pathElts.pop();
-    // Does this element exist?
-    if (exists(Path / elt) && (!needDir || is_directory(Path / elt))) {
-      // If so, use it.
-      Path /= elt;
-    } else {
-      // If not, search for a suitable candidate.
-      to_upper(elt);
-      fs::directory_iterator end;
-      bool found = false;
-      for (fs::directory_iterator dir(Path); dir != end; ++dir) {
-        std::string uleaf = dir->path().filename().string();
-        to_upper(uleaf);
-        if (uleaf == elt && (!needDir || is_directory(*dir))) {
-          Path /= dir->path().filename();
-          found = true;
+#include <algorithm>
+#include <filesystem>
+#include <iterator>
+#include <string>
+
+namespace fs = std::filesystem;
+
+// Returns the correctly capitalized native path.
+// Returns an empty path if the file cannot be found.
+// Assumes filename is a UTF-8, root-relative file path.
+fs::path CorrectPath(const fs::path& root, std::string filename) {
+  // Normalize Windows separators to portable separators.
+  std::replace(filename.begin(), filename.end(), '\\', '/');
+
+  auto is_windows_drive_path = [&] {
+    return filename.size() >= 2 &&
+           ((filename[0] >= 'A' && filename[0] <= 'Z') ||
+            (filename[0] >= 'a' && filename[0] <= 'z')) &&
+           filename[1] == ':';
+  };
+  if (is_windows_drive_path())
+    return {};
+
+  // ASCII case-insensitive comparison using native path characters.
+  auto equalCaseInsensitive = [](const fs::path& a, const fs::path& b) {
+    const auto& x = a.native();
+    const auto& y = b.native();
+
+    if (x.size() != y.size())
+      return false;
+
+    auto lower = [](fs::path::value_type c) {
+      return (c >= 'A' && c <= 'Z')
+                 ? static_cast<fs::path::value_type>(c + ('a' - 'A'))
+                 : c;
+    };
+
+    for (size_t i = 0; i < x.size(); ++i) {
+      if (lower(x[i]) != lower(y[i]))
+        return false;
+    }
+    return true;
+  };
+
+  try {
+    fs::path relative = fs::path(filename).lexically_normal();
+
+    if (relative.empty() || relative.is_absolute() ||
+        relative.has_root_name() || !fs::is_directory(root))
+      return {};
+
+    fs::path current = root;
+
+    // Resolve each component against actual filesystem entries.
+    for (auto it = relative.begin(); it != relative.end(); ++it) {
+      const fs::path& wanted = *it;
+
+      if (wanted == ".")
+        continue;
+      if (wanted == "..")
+        return {};
+
+      const bool last = std::next(it) == relative.end();
+      fs::path match;
+
+      for (const auto& entry : fs::directory_iterator(current)) {
+        const fs::path actual = entry.path().filename();
+
+        if (!equalCaseInsensitive(actual, wanted))
+          continue;
+
+        // Intermediate components must be directories;
+        // the final component must be a regular file.
+        if (last ? !entry.is_regular_file() : !entry.is_directory())
+          continue;
+
+        // Prefer exact capitalization if multiple names match.
+        if (actual == wanted) {
+          match = entry.path();
           break;
         }
+
+        if (match.empty())
+          match = entry.path();
       }
-      if (!found)
-        return "";
+
+      if (match.empty())
+        return {};
+
+      current = match;
     }
+
+    return fs::is_regular_file(current) ? current.make_preferred() : fs::path{};
+
+  } catch (const fs::filesystem_error&) {
+    return {};
   }
-  return Path.string();
 }
 
 std::vector<char> LoadFile(const std::filesystem::path& path) {
@@ -144,7 +193,10 @@ std::string LoadFileStr(const std::filesystem::path& path) {
 }
 
 void WriteFile(const std::filesystem::path& path,
-               std::span<std::uint8_t> data) {
+               std::span<const std::uint8_t> data) {
+  if (path.has_parent_path())
+    fs::create_directories(path.parent_path());
+
   std::ofstream file(path, std::ios::binary);
   if (!file)
     throw std::runtime_error("Failed to open file: " + path.string());
