@@ -73,6 +73,9 @@ void EventSystem::DispatchEvent(std::shared_ptr<Event> event) {
   if (!event)
     return;
 
+  if (const auto* active = std::get_if<Active>(event.get()))
+    mouse_inside_window_ = active->mouse_inside_window;
+
   std::vector<std::pair<int, std::shared_ptr<EventListener>>> event_listeners;
   event_listeners.reserve(listeners_.size());
 

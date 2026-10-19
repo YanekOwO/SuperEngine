@@ -1102,6 +1102,33 @@ TEST_F(ElementParserTest, System) {
   }
 }
 
+TEST_F(ElementParserTest, MwndAnimationPreferencesAreImmediateCalls) {
+  ElementCode setter{63, 8};
+  setter.ForceBind({0, {v(-7)}});
+  auto set = chain(setter);
+  EXPECT_EQ(set, "syscom.set_no_mwnd_anime_onoff(int:-7)");
+  EXPECT_EQ(set.chain.GetType(), Type::None);
+  EXPECT_EQ(set.CallFlags(), "[]s");
+
+  for (bool bound : {false, true}) {
+    SCOPED_TRACE(bound);
+    ElementCode reset{63, 109};
+    ElementCode getter{63, 81};
+    if (bound) {
+      reset.ForceBind({0, {}});
+      getter.ForceBind({0, {}});
+    }
+    auto reset_call = chain(reset);
+    EXPECT_EQ(reset_call, "syscom.set_no_mwnd_anime_onoff_default()");
+    EXPECT_EQ(reset_call.chain.GetType(), Type::None);
+    EXPECT_EQ(reset_call.CallFlags(), "[]s");
+    auto get = chain(getter);
+    EXPECT_EQ(get, "syscom.get_no_mwnd_anime_onoff()");
+    EXPECT_EQ(get.chain.GetType(), Type::Int);
+    EXPECT_EQ(get.CallFlags(), "[]s");
+  }
+}
+
 TEST_F(ElementParserTest, GlobalPcmCommandsAreImmediateCalls) {
   ElementCode play{43, 0};
   play.ForceBind({0, {v("se_sasareru")}});

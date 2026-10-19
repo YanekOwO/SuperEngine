@@ -50,7 +50,8 @@ inline static int realLiveVolumeToSDLMixerVolume(int in_vol) {
   return in_vol / 2;
 }
 
-static const std::set<std::string> SOUNDFILETYPES{"wav", "ogg", "nwa", "mp3"};
+static const std::set<std::string> SOUNDFILETYPES{"wav", "ogg", "nwa", "owp",
+                                                  "mp3"};
 
 // -----------------------------------------------------------------------
 // RealLive Sound Qualities table
@@ -776,9 +777,11 @@ void SoundSystem::SetChannelVolumeImpl(int channel) {
 
 player_t SoundSystem::LoadMusic(const std::string& bgm_name) {
   auto track = audio_table_.FindBgm(bgm_name);
-  auto file_path = voice_assets_->FindFile(track.file, SOUNDFILETYPES).value();
+  auto file_path = voice_assets_->FindFile(track.file, SOUNDFILETYPES);
+  if (!file_path)
+    throw file_path.error();
 
-  player_t player = CreateAudioPlayer(file_path);
+  player_t player = CreateAudioPlayer(file_path.value());
   player->SetName(track.name);
   player->SetPLoop(track.from, track.to, track.loop);
   player->SetVolume(

@@ -392,7 +392,7 @@ void GraphicsSystem::RenderFrame(bool should_refresh) {
     if (!ShouldUseCustomCursor())
       return;
     std::shared_ptr<MouseCursor> cursor;
-    if (system().rlEvent().mouse_inside_window())
+    if (system().event().mouse_inside_window())
       cursor = GetCurrentCursor();
     if (cursor)
       cursor->RenderHotspotAt(cursor_pos());
@@ -417,7 +417,7 @@ void GraphicsSystem::RenderCustomFrame(const DrawCallback& draw_scene,
     if (!ShouldUseCustomCursor())
       return;
     std::shared_ptr<MouseCursor> cursor;
-    if (system().rlEvent().mouse_inside_window())
+    if (system().event().mouse_inside_window())
       cursor = GetCurrentCursor();
     if (cursor)
       cursor->RenderHotspotAt(cursor_pos());

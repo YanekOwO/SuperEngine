@@ -373,6 +373,9 @@ void BindSyscom(SiglusMachine& runtime) {
   add_global_bool(
       &GlobalSystemConfig::skip_wipe_anime, "set_skip_wipe_anime_onoff",
       "set_skip_wipe_anime_onoff_default", "get_skip_wipe_anime_onoff");
+  add_global_bool(
+      &GlobalSystemConfig::disable_mwnd_anime, "set_no_mwnd_anime_onoff",
+      "set_no_mwnd_anime_onoff_default", "get_no_mwnd_anime_onoff");
   m.def("set_automode", [global_config](int value) {
     global_config->enable_auto_mode = value != 0;
   });

@@ -123,8 +123,6 @@ System::System(Gameexe& gameexe,
   const Size screen_size = options.engine == SystemOptions::Engine::Siglus
                                ? GetSiglusScreenSize(gameexe)
                                : GetRealliveScreenSize(gameexe);
-  rlevent_handler_ = std::make_shared<RLEventListener>();
-
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::ostringstream ss;
     ss << "Video initialization failed: " << SDL_GetError();
@@ -142,6 +140,7 @@ System::System(Gameexe& gameexe,
     event_impl =
         std::make_unique<FastForwardEventBackend>(std::move(event_impl));
   event_system_ = std::make_shared<EventSystem>(std::move(event_impl));
+  rlevent_handler_ = std::make_shared<RLEventListener>(*event_system_);
   quit_listener_ = std::make_shared<QuitEventListener>(*this);
   event_system_->AddListener(100, quit_listener_);
 

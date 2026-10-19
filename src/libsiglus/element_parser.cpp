@@ -802,9 +802,9 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[116] | b(Type::Callable, Member("set_skip_wipe_anime_onoff")),
            id[117] | b(Type::None, Member("set_skip_wipe_anime_onoff_default")),
            id[118] | b(Type::Int, Member("get_skip_wipe_anime_onoff")),
-           id[8] | b(Type::Callable, Member("set_no_mwnd_anime_onoff")),
-           id[109] | b(Type::None, Member("set_no_mwnd_anime_onoff_default")),
-           id[81] | b(Type::Int, Member("get_no_mwnd_anime_onoff")),
+           id[8] | b_callable("set_no_mwnd_anime_onoff"),
+           id[109] | b_callable("set_no_mwnd_anime_onoff_default"),
+           id[81] | b_callable("get_no_mwnd_anime_onoff", Type::Int),
            id[119] | b(Type::Callable, Member("set_wheel_next_message_onoff")),
            id[120] |
                b(Type::None, Member("set_wheel_next_message_onoff_default")),

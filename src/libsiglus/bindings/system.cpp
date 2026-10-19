@@ -55,6 +55,8 @@ void BindSystem(SiglusMachine& runtime) {
 
   sb::module_ m(vm, "system");
   m.def("is_debug", +[]() { return false; });
+  m.def("window_active",
+        [sys] { return sys->event().mouse_inside_window() ? 1 : 0; });
   m.def("time", +[]() { return static_cast<int>(std::time(nullptr)); });
   m.def("check_file_exist", [root = runtime.base_pth](std::string filename) {
     return fs::exists(root / filename);

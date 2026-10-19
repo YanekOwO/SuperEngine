@@ -55,6 +55,8 @@ class EventSystem {
   // Run once per cycle through the game loop to process events.
   void ExecuteEventSystem();
 
+  bool mouse_inside_window() const noexcept { return mouse_inside_window_; }
+
   // Returns the number of milliseconds since the program
   // started. Used for timing things.
   unsigned int GetTicks() const;
@@ -67,6 +69,7 @@ class EventSystem {
   std::shared_ptr<Clock> clock_;
 
   std::unique_ptr<IEventBackend> event_backend_;
+  bool mouse_inside_window_ = false;
 
   std::map<std::weak_ptr<EventListener>,
            int,
