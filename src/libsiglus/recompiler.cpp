@@ -641,13 +641,19 @@ void Recompiler::Finish() {
   emit_const_nil();
   emit(sr::Return{});
 
+  std::vector<std::size_t> command_entries;
+  command_entries.reserve(user_commands_.size());
+  for (const auto& command : user_commands_)
+    command_entries.push_back(emit_user_command_wrapper(command));
+
   const std::size_t bootstrap_entry = code_size();
   patch(initial_jump_site_, bootstrap_entry);
   emit_store_function_global("%%script", main_entry_, 0);
 
-  for (const UserCommandMetadata& metadata : user_commands_) {
+  for (std::size_t i = 0; i < user_commands_.size(); ++i) {
+    const auto& metadata = user_commands_[i];
     const std::string entry_name = GetUsercmdId(metadata.source_entry);
-    emit_store_function_global(entry_name, metadata.bytecode_entry,
+    emit_store_function_global(entry_name, command_entries[i],
                                metadata.args.size());
   }
 
@@ -665,6 +671,42 @@ void Recompiler::Finish() {
   emit(sr::Return{});
 
   is_finalized_ = true;
+}
+
+std::size_t Recompiler::emit_user_command_wrapper(
+    const UserCommandMetadata& command) {
+  const auto entry = code_size();
+  // Wrap the entry itself so native callbacks and script calls both get fresh
+  // L/K banks. The wrapper stays on the fiber while the command is suspended.
+  emit_load_global("__builtin_push_frame");
+  emit(sr::MakeList{.nelms = 0});
+  emit(sr::MakeList{.nelms = 0});
+  emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
+  emit(sr::Pop{});
+
+  const auto handler = code_size();
+  emit(sr::TryBegin{0});
+  emit_make_function(command.bytecode_entry, command.args.size());
+  for (std::size_t i = 0; i < command.args.size(); ++i)
+    emit(sr::LoadFast{.slot = curcall_fast_slot(i)});
+  emit(sr::Call{.argcnt = static_cast<uint32_t>(command.args.size()),
+                .kwargcnt = 0});
+  emit(sr::TryEnd{});
+
+  auto pop_frame = [&] {
+    // Leave the command's result (or exception) beneath the cleanup call.
+    emit_load_global("__builtin_pop_frame");
+    emit(sr::Call{.argcnt = 0, .kwargcnt = 0});
+    emit(sr::Pop{});
+  };
+  pop_frame();
+  emit(sr::Return{});
+
+  patch(handler, code_size());
+  pop_frame();
+  emit(sr::Throw{});
+
+  return entry;
 }
 
 void Recompiler::emit_current_chunk() { emit(sr::Push{0}); }

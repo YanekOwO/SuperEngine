@@ -142,6 +142,7 @@ class Recompiler {
   void emit_store_function_global(std::string id,
                                   std::size_t entry,
                                   std::size_t nargs);
+  std::size_t emit_user_command_wrapper(const UserCommandMetadata& command);
   void emit_scene_property_table();
   void emit_load_proplist(int scene);
   void emit_init_value(Type type, int size = 0);

@@ -349,7 +349,15 @@ void BindSyscom(SiglusMachine& runtime) {
     // TODO: implement save/load
     return 0;
   });
+  m.def("save", [](int, int, int) {
+    // TODO: implement save/load
+    return 0;
+  });
   m.def("get_new_save_no", []() -> int { return 1; });
+  m.def("is_save_exist", [](int slot) -> int {
+    // TODO: implement save/load
+    return false;
+  });
 
   m.def("set_enable_hidemwnd", [local_config](bool value) {
     local_config->syscommenu.hide_mwnd.enable = value;
@@ -373,9 +381,9 @@ void BindSyscom(SiglusMachine& runtime) {
   add_global_bool(
       &GlobalSystemConfig::skip_wipe_anime, "set_skip_wipe_anime_onoff",
       "set_skip_wipe_anime_onoff_default", "get_skip_wipe_anime_onoff");
-  add_global_bool(
-      &GlobalSystemConfig::disable_mwnd_anime, "set_no_mwnd_anime_onoff",
-      "set_no_mwnd_anime_onoff_default", "get_no_mwnd_anime_onoff");
+  add_global_bool(&GlobalSystemConfig::disable_mwnd_anime,
+                  "set_no_mwnd_anime_onoff", "set_no_mwnd_anime_onoff_default",
+                  "get_no_mwnd_anime_onoff");
   m.def("set_automode", [global_config](int value) {
     global_config->enable_auto_mode = value != 0;
   });

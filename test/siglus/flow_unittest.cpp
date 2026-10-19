@@ -36,14 +36,17 @@
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
 #include "vm/gc.hpp"
+#include "vm/promise.hpp"
 #include "vm/value.hpp"
 
+#include <any>
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace libsiglus::binding {
 namespace sr = serilang;
@@ -137,6 +140,222 @@ class SiglusSceneEntryTest : public ::testing::Test {
     module = loader.Load(0);
   }
 };
+
+class SiglusCallMemoryTest : public SiglusSceneEntryTest {
+ protected:
+  SiglusMachine runtime;
+  struct Observation {
+    int integer;
+    std::string string;
+    std::size_t depth;
+  };
+  std::vector<Observation> observations;
+
+  void SetUp() override {
+    runtime.vm =
+        std::make_unique<sr::VM>(std::make_shared<sr::GarbageCollector>());
+    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
+    for (const auto* name : {"0_memory", "flow"}) {
+      const auto* bind = SiglusBindingRegistry::Find(name);
+      ASSERT_NE(bind, nullptr);
+      (*bind)(runtime);
+    }
+    srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+    bindings.def("observe", [this](sr::Fiber& fiber, int i, std::string s) {
+      auto* memory = std::any_cast<MemoryHandle>(&fiber.usrdata);
+      ASSERT_NE(memory, nullptr);
+      observations.push_back({i, std::move(s), memory->StackDepth()});
+    });
+  }
+
+  void Run(std::string source) {
+    m6::CompilerPipeline compiler(runtime.vm->gc_, false);
+    compiler.compile(
+        m6::SourceBuffer::Create(std::move(source), "<SiglusCallMemoryTest>"));
+    ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
+    runtime.vm->Evaluate(compiler.Get());
+  }
+
+  sr::Function* AddProbe(std::string name, std::string body) {
+    // A real Siglus user command forwards its argument to an engine callable.
+    // The test substitutes that callable to inspect the active L/K banks.
+    std::string code;
+    AppendElement(code, {39, 1});  // math.tostr
+    AppendElement(code, {83, 0x7d000000});
+    code += static_cast<char>(ByteCode::Property);
+    code += static_cast<char>(ByteCode::Cmd);
+    for (int value :
+         {0, 1, static_cast<int>(Type::Int), 0, static_cast<int>(Type::String)})
+      AppendInt(code, value);
+    code += static_cast<char>(ByteCode::Return);
+    AppendInt(code, 1);
+    AppendInt(code, static_cast<int>(Type::String));
+    const int scene = AddCommandScene(name, name, {Type::Int}, false, code);
+
+    Run("fn probe(n) { " + body + " }");
+    srbind::module_ math(*runtime.vm, "math");
+    (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
+    auto* command = ResolveSceneCommand(*runtime.loader, name, name);
+    (*runtime.vm->globals_)["command"] = sr::Value(command);
+    EXPECT_EQ(command->globals, runtime.loader->Load(scene)->globals);
+    return command;
+  }
+};
+
+TEST_F(SiglusCallMemoryTest, ConsecutiveCommandsStartFreshAndRestoreCaller) {
+  AddProbe("face", R"(
+    observe(L[0], K[0]);
+    L[0] = 6; K[0] = "callee";
+    return "face";
+  )");
+  Run(R"(
+    L[0] = 42; K[0] = "caller";
+    first = __builtin_usrcmd(0, 5, "face")(0);
+    second = __builtin_usrcmd(0, 5, "face")(0);
+    observe(L[0], K[0]);
+  )");
+
+  ASSERT_EQ(observations.size(), 3);
+  for (int i : {0, 1}) {
+    EXPECT_EQ(observations[i].integer, 0);
+    EXPECT_EQ(observations[i].string, "");
+    EXPECT_EQ(observations[i].depth, 2);
+  }
+  EXPECT_EQ(observations[2].integer, 42);
+  EXPECT_EQ(observations[2].string, "caller");
+  EXPECT_EQ(observations[2].depth, 1);
+  EXPECT_EQ(runtime.vm->globals_->at("first").Str(), "face");
+  EXPECT_EQ(runtime.vm->globals_->at("second").Str(), "face");
+}
+
+TEST_F(SiglusCallMemoryTest, RecursiveCommandsRestoreEveryCaller) {
+  AddProbe("recursive", R"(
+    observe(L[0], K[0]);
+    L[0] = n; K[0] = "level";
+    if (n > 0) { command(n - 1); }
+    observe(L[0], K[0]);
+    return "done";
+  )");
+  Run("L[0] = 99; K[0] = \"root\"; result = command(2); observe(L[0], K[0]);");
+
+  ASSERT_EQ(observations.size(), 7);
+  for (int i : {0, 1, 2}) {
+    EXPECT_EQ(observations[i].integer, 0);
+    EXPECT_EQ(observations[i].string, "");
+    EXPECT_EQ(observations[i].depth, i + 2);
+  }
+  for (int i : {3, 4, 5}) {
+    EXPECT_EQ(observations[i].integer, i - 3);
+    EXPECT_EQ(observations[i].string, "level");
+    EXPECT_EQ(observations[i].depth, 7 - i);
+  }
+  EXPECT_EQ(observations[6].integer, 99);
+  EXPECT_EQ(observations[6].string, "root");
+  EXPECT_EQ(observations[6].depth, 1);
+  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "done");
+}
+
+TEST_F(SiglusCallMemoryTest, ExceptionRestoresCallerBeforeCatch) {
+  AddProbe("failure", R"(
+    L[0] = 6; K[0] = "callee";
+    throw "failure";
+  )");
+  Run(R"(
+    L[0] = 42; K[0] = "caller";
+    try { command(0); } catch (e) { error = e; }
+    observe(L[0], K[0]);
+  )");
+
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "caller");
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(runtime.vm->globals_->at("error").Str(), "failure");
+}
+
+TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
+  auto* command = AddProbe("callback", R"(
+    observe(L[0], K[0]);
+    L[0] = n; K[0] = "suspended";
+    await gate;
+    observe(L[0], K[0]);
+    return "resumed";
+  )");
+  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
+  runtime.vm->InvokeUntilBlocked(*command, {sr::Value(17)});
+
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 0);
+  EXPECT_EQ(observations[0].string, "");
+  EXPECT_EQ(observations[0].depth, 2);
+  ASSERT_EQ(runtime.vm->fibres_.size(), 1);
+  auto* callback = runtime.vm->fibres_.front();
+  EXPECT_EQ(callback->state, sr::FiberState::Suspended);
+  std::size_t completed_depth = 0;
+  callback->completion_promise->AddWaker([&](const auto& result) {
+    EXPECT_TRUE(result.has_value());
+    completed_depth =
+        std::any_cast<MemoryHandle>(&callback->usrdata)->StackDepth();
+  });
+
+  gate->completion_promise->Resolve(sr::nil);
+  runtime.vm->Run();
+
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[1].integer, 17);
+  EXPECT_EQ(observations[1].string, "suspended");
+  EXPECT_EQ(observations[1].depth, 2);
+  EXPECT_EQ(completed_depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, FarcallBanksSurviveNestedUserCommand) {
+  AddProbe("nested", "L[0] = 6; K[0] = \"callee\"; return \"done\";");
+  // These are the same frame bindings used by recompiled farcalls.
+  Run(R"(
+    L[0] = 42; K[0] = "root";
+    __builtin_push_frame([7], ["farcall"]);
+    command(0);
+    observe(L[0], K[0]);
+    __builtin_pop_frame();
+    observe(L[0], K[0]);
+  )");
+
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].string, "farcall");
+  EXPECT_EQ(observations[0].depth, 2);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].string, "root");
+  EXPECT_EQ(observations[1].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, PreservesArgumentTypesAndReturnValues) {
+  for (const auto type : {Type::Int, Type::String}) {
+    const std::string name = type == Type::Int ? "integer" : "string";
+    std::string body;
+    AppendElement(body, {83, 0x7d000000});
+    body += static_cast<char>(ByteCode::Property);
+    body += static_cast<char>(ByteCode::Return);
+    AppendInt(body, 1);
+    AppendInt(body, static_cast<int>(type));
+    AddCommandScene(name, name, {type}, false, body);
+    (*runtime.vm->globals_)[name] =
+        sr::Value(ResolveSceneCommand(*runtime.loader, name, name));
+  }
+  AddCommandScene("empty", "empty");
+  (*runtime.vm->globals_)["empty"] =
+      sr::Value(ResolveSceneCommand(*runtime.loader, "empty", "empty"));
+  Run(R"(
+    integer_result = integer(73);
+    string_result = string("unchanged");
+    empty_result = empty();
+  )");
+
+  EXPECT_EQ(runtime.vm->globals_->at("integer_result"), sr::Value(73));
+  EXPECT_EQ(runtime.vm->globals_->at("string_result").Str(), "unchanged");
+  EXPECT_EQ(runtime.vm->globals_->at("empty_result"), sr::nil);
+}
 
 TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
   auto* expected = module->globals->at(GetUsercmdId(5)).Get_if<sr::Function>();
@@ -260,10 +479,13 @@ TEST_F(SiglusSceneEntryTest, IncludedFrameActionReceivesItsCounterAndOwner) {
     runtime.counter_list = std::make_shared<CounterList>(0);
     runtime.frame_action_manager = std::make_shared<FrameActionManager>(
         *runtime.vm, *runtime.stage, runtime.local_config, 0);
+    const auto* bind_memory = SiglusBindingRegistry::Find("0_memory");
     const auto* bind_counter = SiglusBindingRegistry::Find("1_counter");
     const auto* bind_actions = SiglusBindingRegistry::Find("1_frame_action");
+    ASSERT_NE(bind_memory, nullptr);
     ASSERT_NE(bind_counter, nullptr);
     ASSERT_NE(bind_actions, nullptr);
+    (*bind_memory)(runtime);
     (*bind_counter)(runtime);
     (*bind_actions)(runtime);
 
