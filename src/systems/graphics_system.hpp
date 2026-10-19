@@ -231,6 +231,7 @@ class GraphicsSystem : public EventListener {
   // Maps a position in window coordinates (SDL mouse space) to game screen
   // coordinates. The map includes the letterbox offset and the scale.
   Point DisplayToScreenPoint(const Point& display_pos) const;
+  void WarpMouse(Point game_pos);
 
   // Returns a rectangle with an origin of (0,0) and a size returned by
   // screen_size().

@@ -44,17 +44,27 @@ struct InputListener : public EventListener {
     bool on_down = false;
     bool on_up = false;
     bool down_up = false;
+    inline void ResetEdges() { on_down = on_up = down_up = false; }
+    void UpdateMouseButton(bool& pending, bool down);
   };
   Point mouse_pos;
-  bool left_mouse_down = false;
-  bool right_mouse_down = false;
+  State mouse_left;
+  State mouse_right;
+  int mouse_wheel = 0;
   State decide;
   State cancel;
 
   void ResetState();
+  void ClearState();
+  // Advance mouse transients while retaining held buttons and pending clicks.
+  void NextMouse();
+  // Also cancel pending clicks; held buttons and position are preserved.
+  void ClearMouse();
   void ReleaseAll();
 
  private:
+  bool mouse_left_pending_ = false;
+  bool mouse_right_pending_ = false;
   std::set<KeyCode> decide_keys_down_;
   std::set<KeyCode> cancel_keys_down_;
 };

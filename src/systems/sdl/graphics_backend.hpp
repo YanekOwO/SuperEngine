@@ -56,6 +56,7 @@ class SDLGraphicsBackend : public IGraphicsBackend {
 
   virtual void SetWindowTitle(const std::string& title_utf8) override;
   virtual void ShowSystemCursor(bool show) override;
+  void WarpMouse(Point window_pos) override;
 
   virtual void RenderFrame(const RenderFrameConfig& config,
                            const DrawCallback& draw_scene,

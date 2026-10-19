@@ -138,20 +138,20 @@ TEST(InputListenerTest, MouseEventsUpdatePhysicalAndLogicalState) {
   EXPECT_EQ(listener.mouse_pos, Point(23, 42));
 
   Dispatch(listener, MouseDown{MouseButton::LEFT});
-  EXPECT_TRUE(listener.left_mouse_down);
+  EXPECT_TRUE(listener.mouse_left.down);
   EXPECT_TRUE(listener.decide.down);
   EXPECT_TRUE(listener.decide.on_down);
 
   Dispatch(listener, MouseDown{MouseButton::RIGHT});
-  EXPECT_TRUE(listener.right_mouse_down);
+  EXPECT_TRUE(listener.mouse_right.down);
   EXPECT_TRUE(listener.cancel.down);
   EXPECT_TRUE(listener.cancel.on_down);
 
   listener.ResetState();
   Dispatch(listener, MouseUp{MouseButton::LEFT});
   Dispatch(listener, MouseUp{MouseButton::RIGHT});
-  EXPECT_FALSE(listener.left_mouse_down);
-  EXPECT_FALSE(listener.right_mouse_down);
+  EXPECT_FALSE(listener.mouse_left.down);
+  EXPECT_FALSE(listener.mouse_right.down);
   EXPECT_TRUE(listener.decide.on_up);
   EXPECT_TRUE(listener.decide.down_up);
   EXPECT_TRUE(listener.cancel.on_up);
@@ -167,8 +167,8 @@ TEST(InputListenerTest, UnrelatedAndNullEventsAreIgnored) {
 
   EXPECT_FALSE(listener.decide.down);
   EXPECT_FALSE(listener.cancel.down);
-  EXPECT_FALSE(listener.left_mouse_down);
-  EXPECT_FALSE(listener.right_mouse_down);
+  EXPECT_FALSE(listener.mouse_left.down);
+  EXPECT_FALSE(listener.mouse_right.down);
   ExpectNoEdges(listener.decide);
   ExpectNoEdges(listener.cancel);
 }
@@ -202,4 +202,99 @@ TEST(FromSDLKeycodeTest, ScancodeMaskedKeysDoNotPassThrough) {
   EXPECT_EQ(FromSDLKeycode(SDLK_RIGHT), KeyCode::RIGHT);
   // An unmapped masked key must not leak SDL3 numeric values into KeyCode.
   EXPECT_EQ(FromSDLKeycode(SDLK_MEDIA_PLAY), KeyCode::UNKNOWN);
+}
+
+TEST(InputListenerTest, PhysicalButtonsAreIndependentOfKeyboard) {
+  InputListener listener;
+  Dispatch(listener, KeyDown{KeyCode::RETURN});
+  Dispatch(listener, KeyDown{KeyCode::ESCAPE});
+  EXPECT_FALSE(listener.mouse_left.down);
+  EXPECT_FALSE(listener.mouse_right.down);
+  listener.ResetState();
+  Dispatch(listener, MouseDown{MouseButton::LEFT});
+  Dispatch(listener, MouseDown{MouseButton::RIGHT});
+  EXPECT_TRUE(listener.mouse_left.on_down);
+  EXPECT_TRUE(listener.mouse_right.on_down);
+  ExpectNoEdges(listener.decide);
+  ExpectNoEdges(listener.cancel);
+  listener.NextMouse();
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  Dispatch(listener, MouseUp{MouseButton::RIGHT});
+  EXPECT_TRUE(listener.mouse_left.down_up);
+  EXPECT_TRUE(listener.mouse_right.down_up);
+  EXPECT_TRUE(listener.decide.down);
+  EXPECT_TRUE(listener.cancel.down);
+}
+
+TEST(InputListenerTest, MouseNextPreservesPendingClickAndIgnoresRepeats) {
+  InputListener listener;
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  ExpectNoEdges(listener.mouse_left);
+  Dispatch(listener, MouseDown{MouseButton::LEFT});
+  listener.ResetState();
+  Dispatch(listener, MouseDown{MouseButton::LEFT});
+  EXPECT_TRUE(listener.mouse_left.down);
+  ExpectNoEdges(listener.mouse_left);
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  EXPECT_TRUE(listener.mouse_left.on_up);
+  EXPECT_TRUE(listener.mouse_left.down_up);
+  listener.NextMouse();
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  ExpectNoEdges(listener.mouse_left);
+}
+
+TEST(InputListenerTest, MouseClearCancelsPendingClickWithoutReleasing) {
+  InputListener listener;
+  Dispatch(listener, MouseMotion{Point(23, 42)});
+  Dispatch(listener, MouseDown{MouseButton::LEFT});
+  listener.ClearMouse();
+  EXPECT_TRUE(listener.mouse_left.down);
+  EXPECT_TRUE(listener.decide.on_down);
+  EXPECT_EQ(listener.mouse_pos, Point(23, 42));
+  ExpectNoEdges(listener.mouse_left);
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  EXPECT_TRUE(listener.mouse_left.on_up);
+  EXPECT_FALSE(listener.mouse_left.down_up);
+  Dispatch(listener, MouseDown{MouseButton::LEFT});
+  Dispatch(listener, MouseUp{MouseButton::LEFT});
+  EXPECT_TRUE(listener.mouse_left.on_down);
+  EXPECT_TRUE(listener.mouse_left.on_up);
+  EXPECT_TRUE(listener.mouse_left.down_up);
+}
+
+TEST(InputListenerTest, WheelCountsDownEventsOnlyAndResetsWithMouse) {
+  InputListener listener;
+  for (auto button :
+       {MouseButton::WHEELDOWN, MouseButton::WHEELDOWN, MouseButton::WHEELUP}) {
+    Dispatch(listener, MouseDown{button});
+    Dispatch(listener, MouseUp{button});
+  }
+  EXPECT_EQ(listener.mouse_wheel, 1);
+  listener.NextMouse();
+  EXPECT_EQ(listener.mouse_wheel, 0);
+  Dispatch(listener, MouseDown{MouseButton::WHEELUP});
+  EXPECT_EQ(listener.mouse_wheel, -1);
+  listener.ClearMouse();
+  EXPECT_EQ(listener.mouse_wheel, 0);
+}
+
+TEST(InputListenerTest, ClearAndReleaseAllResetPendingMouseState) {
+  for (bool release : {false, true}) {
+    InputListener listener;
+    Dispatch(listener, MouseMotion{Point(23, 42)});
+    Dispatch(listener, MouseDown{MouseButton::RIGHT});
+    Dispatch(listener, MouseDown{MouseButton::WHEELDOWN});
+    Dispatch(listener, KeyDown{KeyCode::RETURN});
+    if (release)
+      listener.ReleaseAll();
+    else
+      listener.ClearState();
+    EXPECT_EQ(listener.mouse_pos, Point(23, 42));
+    EXPECT_EQ(listener.mouse_wheel, 0);
+    EXPECT_EQ(listener.mouse_right.down, !release);
+    EXPECT_EQ(listener.decide.down, !release);
+    ExpectNoEdges(listener.cancel);
+    Dispatch(listener, MouseUp{MouseButton::RIGHT});
+    EXPECT_FALSE(listener.mouse_right.down_up);
+  }
 }

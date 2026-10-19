@@ -26,6 +26,7 @@
 #include "core/input.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "systems/event_system.hpp"
+#include "systems/graphics_system.hpp"
 
 #include <memory>
 
@@ -45,13 +46,40 @@ void BindInput(SiglusMachine& runtime) {
   runtime.system->event().AddListener(19, listener);
 
   m.def("next", [listener] { listener->ResetState(); });
-  m.def("clear", [listener] { listener->ResetState(); });
+  m.def("clear", [listener] { listener->ClearState(); });
 
+  sb::module_ mouse(vm, "mouse");
+  mouse.def("next", [listener] { listener->NextMouse(); });
+  mouse.def("clear", [listener] { listener->ClearMouse(); });
+  mouse.def("pos_x", [listener] { return listener->mouse_pos.x(); });
+  mouse.def("pos_y", [listener] { return listener->mouse_pos.y(); });
+  mouse.def("get_pos_x", [listener] { return listener->mouse_pos.x(); });
+  mouse.def("get_pos_y", [listener] { return listener->mouse_pos.y(); });
+
+  // TODO: mouse.get_pos(x_ref, y_ref) needs writable output references. The
+  // current argument lowering reads their values and loses the destinations.
+
+  mouse.def("wheel", [listener] { return listener->mouse_wheel; });
+  mouse.def("set_pos", [&runtime](int x, int y) {
+    runtime.system->graphics().WarpMouse(Point(x, y));
+  });
+
+  enum class Source { Decide, Cancel, Left, Right };
   struct InputButton {
-    int type;
+    Source source;
     std::shared_ptr<InputListener> listener;
     InputListener::State Get() {
-      return type == 0 ? listener->decide : listener->cancel;
+      switch (source) {
+        case Source::Decide:
+          return listener->decide;
+        case Source::Cancel:
+          return listener->cancel;
+        case Source::Left:
+          return listener->mouse_left;
+        case Source::Right:
+          return listener->mouse_right;
+      }
+      return {};
     }
   };
   sb::class_<InputButton> key(m, "InputButton", false);
@@ -80,8 +108,10 @@ void BindInput(SiglusMachine& runtime) {
   key.def("get_flick_pixel", [](InputButton* ref) -> int { return 0; });
   key.def("get_flick_mm", [](InputButton* ref) -> int { return 0; });
 
-  key.inst("decide", 0, listener);
-  key.inst("cancel", 1, listener);
+  key.inst("decide", Source::Decide, listener);
+  key.inst("cancel", Source::Cancel, listener);
+  (*mouse.dict())["left"] = sr::Value(key.make_inst(Source::Left, listener));
+  (*mouse.dict())["right"] = sr::Value(key.make_inst(Source::Right, listener));
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_input", BindInput)

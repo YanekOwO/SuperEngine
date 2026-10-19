@@ -73,6 +73,7 @@ class IGraphicsBackend {
 
   virtual void SetWindowTitle(const std::string& title_utf8) = 0;
   virtual void ShowSystemCursor(bool show) = 0;
+  virtual void WarpMouse(Point window_pos) = 0;
 
   virtual void RenderFrame(const RenderFrameConfig& config,
                            const DrawCallback& draw_scene,

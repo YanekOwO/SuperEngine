@@ -26,6 +26,21 @@
 #include <concepts>
 #include <type_traits>
 
+void InputListener::State::UpdateMouseButton(bool& pending, bool in_down) {
+  if (down == in_down)
+    return;
+
+  down = in_down;
+  if (down) {
+    on_down = true;
+    pending = true;
+  } else {
+    on_up = true;
+    down_up |= pending;
+    pending = false;
+  }
+}
+
 void InputListener::OnEvent(std::shared_ptr<Event> event) {
   if (!event)
     return;
@@ -46,21 +61,25 @@ void InputListener::OnEvent(std::shared_ptr<Event> event) {
             cancel_keys_down_.erase(event.code);
         } else if constexpr (std::same_as<T, MouseDown>) {
           if (event.button == MouseButton::LEFT)
-            left_mouse_down = true;
+            mouse_left.UpdateMouseButton(mouse_left_pending_, true);
           else if (event.button == MouseButton::RIGHT)
-            right_mouse_down = true;
+            mouse_right.UpdateMouseButton(mouse_right_pending_, true);
+          else if (event.button == MouseButton::WHEELDOWN)
+            ++mouse_wheel;
+          else if (event.button == MouseButton::WHEELUP)
+            --mouse_wheel;
         } else if constexpr (std::same_as<T, MouseUp>) {
           if (event.button == MouseButton::LEFT)
-            left_mouse_down = false;
+            mouse_left.UpdateMouseButton(mouse_left_pending_, false);
           else if (event.button == MouseButton::RIGHT)
-            right_mouse_down = false;
+            mouse_right.UpdateMouseButton(mouse_right_pending_, false);
         } else if constexpr (std::same_as<T, MouseMotion>) {
           mouse_pos = event.pos;
         }
       },
       *event);
 
-  const bool decide_down = left_mouse_down || !decide_keys_down_.empty();
+  const bool decide_down = mouse_left.down || !decide_keys_down_.empty();
   if (decide.down != decide_down) {
     decide.down = decide_down;
     if (decide_down) {
@@ -71,7 +90,7 @@ void InputListener::OnEvent(std::shared_ptr<Event> event) {
     }
   }
 
-  const bool cancel_down = right_mouse_down || !cancel_keys_down_.empty();
+  const bool cancel_down = mouse_right.down || !cancel_keys_down_.empty();
   if (cancel.down != cancel_down) {
     cancel.down = cancel_down;
     if (cancel_down) {
@@ -84,18 +103,34 @@ void InputListener::OnEvent(std::shared_ptr<Event> event) {
 }
 
 void InputListener::ResetState() {
-  decide.on_down = false;
-  decide.on_up = false;
-  decide.down_up = false;
-  cancel.on_down = false;
-  cancel.on_up = false;
-  cancel.down_up = false;
+  decide.ResetEdges();
+  cancel.ResetEdges();
+  NextMouse();
+}
+
+void InputListener::ClearState() {
+  decide.ResetEdges();
+  cancel.ResetEdges();
+  ClearMouse();
+}
+
+void InputListener::NextMouse() {
+  mouse_left.ResetEdges();
+  mouse_right.ResetEdges();
+  mouse_wheel = 0;
+}
+
+void InputListener::ClearMouse() {
+  NextMouse();
+  mouse_left_pending_ = mouse_right_pending_ = false;
 }
 
 void InputListener::ReleaseAll() {
   decide_keys_down_.clear();
   cancel_keys_down_.clear();
-  left_mouse_down = right_mouse_down = false;
+  mouse_left = {};
+  mouse_right = {};
+  ClearMouse();
   decide = {};
   cancel = {};
 }

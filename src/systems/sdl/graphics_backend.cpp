@@ -303,6 +303,10 @@ void SDLGraphicsBackend::ShowSystemCursor(bool show) {
     SDL_HideCursor();
 }
 
+void SDLGraphicsBackend::WarpMouse(Point window_pos) {
+  SDL_WarpMouseInWindow(window_, window_pos.x(), window_pos.y());
+}
+
 void SDLGraphicsBackend::PresentFrame(const RenderFrameConfig& config) {
   int window_width = 0, window_height = 0;
   SDL_GetWindowSizeInPixels(window_, &window_width, &window_height);

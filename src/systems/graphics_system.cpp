@@ -314,6 +314,13 @@ Point GraphicsSystem::DisplayToScreenPoint(const Point& display_pos) const {
                std::clamp(y, 0, screen_size().height() - 1));
 }
 
+void GraphicsSystem::WarpMouse(Point game_pos) {
+  const Rect view = AspectFitRect(screen_size(), display_size_);
+  const float scale = static_cast<float>(view.width()) / screen_size().width();
+  impl_->WarpMouse(Point(view.x() + static_cast<int>(game_pos.x() * scale),
+                         view.y() + static_cast<int>(game_pos.y() * scale)));
+}
+
 // -----------------------------------------------------------------------
 
 void GraphicsSystem::ToggleFullscreen() {
