@@ -38,6 +38,15 @@
 namespace libsiglus::binding {
 namespace sr = serilang;
 
+static std::string NormalizeCommandName(std::string_view name) {
+  std::string result(name);
+  for (char& c : result) {
+    if ('A' <= c && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  }
+  return result;
+}
+
 sr::Module* Loader::Load(int scene) {
   if (scene < 0 ||
       static_cast<std::size_t>(scene) >= archive_.GetScenarioCount()) {
@@ -115,7 +124,7 @@ sr::Module* Loader::Load(int scene) {
     }
     const bool inserted =
         command_table.commands
-            .emplace(metadata.name,
+            .emplace(NormalizeCommandName(metadata.name),
                      UserCommand{.function = function, .args = metadata.args})
             .second;
     if (!inserted) {
@@ -140,9 +149,8 @@ serilang::Module* Loader::Load(std::string const& scnname) {
   return Load(scnid);
 }
 
-const UserCommand& Loader::ResolveUserCommand(
-    sr::Fiber& fiber,
-    std::string_view command_name) const {
+const UserCommand& Loader::ResolveUserCommand(sr::Fiber& fiber,
+                                              std::string_view command_name) {
   for (auto frame_it = fiber.frames.rbegin(); frame_it != fiber.frames.rend();
        ++frame_it) {
     if (!frame_it->fn || !frame_it->fn->globals)
@@ -160,19 +168,29 @@ const UserCommand& Loader::ResolveUserCommand(
       command_name));
 }
 
-const UserCommand& Loader::ResolveUserCommand(
-    const sr::Module& module,
-    std::string_view command_name) const {
-  auto scene_it = commands_by_globals_.find(module.globals.get());
+const UserCommand& Loader::ResolveUserCommand(const sr::Module& mod,
+                                              std::string_view command_name) {
+  auto scene_it = commands_by_globals_.find(mod.globals.get());
   if (scene_it == commands_by_globals_.end()) {
     throw sr::RuntimeError(std::format(
         "cannot resolve user command '{}': scene '{}' is not loaded",
-        command_name, module.name));
+        command_name, mod.name));
   }
   return ResolveUserCommand(scene_it->second, command_name);
 }
 
-const UserCommand& Loader::ResolveUserCommand(
+const UserCommand& Loader::ResolveUserCommand(const SceneCommandTable& scene,
+                                              std::string_view command_name) {
+  const std::string name = NormalizeCommandName(command_name);
+  if (auto it = archive_.cmd_map_.find(name); it != archive_.cmd_map_.end()) {
+    const Command& command = archive_.cmd_.at(it->second);
+    const sr::Module* owner = Load(command.scene_id);
+    return FindUserCommand(commands_by_globals_.at(owner->globals.get()), name);
+  }
+  return FindUserCommand(scene, name);
+}
+
+const UserCommand& Loader::FindUserCommand(
     const SceneCommandTable& scene,
     std::string_view command_name) const {
   auto command_it = scene.commands.find(std::string(command_name));

@@ -50,9 +50,9 @@ class Loader {
   serilang::Module* Load(std::string const& scnname);
 
   const UserCommand& ResolveUserCommand(serilang::Fiber& fiber,
-                                        std::string_view command_name) const;
-  const UserCommand& ResolveUserCommand(const serilang::Module& module,
-                                        std::string_view command_name) const;
+                                        std::string_view command_name);
+  const UserCommand& ResolveUserCommand(const serilang::Module& mod,
+                                        std::string_view command_name);
 
  private:
   struct SceneCommandTable {
@@ -64,7 +64,9 @@ class Loader {
   using Globals = std::unordered_map<std::string, serilang::Value>;
 
   const UserCommand& ResolveUserCommand(const SceneCommandTable& scene,
-                                        std::string_view command_name) const;
+                                        std::string_view command_name);
+  const UserCommand& FindUserCommand(const SceneCommandTable& scene,
+                                     std::string_view command_name) const;
 
   Archive& archive_;
   serilang::VM& vm_;

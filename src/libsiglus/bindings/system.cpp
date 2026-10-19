@@ -70,6 +70,7 @@ void BindSystem(SiglusMachine& runtime) {
         [logger = DomainLogger("SiglusDbg")](std::string msg) {
           logger(Severity::Info) << std::move(msg);
         });
+  m.def("debug_msgbox_ok", [](std::string) -> int { return 0; });
   m.def("get_lang", +[]() { return "ja"; });
 
   sb::module_ gm(vm.gc_.get(), vm.globals_.get());
