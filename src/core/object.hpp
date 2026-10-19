@@ -137,6 +137,8 @@ class GraphicsObject {
   // Called each pass through the gameloop to see if this object needs
   // to force a redraw, or something.
   void Execute();
+  // Advances parameter animations on this object and all descendants,
+  // including hidden objects and parents without drawers.
   void ExecuteMutators();
 
   // Adds a mutator to the list of active mutators. GraphicsSystem takes

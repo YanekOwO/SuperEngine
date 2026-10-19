@@ -23,10 +23,15 @@
 
 #include <gtest/gtest.h>
 
+#include "core/object_internal/object_mutator.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
+#include "mock_clock.hpp"
 #include "mock_graphics_object_data.hpp"
 
+#include <array>
+#include <chrono>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -35,6 +40,21 @@
 
 class StageTest : public ::testing::Test {
  protected:
+  ObjectMutator TimedMutator(
+      std::shared_ptr<Clock> clock,
+      int start,
+      int end,
+      int duration_ms,
+      std::function<void(ObjectParameter&, int)> setter) {
+    return ObjectMutator(ObjectParameterMutator(
+        std::move(setter),
+        FrameCounter(
+            std::move(clock),
+            Interpolation(Range(start, end), InterpolationType::OneShot,
+                          InterpolationMode::Linear),
+            duration_ms)));
+  }
+
   void SetDummyData(GraphicsObject& object) {
     object.SetDrawer(std::make_unique<MockGraphicsObjectData>());
   }
@@ -47,6 +67,88 @@ class StageTest : public ::testing::Test {
     return ret;
   }
 };
+
+TEST_F(StageTest, ExecuteAdvancesChildFadeAndSlideWithoutParentDrawer) {
+  using namespace std::chrono_literals;
+  for (const int layer : {kLayerFg, kLayerBg, kLayerNext}) {
+    SCOPED_TRACE(layer);
+    Stage stage(1);
+    auto clock = std::make_shared<MockClock>();
+    auto root = stage.objects.Get(layer, 0);
+    root->Param().SetVisible(true);
+    root->EnsureChildCapacity(6);
+    auto& child = root->TouchChild(5);
+    child.Param().SetVisible(true);
+    child.Param().SetAlpha(0);
+    child.Param().adjustment_offsets_x = {-100};
+    ASSERT_FALSE(root->HasDrawer());
+    ASSERT_FALSE(root->GetChildren()[0]);
+
+    child.AddObjectMutator(TimedMutator(
+        clock, 0, 255, 500,
+        [](ObjectParameter& param, int value) { param.SetAlpha(value); }));
+    child.AddObjectMutator(TimedMutator(clock, -100, 0, 500,
+                                        [](ObjectParameter& param, int value) {
+                                          param.SetXAdjustment(0, value);
+                                        }));
+
+    clock->AdvanceTime(250ms);
+    stage.Execute();
+    EXPECT_EQ(child.Param().alpha_source, 127);
+    EXPECT_EQ(child.Param().x_adjustment(0), -50);
+    EXPECT_EQ(child.CountMutators(), 2);
+
+    clock->AdvanceTime(250ms);
+    stage.Execute();
+    EXPECT_EQ(child.Param().alpha_source, 255);
+    EXPECT_EQ(child.Param().x_adjustment(0), 0);
+    EXPECT_EQ(child.CountMutators(), 0);
+  }
+}
+
+TEST_F(StageTest, ExecuteUpdatesHiddenDescendantsOnceAndCompletesMutatorsOnce) {
+  using namespace std::chrono_literals;
+  Stage stage(1);
+  auto clock = std::make_shared<MockClock>();
+  auto root = stage.objects.Get(kLayerFg, 0);
+  root->EnsureChildCapacity(4);
+  auto& child = root->TouchChild(3);
+  child.EnsureChildCapacity(3);
+  auto& grandchild = child.TouchChild(2);
+  const std::array<GraphicsObject*, 3> objects = {root.get(), &child,
+                                                  &grandchild};
+  std::array<int, 3> updates{}, completions{};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    objects[i]->Param().SetVisible(false);
+    objects[i]->Param().SetAlpha(0);
+    auto mutator = TimedMutator(clock, 0, 255, 1000,
+                                [&, i](ObjectParameter& param, int value) {
+                                  ++updates[i];
+                                  param.SetAlpha(value);
+                                });
+    mutator.OnComplete([&, i](ObjectParameter&) { ++completions[i]; });
+    objects[i]->AddObjectMutator(std::move(mutator));
+  }
+
+  clock->AdvanceTime(500ms);
+  stage.Execute();
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    EXPECT_EQ(objects[i]->Param().alpha_source, 127);
+    EXPECT_EQ(updates[i], 1);
+    EXPECT_EQ(completions[i], 0);
+    EXPECT_EQ(objects[i]->CountMutators(), 1);
+  }
+
+  clock->AdvanceTime(500ms);
+  stage.Execute();
+  stage.Execute();
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    EXPECT_EQ(objects[i]->Param().alpha_source, 255);
+    EXPECT_EQ(updates[i], 2);
+    EXPECT_EQ(completions[i], 1);
+    EXPECT_EQ(objects[i]->CountMutators(), 0);
+  }
+}
 
 TEST(StageElementTest, SharedPointersFollowMovesAndKeepDeletedElementsAlive) {
   StageElement<int> elements(2);

@@ -346,6 +346,10 @@ void GraphicsObject::Execute() {
 void GraphicsObject::ExecuteMutators() {
   std::erase_if(object_mutators_,
                 [&](auto& it) { return it.Update(this->Param()); });
+  for (auto& child : child_) {
+    if (child)
+      child->ExecuteMutators();
+  }
 }
 
 void GraphicsObject::EndAllMutators() {
