@@ -33,7 +33,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,7 +56,6 @@ class GraphicsObject;
 class GraphicsObjectData;
 class Haikei;
 class MouseCursor;
-class Renderable;
 class RGBAColour;
 class RLMachine;
 class Size;
@@ -93,28 +91,6 @@ enum GraphicsUpdateType {
 // effect.)
 class GraphicsSystem : public EventListener {
  public:
-  // The current display context drawing mode. The Reallive system
-  // will update the screen after certain events in user code
-  // regarding DCs.
-  //
-  // Note that these are not the only times when the screen will be
-  // updated. Most functions that deal with text windows will trigger
-  // screen updates. (Object manipulation functions *don't*.) Having
-  // this fine level of control is why DCs are often used for smooth
-  // animation...
-  enum DCScreenUpdateMode {
-    // The screen will be redrawn after every load or blit to DC 0.
-    SCREENUPDATEMODE_AUTOMATIC,
-
-    // We currently don't understand how this differs from automatic
-    // mode. We declare it anyway for compatibility and the hope that
-    // someday we will.
-    SCREENUPDATEMODE_SEMIAUTOMATIC,
-
-    // The screen is updated after refresh() is called
-    SCREENUPDATEMODE_MANUAL
-  };
-
   GraphicsSystem(System& system,
                  Gameexe& gameexe,
                  std::shared_ptr<IGraphicsBackend> backend,
@@ -126,15 +102,6 @@ class GraphicsSystem : public EventListener {
   // Resize window
   void Resize(Size display_size);
 
-  bool is_responsible_for_update() const { return is_responsible_for_update_; }
-  void set_is_responsible_for_update(bool in) {
-    is_responsible_for_update_ = in;
-  }
-
-  // Define who is responsible for screen updates.
-  DCScreenUpdateMode screen_update_mode() const { return screen_update_mode_; }
-  virtual void SetScreenUpdateMode(DCScreenUpdateMode u);
-
   inline System& system() { return system_; }
 
   inline void BindSceneRenderer(
@@ -145,38 +112,12 @@ class GraphicsSystem : public EventListener {
     return scene_renderer_;
   }
 
-  // Screen Shaking
-
-  // Reads #SHAKE.spec and loads the offsets into the screen shaking queue.
-  void QueueShakeSpec(int spec);
-
-  // Returns the current screen origin. This is used for simple #SHAKE.* based
-  // screen shaking. While the screen is not shaking, this returns (0,0).
-  Point GetScreenOrigin() const;
-
-  // Whether we are currently shaking.
-  bool IsShaking() const;
-
-  // How long the current frame in the shaking should last. 10ms if there are
-  // no frames.
-  int CurrentShakingFrameTime() const;
-
   // Mouse Cursor Management
 
   // Whether we are using a custom cursor. Verifies that there was a
   // \#MOUSE_CURSOR entry in the Gameexe.ini file, and that the currently
   // selected cursor exists.
   int ShouldUseCustomCursor();
-
-  // -----------------------------------------------------------------------
-
-  // Individual LongOperations can also hook into the end of the rendering
-  // pipeline by injecting Renderables. There should only really be one
-  // Renderable on screen at a time, but the interface allows for multiple
-  // ones.
-  inline void AddRenderable(std::weak_ptr<Renderable> renderable) {
-    final_renderers_.emplace_back(renderable);
-  }
 
   // -----------------------------------------------------------------------
   // Subtitle management
@@ -204,17 +145,19 @@ class GraphicsSystem : public EventListener {
   // GraphicsSystem when deciding whether to render an object or not.
   const ObjectSettings& GetObjectSettings(const int obj_num);
 
-  // Forces a refresh of the screen the next time the graphics system
-  // executes.
+  // Request a scene redraw from the engine.
   virtual void ForceRefresh();
 
   bool screen_needs_refresh() const { return screen_needs_refresh_; }
+  void AcknowledgeRefresh() { screen_needs_refresh_ = false; }
+  void SetRefreshRequestCallback(DrawCallback callback) {
+    refresh_request_callback_ = std::move(callback);
+  }
 
   void SetDebugFrameDumpConfig(DebugFrameDumpConfig config);
 
-  void RenderFrame(bool should_refresh = true);
-  void RenderCustomFrame(const DrawCallback& draw_scene,
-                         const DrawCallback& draw_after = DrawCallback());
+  void RenderFrame(FrameRenderOptions options = {},
+                   const DrawCallback& draw_scene = {});
 
   // Draws the screen (as if refresh() was called), but draw to the returned
   // surface instead of the screen.
@@ -227,8 +170,7 @@ class GraphicsSystem : public EventListener {
   // Image resources in load order, without extending their lifetime.
   const auto& loaded_images() const { return loaded_images_; }
 
-  // Called from the game loop; Does everything that's needed to keep
-  // things up.
+  // Advance scene state, cursor animation and window maintenance.
   void ExecuteGraphicsSystem();
 
   // Returns the size of the window in pixels.
@@ -295,7 +237,7 @@ class GraphicsSystem : public EventListener {
 
   void SetScreenSize(const Size& size);
 
-  RenderFrameConfig BuildPresentationFrameConfig();
+  RenderFrameConfig BuildPresentationFrameConfig(bool cache_scene = false);
   std::optional<std::filesystem::path> NextDebugFrameDumpPath();
   void RollBackDebugFrameDumpCounter();
 
@@ -303,16 +245,9 @@ class GraphicsSystem : public EventListener {
   void UpdateWindowTitle();
   std::string ComposeWindowTitle() const;
 
-  // Current screen update mode
-  DCScreenUpdateMode screen_update_mode_;
-
   // Flag set to redraw the screen NOW
   bool screen_needs_refresh_;
-
-  // Whether it is the Graphics system's responsibility to redraw the
-  // screen. Some LongOperations temporarily take this responsibility
-  // to implement pretty fades and wipes
-  bool is_responsible_for_update_;
+  DrawCallback refresh_request_callback_;
 
   // cp932 encoded subtitle string
   std::string subtitle_;
@@ -336,13 +271,6 @@ class GraphicsSystem : public EventListener {
   // Rectangle of the screen.
   Rect screen_rect_;
 
-  // Queued origin/time pairs. The front of the queue shall be the current
-  // screen offset.
-  std::queue<std::pair<Point, int>> screen_shake_queue_;
-
-  // The last time |screen_shake_queue_| was modified.
-  unsigned int time_at_last_queue_change_;
-
   // Immutable
   struct GraphicsObjectSettings;
   // Immutable global data that's constructed from the Gameexe.ini file.
@@ -364,9 +292,6 @@ class GraphicsSystem : public EventListener {
   Clock window_title_clock_;
   Clock::timepoint_t last_window_title_update_;
   Clock::duration_t window_title_update_interval_;
-
-  // A set of renderers
-  std::vector<std::weak_ptr<Renderable>> final_renderers_;
 
   // Runtime-specific scene renderer. GraphicsSystem owns frame presentation,
   // while this object owns scene traversal and draw order.

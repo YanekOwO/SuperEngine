@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "core/quake.hpp"
 #include "systems/scene_renderer.hpp"
 
 #include <cstddef>
@@ -40,8 +41,10 @@ class rlSceneRenderer final : public ISceneRenderer {
 
   void ExecuteFrame() override;
   void RenderScene() override;
+  Point GetScreenOrigin() const override;
+  void QueueShake(std::vector<QuakeState::OffsetFrame> frames);
 
-	void RenderObject(
+  void RenderObject(
       GraphicsObject& object,
       const MaskList* mask_list = nullptr,
       std::optional<ParentObjState> parent = std::nullopt) override;
@@ -50,6 +53,7 @@ class rlSceneRenderer final : public ISceneRenderer {
   bool ShouldRenderObject(size_t obj_number, const GraphicsObject& object);
 
   RLMachine& machine_;
+  unsigned int last_quake_tick_ = 0;
   using ToRenderVec =
       std::vector<std::tuple<int, int, int, int, GraphicsObject*>>;
   ToRenderVec to_render_;

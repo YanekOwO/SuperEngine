@@ -28,6 +28,7 @@
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "modules/module_obj.hpp"
+#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 
@@ -61,11 +62,11 @@ WaitForGanToFinish::WaitForGanToFinish(RLMachine& machine,
                                        int object)
     : machine_(machine),
       graphics_(machine.GetSystem().graphics()),
-      mode_(graphics_.screen_update_mode()),
+      mode_(machine.screen_update_mode()),
       layer_(layer),
       parent_(parent),
       object_(object) {
-  graphics_.SetScreenUpdateMode(GraphicsSystem::SCREENUPDATEMODE_AUTOMATIC);
+  machine_.SetScreenUpdateMode(RLMachine::SCREENUPDATEMODE_AUTOMATIC);
 }
 
 Task<int> WaitForGanToFinish::Run(WaitContext& waits) {
@@ -73,7 +74,7 @@ Task<int> WaitForGanToFinish::Run(WaitContext& waits) {
     GraphicsObject& object = GetObject();
     if (!object.HasDrawer() || !object.GetDrawer().IsAnimation() ||
         !object.GetDrawer().GetAnimator()->IsPlaying()) {
-      graphics_.SetScreenUpdateMode(mode_);
+      machine_.SetScreenUpdateMode(mode_);
       co_return 0;
     }
     co_await waits.Schedule();

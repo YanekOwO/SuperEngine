@@ -28,6 +28,7 @@
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
+#include "long_operations/siglus_movie.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
@@ -192,37 +193,33 @@ void SiglusMachine::Run() {
     const auto next_frame = FrameClock::now() + frame_period;
     const bool capture_frame = HasPendingCaptures();
     input_event_listener->ResetState();
-    {
-      auto& graphics = system->graphics();
-      struct RestorePresentation {
-        GraphicsSystem& graphics;
-        bool previous;
-        ~RestorePresentation() {
-          graphics.set_is_responsible_for_update(previous);
-        }
-      } restore{graphics, graphics.is_responsible_for_update()};
-      if (capture_frame && !CaptureDisplayEnabled())
-        graphics.set_is_responsible_for_update(false);
-      system->Run([this, &last_frame_tick, &frame_clock] {
-        interaction_manager->Update();
 
-        const auto now = frame_clock->GetTicks();
-        const auto real_delta =
-            std::max(now - last_frame_tick, Clock::duration_t::zero());
-        last_frame_tick = now;
+    // Poll events
+    system->event().ExecuteEventSystem();
 
-        const bool fast_forward = system->ShouldFastForward();
-        const auto fast_forward_delta =
-            real_delta > Clock::duration_t::max() / 32
-                ? Clock::duration_t::max()
-                : real_delta * 32;
-        const auto game_delta = fast_forward ? fast_forward_delta : real_delta;
+    // Advance clock
+    interaction_manager->Update();
+    const auto now = frame_clock->GetTicks();
+    const auto real_delta =
+        std::max(now - last_frame_tick, Clock::duration_t::zero());
+    last_frame_tick = now;
+    const bool fast_forward = system->ShouldFastForward();
+    const auto fast_forward_delta = real_delta > Clock::duration_t::max() / 32
+                                        ? Clock::duration_t::max()
+                                        : real_delta * 32;
+    const auto game_delta = fast_forward ? fast_forward_delta : real_delta;
+    Update(real_delta, game_delta);
 
-        Update(real_delta, game_delta);
-      });
-    }
+    // Update Text and Sound subsystems
+    system->text().ExecuteTextSystem();
+    system->sound().ExecuteSoundSystem();
+
+    auto& graphics = system->graphics();
+    graphics.ExecuteGraphicsSystem();
+
     if (vm->IsStopRequested() || system->IsQuitRequested())
       break;
+    RenderFrame(!capture_frame || CaptureDisplayEnabled());
     if (capture_frame)
       ProcessCaptureFrame();
 
@@ -236,6 +233,22 @@ void SiglusMachine::Run() {
 
   if (system->IsQuitRequested())
     vm->RequestStop();
+}
+
+std::function<void()> SiglusMachine::GetFrameRenderer() const {
+  if (const auto frame = movie_frame.lock())
+    return frame->draw;
+  return {};
+}
+
+void SiglusMachine::RenderFrame(bool display) {
+  if (!display)
+    return;
+  auto& graphics = system->graphics();
+  const auto draw = GetFrameRenderer();
+  graphics.RenderFrame({}, draw);
+  if (!draw)
+    graphics.AcknowledgeRefresh();
 }
 
 std::shared_ptr<Counter> SiglusMachine::CreateCounter() {

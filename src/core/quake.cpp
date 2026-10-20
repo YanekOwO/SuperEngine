@@ -123,6 +123,25 @@ void QuakeTransform::Then(const QuakeTransform& next) {
   scale *= next.scale;
 }
 
+// ------------------------------------------------------------------------------
+
+std::vector<QuakeState::OffsetFrame> QuakeState::ParseRealliveShake(
+    Gameexe& gexe,
+    int spec) {
+  auto entry = gexe("SHAKE", spec);
+  if (!entry.Exists())
+    return {};
+
+  const auto vals = entry.ToIntVec();
+  std::vector<OffsetFrame> frames(vals.size() / 3);
+  for (size_t i = 0, j = 0; i + 2 < vals.size(); i += 3, ++j)
+    frames[j] = {vals[i], vals[i + 1], vals[i + 2]};
+
+  return frames;
+}
+
+// ------------------------------------------------------------------------------
+
 QuakeState::QuakeState() { Reset(); }
 
 void QuakeState::Reset() {
@@ -141,6 +160,7 @@ void QuakeState::Reset() {
   end_duration_ms_ = 0;
   end_elapsed_ms_ = 0;
   transform_ = {};
+  offsets_.clear();
 }
 
 bool QuakeState::Start(StartParams params) {
@@ -164,6 +184,20 @@ bool QuakeState::Start(StartParams params) {
   return true;
 }
 
+void QuakeState::QueueOffsets(std::span<const OffsetFrame> frames) {
+  if (type_ != Type::Offsets) {
+    if (frames.empty())
+      return;
+    Reset();
+    type_ = Type::Offsets;
+    begin_order_ = std::numeric_limits<int>::min();
+    end_order_ = std::numeric_limits<int>::max();
+  }
+  offsets_.insert(offsets_.end(), frames.begin(), frames.end());
+  elapsed_ms_ = 0;
+  UpdateTransform();
+}
+
 void QuakeState::End(int duration_ms) {
   if (!IsActive())
     return;
@@ -185,6 +219,25 @@ void QuakeState::Advance(std::int64_t elapsed_ms) {
   if (ending_)
     end_elapsed_ms_ = SaturatingAdd(end_elapsed_ms_, elapsed_ms);
 
+  if (ending_ && end_elapsed_ms_ >= end_duration_ms_) {
+    Reset();
+    return;
+  }
+
+  if (type_ == Type::Offsets) {
+    // RealLive retains a frame at its exact duration boundary.
+    while (!offsets_.empty() &&
+           elapsed_ms_ > std::max(0, offsets_.front().duration_ms)) {
+      elapsed_ms_ -= std::max(0, offsets_.front().duration_ms);
+      offsets_.pop_front();
+    }
+    if (offsets_.empty())
+      Reset();
+    else
+      UpdateTransform();
+    return;
+  }
+
   if (period_ms_ <= 0) {
     Reset();
     return;
@@ -193,8 +246,7 @@ void QuakeState::Advance(std::int64_t elapsed_ms) {
   const bool loop = count_ == 0 && end_count_ == 0;
   const std::int64_t total_duration = SaturatingMultiply(
       period_ms_, static_cast<std::int64_t>(count_) + end_count_);
-  if ((!loop && elapsed_ms_ >= total_duration) ||
-      (ending_ && end_elapsed_ms_ >= end_duration_ms_)) {
+  if (!loop && elapsed_ms_ >= total_duration) {
     Reset();
     return;
   }
@@ -217,6 +269,14 @@ QuakeTransform QuakeState::CurrentTransform() const {
 }
 
 void QuakeState::UpdateTransform() {
+  if (type_ == Type::Offsets) {
+    const double envelope =
+        ending_ ? LinearEnvelope(end_elapsed_ms_, 0, end_duration_ms_) : 1.0;
+    transform_ = {.translate_x = offsets_.front().x * envelope,
+                  .translate_y = offsets_.front().y * envelope};
+    return;
+  }
+
   if (!IsActive() || period_ms_ <= 0) {
     transform_ = {};
     return;

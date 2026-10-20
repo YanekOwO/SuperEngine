@@ -31,7 +31,6 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <thread>
 #include <vector>
 
@@ -51,6 +50,12 @@ struct MovieRect {
   int height = 0;
 };
 
+// Only decoded frame resources are shared with the engine, not coroutine
+// locals.
+struct MovieFrame {
+  FrameRenderer draw;
+};
+
 class SiglusMovieOperation final : public LongOperation {
  public:
   SiglusMovieOperation(System* system,
@@ -58,7 +63,9 @@ class SiglusMovieOperation final : public LongOperation {
                        MovieRect rect,
                        int volume,
                        bool wait_key);
+  ~SiglusMovieOperation() override;
   Task<int> Run(WaitContext& waits) override;
+  std::weak_ptr<MovieFrame> frame() const { return frame_; }
   bool IsPlaying() const;
   void Stop();
   void SetWaitKey(bool wait_key) { wait_key_ = wait_key; }
@@ -74,8 +81,6 @@ class SiglusMovieOperation final : public LongOperation {
   Rect DestinationRect(const Rect& source) const;
   void SetDecoderException(std::exception_ptr exception);
   void RethrowDecoderException();
-  void TakeGraphicsUpdateResponsibility();
-  void RestoreGraphicsUpdateResponsibility();
 
   std::filesystem::path path_;
   MovieRect rect_;
@@ -92,7 +97,7 @@ class SiglusMovieOperation final : public LongOperation {
   std::shared_ptr<Queue<Frame>> frame_queue_;
   std::mutex decoder_exception_mutex_;
   std::exception_ptr decoder_exception_;
-  std::optional<bool> previous_graphics_update_responsibility_;
+  std::shared_ptr<MovieFrame> frame_ = std::make_shared<MovieFrame>();
 };
 
 }  // namespace lop

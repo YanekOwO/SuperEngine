@@ -63,7 +63,8 @@ const std::set<std::string> kMovieExtensions{"wmv", "asf", "avi", "mpg",
 class SiglusMovie {
  public:
   explicit SiglusMovie(SiglusMachine& runtime)
-      : vm_(runtime.vm.get()),
+      : runtime_(runtime),
+        vm_(runtime.vm.get()),
         system_(runtime.system.get()),
         asset_scanner_(runtime.asset_scanner) {}
 
@@ -98,6 +99,7 @@ class SiglusMovie {
         std::make_unique<lop::SiglusMovieOperation>(system_, std::move(path),
                                                     rect, 255, key_skip);
     player_ = player.get();
+    runtime_.movie_frame = player->frame();
     pending_ = lop::FutureBackedCoroutineTask(*vm_, std::move(player),
                                               system_->event_ptr().get());
     pending_->Start();
@@ -137,6 +139,7 @@ class SiglusMovie {
     return path.value();
   }
 
+  SiglusMachine& runtime_;
   sr::VM* vm_ = nullptr;
   System* system_ = nullptr;
   std::shared_ptr<AssetScanner> asset_scanner_;

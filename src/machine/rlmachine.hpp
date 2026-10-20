@@ -68,6 +68,18 @@ class rlSceneRenderer;
 // control, and other execution issues.
 class RLMachine {
  public:
+  enum DCScreenUpdateMode {
+    SCREENUPDATEMODE_AUTOMATIC,
+    // Currently follows automatic mode, as before.
+    SCREENUPDATEMODE_SEMIAUTOMATIC,
+    SCREENUPDATEMODE_MANUAL
+  };
+
+  DCScreenUpdateMode screen_update_mode() const { return screen_update_mode_; }
+  void SetScreenUpdateMode(DCScreenUpdateMode mode) {
+    screen_update_mode_ = mode;
+  }
+
   RLMachine(std::shared_ptr<Gameexe> gameexe,
             std::unique_ptr<System> system,
             std::unique_ptr<Stage> stage,
@@ -246,7 +258,14 @@ class RLMachine {
   void SetFrameCounter(int layer, int idx, FrameCounter counter);
   void ClearFrameCounter(int layer, int idx);
 
+  inline std::shared_ptr<rlSceneRenderer> GetRenderer() const {
+    return renderer_;
+  }
+
  private:
+  DCScreenUpdateMode screen_update_mode_ = SCREENUPDATEMODE_AUTOMATIC;
+  bool rendered_custom_frame_ = false;
+
   // These owners precede borrowers so configuration and templates outlive
   // System, Stage, and any execution objects referring to them.
   std::shared_ptr<Gameexe> gexe_;

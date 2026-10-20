@@ -26,9 +26,10 @@
 
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
+
+#include <algorithm>
 
 namespace lop {
 
@@ -53,36 +54,28 @@ ZoomLongOperation::ZoomLongOperation(
       duration_(time),
       start_time_(machine.GetSystem().event().GetTicks()) {}
 
-ZoomLongOperation::~ZoomLongOperation() {}
-
 Task<int> ZoomLongOperation::Run(WaitContext& waits) {
-  for (;;) {
-    unsigned int time = machine_.GetSystem().event().GetTicks();
-    unsigned int currentFrame = time - start_time_;
-
-    bool fastForward = machine_.GetSystem().ShouldFastForward();
-
-    if (currentFrame >= duration_ || fastForward) {
-      co_return 0;
-    } else {
-      // Render to the screen
-      GraphicsSystem& graphics = machine_.GetSystem().graphics();
-      graphics.RenderCustomFrame([&]() {
-        // First blit the original dc0 to the screen
-        orig_surface_->RenderToScreen(orig_surface_->GetRect(),
-                                      orig_surface_->GetRect(), 255);
-
-        // figure out the new coordinates for the zoom.
-        float ratio = currentFrame / float(duration_);
-        Point zPt =
-            frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
-        Size zSize = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
-
-        src_surface_->RenderToScreen(Rect(zPt, zSize), drect_, 255);
-      });
-      co_await waits.Schedule();
-    }
+  while (machine_.GetSystem().event().GetTicks() - start_time_ < duration_ &&
+         !machine_.GetSystem().ShouldFastForward()) {
+    co_await waits.Schedule();
   }
+  co_return 0;
+}
+
+FrameRenderer ZoomLongOperation::GetFrameRenderer() {
+  return [this] {
+    orig_surface_->RenderToScreen(orig_surface_->GetRect(),
+                                  orig_surface_->GetRect(), 255);
+    const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
+    const float ratio =
+        duration_ == 0 || machine_.GetSystem().ShouldFastForward()
+            ? 1.0f
+            : std::min(elapsed, duration_) / float(duration_);
+    const Point origin =
+        frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
+    const Size size = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
+    src_surface_->RenderToScreen(Rect(origin, size), drect_, 255);
+  };
 }
 
 }  // namespace lop

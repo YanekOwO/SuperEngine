@@ -48,6 +48,7 @@ class RealliveTask final : public EventListener, private IWaitBackend {
 
   void Advance(bool fast_forward = false);
   bool Done() const noexcept;
+  FrameRenderer GetFrameRenderer() const;
   Clock::timepoint_t ReadyUntil() const noexcept;
   void OnEvent(std::shared_ptr<Event> event) override;
 
@@ -72,5 +73,9 @@ class RealliveTask final : public EventListener, private IWaitBackend {
 // Drive only the top operation. A newly pushed child remains on top even if
 // its parent finishes during this step.
 void AdvanceLongOperation(CallStack& stack, bool fast_forward = false);
+
+// Find the nearest unfinished visual operation, including beneath nonvisual
+// child operations. The returned callback keeps its operation alive.
+FrameRenderer GetFrameRenderer(CallStack& stack);
 
 }  // namespace lop

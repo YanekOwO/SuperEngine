@@ -33,6 +33,8 @@
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 
+#include <algorithm>
+
 namespace lop {
 
 // -----------------------------------------------------------------------
@@ -49,43 +51,31 @@ EffectLongOperation::EffectLongOperation(RLMachine& machine,
       start_time_(machine.GetSystem().event().GetTicks()),
       machine_(machine),
       src_surface_(src),
-      dst_surface_(dst) {
-  machine.GetSystem().graphics().set_is_responsible_for_update(false);
-}
-
-EffectLongOperation::~EffectLongOperation() {
-  machine_.GetSystem().graphics().set_is_responsible_for_update(true);
-}
+      dst_surface_(dst) {}
 
 Task<int> EffectLongOperation::Run(WaitContext& waits) {
-  for (;;) {
-    // TODO: this is ugly. Currently we have to manually manage the state of the
-    // graphic system, and prevent it from automatically drawing during effects.
-    // But when we have more than 2 effects queued up, the first one will change
-    // the state of the graphic system to enable update in its destructor.
-    // Consider introducing a concept of render layers later to make this
-    // cleaner.
-    machine_.GetSystem().graphics().set_is_responsible_for_update(false);
-
-    unsigned int time = machine_.GetSystem().event().GetTicks();
-    unsigned int current_frame = time - start_time_;
-
-    bool fast_forward = machine_.GetSystem().ShouldFastForward();
-
-    if (current_frame >= duration_ || fast_forward) {
-      co_return 0;
-    } else {
-      GraphicsSystem& graphics = machine_.GetSystem().graphics();
-      graphics.RenderCustomFrame([&]() {
-        if (BlitOriginalImage()) {
-          dst_surface().RenderToScreen(Rect(Point(0, 0), size()),
-                                       Rect(Point(0, 0), size()), 255);
-        }
-        PerformEffectForTime(current_frame);
-      });
-      co_await waits.Schedule();
-    }
+  while (machine_.GetSystem().event().GetTicks() - start_time_ < duration_ &&
+         !machine_.GetSystem().ShouldFastForward()) {
+    co_await waits.Schedule();
   }
+  co_return 0;
+}
+
+FrameRenderer EffectLongOperation::GetFrameRenderer() {
+  return [this] {
+    const Rect screen(Point(0, 0), size());
+    if (duration_ == 0) {
+      src_surface().RenderToScreen(screen, screen, 255);
+      return;
+    }
+    if (BlitOriginalImage())
+      dst_surface().RenderToScreen(screen, screen, 255);
+    const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
+    const auto current_frame = machine_.GetSystem().ShouldFastForward()
+                                   ? duration_
+                                   : std::min(elapsed, duration_);
+    PerformEffectForTime(current_frame);
+  };
 }
 
 // -----------------------------------------------------------------------

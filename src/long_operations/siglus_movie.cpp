@@ -56,6 +56,8 @@ SiglusMovieOperation::SiglusMovieOperation(System* sys,
       sound_(sys->sound()),
       graphics_(sys->graphics_ptr()) {}
 
+SiglusMovieOperation::~SiglusMovieOperation() { Stop(); }
+
 Task<int> SiglusMovieOperation::Run(WaitContext& waits) {
   playing_ = true;
 
@@ -113,39 +115,27 @@ Task<int> SiglusMovieOperation::Run(WaitContext& waits) {
     sound_.StopMovieAudio();
   }
 
-  TakeGraphicsUpdateResponsibility();
+  while (playing_) {
+    UpdatePlaybackTime();
+    if (!queue->Pop(current_frame))
+      break;
 
-  try {
-    while (playing_) {
-      UpdatePlaybackTime();
-      if (!queue->Pop(current_frame))
-        break;
+    const int now = UpdatePlaybackTime();
+    bool late = now - current_frame.timestamp > msec_per_frame;
+    if (late && queue->Size() >= 1)
+      continue;
+    surface_->UpdateBGRA(current_frame.data, false);
+    frame_->draw = [surface = surface_,
+                    destination = DestinationRect(surface_->GetRect())] {
+      surface->RenderToScreen(surface->GetRect(), destination, 255);
+    };
 
-      const int now = UpdatePlaybackTime();
-      bool late = now - current_frame.timestamp > msec_per_frame;
-      if (late && queue->Size() >= 1)
-        continue;
-      surface_->UpdateBGRA(current_frame.data, false);
-
-      graphics_->RenderCustomFrame([&] {
-        surface_->RenderToScreen(surface_->GetRect(),
-                                 DestinationRect(surface_->GetRect()), 255);
-      });
-
-      if ((co_await waits.WaitFor(chr::milliseconds(msec_per_frame),
-                                  wait_key_) ==
-           WaitOutcome::InterruptedByInput)) {
-        Stop();
-        co_return 1;
-      }
+    if (co_await waits.WaitFor(chr::milliseconds(msec_per_frame), wait_key_) ==
+        WaitOutcome::InterruptedByInput) {
+      co_return 1;
     }
-    RethrowDecoderException();
-  } catch (...) {
-    Stop();
-    throw;
   }
-
-  Stop();
+  RethrowDecoderException();
   co_return 0;
 }
 
@@ -206,7 +196,7 @@ void SiglusMovieOperation::Stop() {
     return;
   stopped_ = true;
   playing_ = false;
-  RestoreGraphicsUpdateResponsibility();
+  frame_->draw = {};
   sound_.StopMovieAudio();
   if (frame_queue_)
     frame_queue_->Stop();
@@ -214,22 +204,6 @@ void SiglusMovieOperation::Stop() {
     decoder_.request_stop();
     decoder_.join();
   }
-}
-
-void SiglusMovieOperation::TakeGraphicsUpdateResponsibility() {
-  if (previous_graphics_update_responsibility_)
-    return;
-  previous_graphics_update_responsibility_ =
-      graphics_->is_responsible_for_update();
-  graphics_->set_is_responsible_for_update(false);
-}
-
-void SiglusMovieOperation::RestoreGraphicsUpdateResponsibility() {
-  if (!previous_graphics_update_responsibility_)
-    return;
-  graphics_->set_is_responsible_for_update(
-      *previous_graphics_update_responsibility_);
-  previous_graphics_update_responsibility_.reset();
 }
 
 }  // namespace lop

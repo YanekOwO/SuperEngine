@@ -31,7 +31,6 @@
 #include "core/game_config.hpp"
 
 #include <filesystem>
-#include <functional>
 
 #include <memory>
 #include <sstream>
@@ -230,10 +229,6 @@ class System {
   // text.
   bool ShouldFastForward();
 
-  // Called once per gameloop. |after_event_poll| runs after input dispatch and
-  // before the remaining subsystems advance.
-  void Run(std::function<void()> after_event_poll = {});
-
   inline RLEventListener& rlEvent() { return *rlevent_handler_; }
   inline std::shared_ptr<AssetScanner> GetAssetScanner() { return assets_; }
   inline GraphicsSystem& graphics() { return *graphics_system_; }
@@ -276,8 +271,7 @@ class System {
   // reasons.
   bool force_fast_forward_;
 
-  // Forces a 10ms sleep at the end of the System::run function. Used to lower
-  // CPU usage during manual redrawing.
+  // Yield RealLive instruction execution until the next scheduled system frame.
   bool force_wait_;
 
   bool quit_requested_ = false;

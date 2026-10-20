@@ -60,7 +60,6 @@ class SDLGraphicsBackend : public IGraphicsBackend {
 
   virtual void RenderFrame(const RenderFrameConfig& config,
                            const DrawCallback& draw_scene,
-                           const DrawCallback& draw_renderables,
                            const DrawCallback& draw_cursor) override;
 
   virtual bool RedrawLastFrame(const RenderFrameConfig& config,

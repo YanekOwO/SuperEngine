@@ -41,6 +41,7 @@
 #include "machine/stack_frame.hpp"
 #include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
+#include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
@@ -94,12 +95,47 @@ RLMachine::RLMachine(std::shared_ptr<Gameexe> gameexe,
 
   renderer_ = std::make_shared<rlSceneRenderer>(*this);
   system_->graphics().BindSceneRenderer(renderer_);
+  system_->graphics().SetRefreshRequestCallback([this] {
+    if (screen_update_mode_ == SCREENUPDATEMODE_MANUAL)
+      system_->set_force_wait(true);
+  });
   MarkSavepoint();
 }
 
-RLMachine::~RLMachine() = default;
+RLMachine::~RLMachine() { system_->graphics().SetRefreshRequestCallback({}); }
 
-void RLMachine::Update() { system_->Run(); }
+void RLMachine::Update() {
+  system_->event().ExecuteEventSystem();
+  system_->text().ExecuteTextSystem();
+  system_->sound().ExecuteSoundSystem();
+  system_->graphics().ExecuteGraphicsSystem();
+
+  if (system_->IsQuitRequested() || IsHalted())
+    return;
+
+  auto& graphics = system_->graphics();
+  const auto draw = lop::GetFrameRenderer(call_stack_);
+  if (rendered_custom_frame_ && !draw)
+    graphics.ForceRefresh();
+
+  FrameRenderOptions options;
+  switch (screen_update_mode_) {
+    case SCREENUPDATEMODE_AUTOMATIC:
+    case SCREENUPDATEMODE_SEMIAUTOMATIC:
+      break;
+    case SCREENUPDATEMODE_MANUAL:
+      options.redraw_scene = draw || graphics.screen_needs_refresh();
+      options.cache_scene = true;
+      break;
+    default:
+      throw std::runtime_error("RLMachine: Invalid screen update mode " +
+                               std::to_string(screen_update_mode_));
+  }
+  graphics.RenderFrame(options, draw);
+  rendered_custom_frame_ = static_cast<bool>(draw);
+  if (!draw && options.redraw_scene)
+    graphics.AcknowledgeRefresh();
+}
 
 Stage& RLMachine::stage() { return *stage_; }
 
@@ -285,7 +321,10 @@ void RLMachine::Reset() {
   savepoint_call_stack_.Clear();
   stage().Reset();
   haikei().Reset();
+  screen_update_mode_ = SCREENUPDATEMODE_AUTOMATIC;
+  rendered_custom_frame_ = false;
   GetSystem().Reset();
+  GetSystem().graphics().ForceRefresh();
 }
 
 void RLMachine::LocalReset() {
@@ -295,7 +334,10 @@ void RLMachine::LocalReset() {
   savepoint_local_config_ = *local_config_;
   stage().Reset();
   haikei().Reset();
+  screen_update_mode_ = SCREENUPDATEMODE_AUTOMATIC;
+  rendered_custom_frame_ = false;
   GetSystem().Reset();
+  GetSystem().graphics().ForceRefresh();
 }
 
 std::shared_ptr<lop::RealliveTask> RLMachine::CurrentLongOperation() const {

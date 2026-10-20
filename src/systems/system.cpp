@@ -379,15 +379,6 @@ bool System::ShouldFastForward() {
          text().CurrentlySkipping() || force_fast_forward_;
 }
 
-void System::Run(std::function<void()> after_event_poll) {
-  event_system_->ExecuteEventSystem();
-  if (after_event_poll)
-    after_event_poll();
-  text_system_->ExecuteTextSystem();
-  sound_system_->ExecuteSoundSystem();
-  graphics_system_->ExecuteGraphicsSystem();
-}
-
 SoundSystem& System::sound() { return *sound_system_; }
 
 std::filesystem::path System::GetHomeDirectory() {

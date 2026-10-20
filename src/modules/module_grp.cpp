@@ -32,6 +32,7 @@
 #include "core/colour.hpp"
 #include "core/gameexe.hpp"
 #include "core/haikei.hpp"
+#include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "long_operations/effects/effect.hpp"
 #include "long_operations/effects/effect_factory.hpp"
@@ -47,6 +48,7 @@
 #include "machine/rloperation/rect_t.hpp"
 #include "machine/rloperation/rgb_colour_t.hpp"
 #include "machine/rloperation/special_t.hpp"
+#include "machine/scene_renderer.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
@@ -264,15 +266,18 @@ struct wipe : public RLOpcode<IntConstant_T,
 
 struct shake : public RLOpcode<IntConstant_T> {
   void operator()(RLMachine& machine, int spec) {
-    machine.GetSystem().graphics().QueueShakeSpec(spec);
+    std::shared_ptr<rlSceneRenderer> renderer = machine.GetRenderer();
+    std::vector<QuakeState::OffsetFrame> frames =
+        QuakeState::ParseRealliveShake(machine.GetGameexe(), spec);
+    if (frames.empty())
+      return;
+
+    renderer->QueueShake(std::move(frames));
 
     auto wait_op = std::make_shared<lop::WaitLongOperation>(machine);
-    wait_op->BreakOnEvent(std::bind(StopShaking, std::ref(machine)));
+    wait_op->BreakOnEvent(
+        [&machine] { return !machine.stage().HasActiveQuakes(); });
     machine.PushLongOperation(wait_op);
-  }
-
-  static bool StopShaking(RLMachine& machine) {
-    return machine.GetSystem().graphics().IsShaking() == false;
   }
 };
 

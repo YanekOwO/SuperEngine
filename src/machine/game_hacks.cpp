@@ -32,7 +32,6 @@
 #include "core/gameexe.hpp"
 #include "machine/rlmachine.hpp"
 #include "modules/jump.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
 using std::bind;
@@ -45,8 +44,7 @@ void PBRIDE_ResetAutoMode(RLMachine& machine) {
   // doesn't automatically get reset to DrawAuto. RealLive.exe takes care of
   // this (draw mode on the stack, perhaps?), but until we know what causes
   // this, hack.
-  machine.GetSystem().graphics().SetScreenUpdateMode(
-      GraphicsSystem::SCREENUPDATEMODE_AUTOMATIC);
+  machine.SetScreenUpdateMode(RLMachine::SCREENUPDATEMODE_AUTOMATIC);
 }
 
 void LB_SkipBaseball(RLMachine& machine) {

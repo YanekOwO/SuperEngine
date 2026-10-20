@@ -44,8 +44,7 @@ namespace lop {
 // compositing DC1 to DC0. These effects are created either based of
 // the \#SEL/\#SELR entries in the Gameexe.ini file, or based off of
 // arguments to a recOpen/grpOpen command. These transition effects
-// are all LongOperations which take over the screen during the
-// transition, surpressing the normal auto-redrawing behaviour.
+// provide the frame content selected by the engine during the transition.
 //
 // There are a large number of transition effects. Instead of trying to manually
 // create them, use the EffectFactory instead, which will instantiate
@@ -67,13 +66,9 @@ class EffectLongOperation : public LongOperation {
                       Size size,
                       int time);
 
-  virtual ~EffectLongOperation();
-
-  // Implements the LongOperation calling interface. This simply keeps
-  // track of the current time and calls PerformEffectForTime() until
-  // time > duration_, when the default implementation simply sets
-  // the current dc0 to the original dc0, then blits dc1 onto it.
+  // Wait for completion; drawing is performed by the engine.
   Task<int> Run(WaitContext& waits) override;
+  FrameRenderer GetFrameRenderer() override;
 
   // Accessors for which surfaces we're composing. These are public as
   // an ugly hack for ScrollOnScrollOff.cpp.
@@ -104,8 +99,7 @@ class EffectLongOperation : public LongOperation {
   // The time since startup when this effect started (in milliseconds)
   unsigned int start_time_;
 
-  // Keep track of what machine we're running on so we can send an
-  // appropriate endRealtimeTask() to the eventsystem on destruction
+  // The engine supplies timing and fast-forward state.
   RLMachine& machine_;
 
   // The source surface (previously known as DC1, before I realized

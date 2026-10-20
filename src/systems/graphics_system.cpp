@@ -46,19 +46,14 @@
 #include "libreallive/expression.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
-#include "machine/stack_frame.hpp"
-#include "modules/module_grp.hpp"
 #include "systems/event_system.hpp"
 #include "systems/igraphics_backend.hpp"
 #include "systems/object_settings.hpp"
-#include "systems/renderable.hpp"
 #include "systems/scene_renderer.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
-#include "systems/system_error.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/graphics.hpp"
-#include "utilities/lazy_array.hpp"
 #include "utilities/string_utilities.hpp"
 
 #include <algorithm>
@@ -154,15 +149,12 @@ GraphicsSystem::GraphicsSystem(System& system,
                                Gameexe& gameexe,
                                std::shared_ptr<IGraphicsBackend> backend,
                                Size screen_size)
-    : screen_update_mode_(SCREENUPDATEMODE_AUTOMATIC),
-      screen_needs_refresh_(false),
-      is_responsible_for_update_(true),
+    : screen_needs_refresh_(false),
       interface_hidden_(false),
       local_config_(system.local_config()),
       global_config_(system.global_config()),
       cg_table_(CreateCGMTable(gameexe)),
       tone_curves_(CreateToneCurve(gameexe)),
-      time_at_last_queue_change_(0),
       graphics_object_settings_(
           std::make_unique<GraphicsObjectSettings>(gameexe)),
       system_(system),
@@ -204,68 +196,8 @@ void GraphicsSystem::SetDebugFrameDumpConfig(DebugFrameDumpConfig config) {
 
 void GraphicsSystem::ForceRefresh() {
   screen_needs_refresh_ = true;
-
-  if (screen_update_mode_ == SCREENUPDATEMODE_MANUAL) {
-    // Note: SDLEventSystem can also set_force_wait(), in the case of automatic
-    // mode.
-    system().set_force_wait(true);
-  }
-}
-
-// -----------------------------------------------------------------------
-
-void GraphicsSystem::SetScreenUpdateMode(DCScreenUpdateMode u) {
-  screen_update_mode_ = u;
-}
-
-// -----------------------------------------------------------------------
-
-void GraphicsSystem::QueueShakeSpec(int spec) {
-  Gameexe& gameexe = system().gameexe();
-
-  if (gameexe("SHAKE", spec).Exists()) {
-    std::vector<int> spec_vector = gameexe("SHAKE", spec).ToIntVec();
-
-    int x, y, time;
-    std::vector<int>::const_iterator it = spec_vector.begin();
-    while (it != spec_vector.end()) {
-      x = *it++;
-      if (it != spec_vector.end()) {
-        y = *it++;
-        if (it != spec_vector.end()) {
-          time = *it++;
-          screen_shake_queue_.push(std::make_pair(Point(x, y), time));
-        }
-      }
-    }
-
-    ForceRefresh();
-    time_at_last_queue_change_ = system().event().GetTicks();
-  }
-}
-
-// -----------------------------------------------------------------------
-
-Point GraphicsSystem::GetScreenOrigin() const {
-  if (screen_shake_queue_.empty()) {
-    return Point(0, 0);
-  } else {
-    return screen_shake_queue_.front().first;
-  }
-}
-
-// -----------------------------------------------------------------------
-
-bool GraphicsSystem::IsShaking() const { return !screen_shake_queue_.empty(); }
-
-// -----------------------------------------------------------------------
-
-int GraphicsSystem::CurrentShakingFrameTime() const {
-  if (screen_shake_queue_.empty()) {
-    return 10;
-  } else {
-    return screen_shake_queue_.front().second;
-  }
+  if (refresh_request_callback_)
+    refresh_request_callback_();
 }
 
 // -----------------------------------------------------------------------
@@ -350,12 +282,14 @@ void GraphicsSystem::DrawFrame() {
 
 // -----------------------------------------------------------------------
 
-RenderFrameConfig GraphicsSystem::BuildPresentationFrameConfig() {
+RenderFrameConfig GraphicsSystem::BuildPresentationFrameConfig(
+    bool cache_scene) {
   return RenderFrameConfig{
       .screen_size = screen_size(),
       .display_size = display_size_,
-      .screen_origin = GetScreenOrigin(),
-      .manual_update_mode = screen_update_mode_ == SCREENUPDATEMODE_MANUAL,
+      .screen_origin =
+          scene_renderer_ ? scene_renderer_->GetScreenOrigin() : Point(),
+      .cache_scene = cache_scene,
       .frame_dump_path = NextDebugFrameDumpPath()};
 }
 
@@ -381,20 +315,10 @@ void GraphicsSystem::RollBackDebugFrameDumpCounter() {
 
 // -----------------------------------------------------------------------
 
-void GraphicsSystem::RenderFrame(bool should_refresh) {
-  RenderFrameConfig config = BuildPresentationFrameConfig();
+void GraphicsSystem::RenderFrame(FrameRenderOptions options,
+                                 const DrawCallback& draw_scene) {
+  RenderFrameConfig config = BuildPresentationFrameConfig(options.cache_scene);
 
-  auto draw_scene = [this]() { DrawFrame(); };
-  auto draw_renderables = [this]() {
-    // TODO: Move this to RLMachine
-    std::erase_if(final_renderers_, [](std::weak_ptr<Renderable> wp) {
-      std::shared_ptr<Renderable> renderable = wp.lock();
-      if (!renderable)
-        return true;
-      renderable->Render();
-      return false;
-    });
-  };
   auto draw_cursor = [this]() {
     if (!ShouldUseCustomCursor())
       return;
@@ -405,48 +329,15 @@ void GraphicsSystem::RenderFrame(bool should_refresh) {
       cursor->RenderHotspotAt(cursor_pos());
   };
 
-  if (!should_refresh) {
+  if (!options.redraw_scene) {
     if (!impl_->RedrawLastFrame(config, draw_cursor))
       RollBackDebugFrameDumpCounter();
     return;
   }
 
-  impl_->RenderFrame(config, draw_scene, draw_renderables, draw_cursor);
-}
-
-// -----------------------------------------------------------------------
-
-void GraphicsSystem::RenderCustomFrame(const DrawCallback& draw_scene,
-                                       const DrawCallback& draw_after) {
-  RenderFrameConfig config = BuildPresentationFrameConfig();
-
-  auto draw_cursor = [this]() {
-    if (!ShouldUseCustomCursor())
-      return;
-    std::shared_ptr<MouseCursor> cursor;
-    if (system().event().mouse_inside_window())
-      cursor = GetCurrentCursor();
-    if (cursor)
-      cursor->RenderHotspotAt(cursor_pos());
-  };
-
-  // Preserve the old Begin/EndFrame behavior: render final_renderers_ and then
-  // the optional draw_after()
-  auto draw_renderables_then_after = [this, &draw_after]() {
-    std::erase_if(final_renderers_, [](std::weak_ptr<Renderable> wp) {
-      std::shared_ptr<Renderable> renderable = wp.lock();
-      if (!renderable)
-        return true;
-      renderable->Render();
-      return false;
-    });
-
-    if (draw_after)
-      draw_after();
-  };
-
-  impl_->RenderFrame(config, draw_scene, draw_renderables_then_after,
-                     draw_cursor);
+  const DrawCallback render_scene =
+      draw_scene ? draw_scene : [this]() { DrawFrame(); };
+  impl_->RenderFrame(config, render_scene, draw_cursor);
 }
 
 // -----------------------------------------------------------------------
@@ -455,8 +346,9 @@ std::shared_ptr<SDLSurface> GraphicsSystem::RenderToSurface() {
   RenderFrameConfig config{
       .screen_size = screen_size(),
       .display_size = display_size_,
-      .screen_origin = GetScreenOrigin(),
-      .manual_update_mode = screen_update_mode_ == SCREENUPDATEMODE_MANUAL,
+      .screen_origin =
+          scene_renderer_ ? scene_renderer_->GetScreenOrigin() : Point(),
+      .cache_scene = false,
       .frame_dump_path = std::nullopt};
   auto draw_scene = [this]() { DrawFrame(); };
   return impl_->RenderToSurface(config, draw_scene);
@@ -472,7 +364,7 @@ std::shared_ptr<SDLSurface> GraphicsSystem::RenderToSurface(
   RenderFrameConfig config{.screen_size = size,
                            .display_size = size,
                            .screen_origin = {},
-                           .manual_update_mode = false,
+                           .cache_scene = false,
                            .frame_dump_path = std::nullopt,
                            .transparent = transparent,
                            .render_offset = offset};
@@ -516,37 +408,6 @@ void GraphicsSystem::ExecuteGraphicsSystem() {
   if (mouse_cursor_)
     mouse_cursor_->Execute();
 
-  // Possibly update the screen shaking state
-  if (!screen_shake_queue_.empty()) {
-    unsigned int now = system().event().GetTicks();
-    unsigned int accumulated_ticks = now - time_at_last_queue_change_;
-    while (!screen_shake_queue_.empty() &&
-           accumulated_ticks > screen_shake_queue_.front().second) {
-      int frame_ticks = screen_shake_queue_.front().second;
-      accumulated_ticks -= frame_ticks;
-      time_at_last_queue_change_ += frame_ticks;
-      screen_shake_queue_.pop();
-      ForceRefresh();
-    }
-  }
-
-  if (is_responsible_for_update()) {
-    switch (screen_update_mode_) {
-      case SCREENUPDATEMODE_AUTOMATIC:
-      case SCREENUPDATEMODE_SEMIAUTOMATIC:
-        screen_needs_refresh_ = true;
-        break;
-      case SCREENUPDATEMODE_MANUAL:
-        break;
-      default:
-        throw std::runtime_error("GraphicsSystem: Invalid screen update mode " +
-                                 std::to_string(screen_update_mode_));
-    }
-
-    RenderFrame(screen_needs_refresh_);
-    screen_needs_refresh_ = false;
-  }
-
   UpdateWindowTitle();
 }
 
@@ -560,7 +421,6 @@ void GraphicsSystem::Reset() {
   if (impl_)
     impl_->ShowSystemCursor(!ShouldUseCustomCursor());
 
-  screen_update_mode_ = SCREENUPDATEMODE_AUTOMATIC;
   subtitle_.clear();
   subtitle_utf8_.clear();
   current_window_title_.clear();

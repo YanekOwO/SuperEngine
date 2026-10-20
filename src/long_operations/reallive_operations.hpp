@@ -24,9 +24,10 @@
 #pragma once
 
 #include "long_operations/long_operation.hpp"
-#include "systems/graphics_system.hpp"
+#include "machine/rlmachine.hpp"
 
-class RLMachine;
+class GraphicsObject;
+class GraphicsSystem;
 class System;
 class TextSystem;
 
@@ -71,7 +72,7 @@ class WaitForGanToFinish final : public LongOperation {
   GraphicsObject& GetObject();
   RLMachine& machine_;
   GraphicsSystem& graphics_;
-  GraphicsSystem::DCScreenUpdateMode mode_;
+  RLMachine::DCScreenUpdateMode mode_;
   int layer_;
   int parent_;
   int object_;

@@ -40,4 +40,8 @@ Task<int> PerformAfterLongOperationDecorator::Run(WaitContext& waits) {
   co_return result;
 }
 
+FrameRenderer PerformAfterLongOperationDecorator::GetFrameRenderer() {
+  return operation_->GetFrameRenderer();
+}
+
 }  // namespace lop

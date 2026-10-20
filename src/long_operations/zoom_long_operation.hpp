@@ -43,9 +43,8 @@ class ZoomLongOperation : public LongOperation {
                     const Rect& trect_,
                     const Rect& drect_,
                     const int time);
-  virtual ~ZoomLongOperation();
-
   Task<int> Run(WaitContext& waits) override;
+  FrameRenderer GetFrameRenderer() override;
 
  private:
   RLMachine& machine_;

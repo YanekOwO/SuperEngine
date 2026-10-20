@@ -40,6 +40,9 @@ class ISceneRenderer {
   virtual void ExecuteFrame() = 0;
   virtual void RenderScene() = 0;
 
+  // Translation applied to the complete presented scene and scene captures.
+  virtual Point GetScreenOrigin() const { return {}; }
+
   virtual void RenderObject(
       GraphicsObject& object,
       const MaskList* mask_list = nullptr,

@@ -110,6 +110,15 @@ void RealliveTask::Advance(bool fast_forward) {
 
 bool RealliveTask::Done() const noexcept { return finished_; }
 
+FrameRenderer RealliveTask::GetFrameRenderer() const {
+  if (finished_)
+    return {};
+  auto draw = operation_->GetFrameRenderer();
+  if (!draw)
+    return {};
+  return [operation = operation_, draw = std::move(draw)] { draw(); };
+}
+
 Clock::timepoint_t RealliveTask::ReadyUntil() const noexcept {
   return ready_until_;
 }
@@ -145,6 +154,16 @@ void AdvanceLongOperation(CallStack& stack, bool fast_forward) {
   top = stack.Top();
   if (task->Done() && top && top->long_op == task)
     stack.Pop();
+}
+
+FrameRenderer GetFrameRenderer(CallStack& stack) {
+  for (const auto& frame : stack) {
+    if (frame.frame_type == StackFrame::TYPE_LONGOP && frame.long_op) {
+      if (auto draw = frame.long_op->GetFrameRenderer())
+        return draw;
+    }
+  }
+  return {};
 }
 
 }  // namespace lop

@@ -382,7 +382,6 @@ void SDLGraphicsBackend::PresentFrame(const RenderFrameConfig& config) {
 
 void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
                                      const DrawCallback& draw_scene,
-                                     const DrawCallback& draw_renderables,
                                      const DrawCallback& draw_cursor) {
   glRenderer renderer;
   renderer.SetUp();
@@ -393,10 +392,7 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
 
   if (draw_scene)
     draw_scene();
-  if (draw_renderables)
-    draw_renderables();
-
-  if (config.manual_update_mode) {
+  if (config.cache_scene) {
     if (!screen_contents_texture_)
       screen_contents_texture_ =
           std::make_shared<glTexture>(config.screen_size);
@@ -424,7 +420,7 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
 
 bool SDLGraphicsBackend::RedrawLastFrame(const RenderFrameConfig& config,
                                          const DrawCallback& draw_cursor) {
-  if (!config.manual_update_mode || !screen_contents_texture_valid_ ||
+  if (!config.cache_scene || !screen_contents_texture_valid_ ||
       !screen_contents_texture_)
     return false;
 

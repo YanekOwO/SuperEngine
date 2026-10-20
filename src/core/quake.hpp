@@ -25,8 +25,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <span>
 #include <vector>
+#include "core/gameexe.hpp"
 
 struct QuakeTransform {
   double scale = 1.0;
@@ -46,6 +49,7 @@ class QuakeState {
     Vector = 0,
     Directional = 1,
     Zoom = 2,
+    Offsets = 3,  // Started through QueueOffsets(), not Siglus's dispatcher.
   };
 
   struct StartParams {
@@ -61,12 +65,21 @@ class QuakeState {
     int end_order = 0;
   };
 
+  struct OffsetFrame {
+    int x;
+    int y;
+    int duration_ms;
+  };
+  static std::vector<OffsetFrame> ParseRealliveShake(Gameexe& gexe, int spec);
+
   QuakeState();
 
   void Reset();
   // Returns false for unsupported quake types and leaves the current quake
   // untouched, as the legacy dispatcher does.
   bool Start(StartParams params);
+  // Append RealLive's discrete offsets and restart the current frame's timer.
+  void QueueOffsets(std::span<const OffsetFrame> frames);
   void End(int duration_ms = 0);
   void Advance(std::int64_t elapsed_ms);
 
@@ -93,6 +106,7 @@ class QuakeState {
   int end_duration_ms_ = 0;
   std::int64_t end_elapsed_ms_ = 0;
   QuakeTransform transform_;
+  std::deque<OffsetFrame> offsets_;
 };
 
 class QuakeList {

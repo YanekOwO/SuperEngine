@@ -46,7 +46,7 @@ struct RenderFrameConfig {
   Size screen_size;
   Size display_size;
   Point screen_origin;
-  bool manual_update_mode;
+  bool cache_scene;
   std::optional<std::filesystem::path> frame_dump_path;
   // Offscreen captures can preserve alpha and translate the scene in pixels.
   bool transparent = false;
@@ -54,6 +54,11 @@ struct RenderFrameConfig {
 };
 
 using DrawCallback = std::function<void()>;
+
+struct FrameRenderOptions {
+  bool redraw_scene = true;
+  bool cache_scene = false;
+};
 
 class IGraphicsBackend {
  public:
@@ -80,7 +85,6 @@ class IGraphicsBackend {
 
   virtual void RenderFrame(const RenderFrameConfig& config,
                            const DrawCallback& draw_scene,
-                           const DrawCallback& draw_renderables,
                            const DrawCallback& draw_cursor) = 0;
 
   virtual bool RedrawLastFrame(const RenderFrameConfig& config,

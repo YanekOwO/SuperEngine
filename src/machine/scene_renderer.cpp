@@ -24,14 +24,16 @@
 
 #include "machine/scene_renderer.hpp"
 
+#include "core/gameexe.hpp"
 #include "core/haikei.hpp"
 #include "core/hik.hpp"
 #include "core/object.hpp"
-#include "core/selection.hpp"
 #include "core/object_internal/objdrawer.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
 #include "log/domain_logger.hpp"
 #include "machine/rlmachine.hpp"
+#include "systems/event_system.hpp"
 #include "systems/graphics_system.hpp"
 #include "systems/object_settings.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -47,9 +49,39 @@ DomainLogger logger("rlSceneRenderer");
 
 }  // namespace
 
-rlSceneRenderer::rlSceneRenderer(RLMachine& machine) : machine_(machine) {}
+rlSceneRenderer::rlSceneRenderer(RLMachine& machine) : machine_(machine) {
+  // RealLive has one scene-wide quake on the foreground stage.
+  if (machine_.stage().quakes.Size(kLayerFg) == 0)
+    machine_.stage().quakes.Resize(kLayerFg, 1);
+  last_quake_tick_ = machine_.GetSystem().event().GetTicks();
+}
 
-void rlSceneRenderer::ExecuteFrame() { machine_.stage().Execute(); }
+void rlSceneRenderer::ExecuteFrame() {
+  Stage& stage = machine_.stage();
+  stage.Execute();
+  const unsigned int now = machine_.GetSystem().event().GetTicks();
+  const Point previous_origin = GetScreenOrigin();
+  const bool was_active = stage.HasActiveQuakes();
+  stage.AdvanceQuakes(now - last_quake_tick_);
+  last_quake_tick_ = now;
+  if (GetScreenOrigin() != previous_origin ||
+      (was_active && !stage.HasActiveQuakes())) {
+    machine_.GetSystem().graphics().ForceRefresh();
+  }
+}
+
+void rlSceneRenderer::QueueShake(std::vector<QuakeState::OffsetFrame> frames) {
+  machine_.stage().GetQuake(kLayerFg, 0)->QueueOffsets(frames);
+  last_quake_tick_ = machine_.GetSystem().event().GetTicks();
+  machine_.GetSystem().graphics().ForceRefresh();
+}
+
+Point rlSceneRenderer::GetScreenOrigin() const {
+  const auto transform = ComposeQuakeTransforms(
+      0, nullptr, machine_.stage().QuakesForLayer(kLayerFg));
+  return Point(static_cast<int>(transform.translate_x),
+               static_cast<int>(transform.translate_y));
+}
 
 void rlSceneRenderer::RenderScene() {
   Haikei& haikei = machine_.haikei();

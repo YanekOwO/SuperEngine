@@ -50,6 +50,10 @@
 #include <utility>
 #include <vector>
 
+namespace lop {
+struct MovieFrame;
+}
+
 namespace serilang {
 class VM;
 class Promise;
@@ -122,6 +126,9 @@ struct SiglusMachine {
   std::shared_ptr<MaskList> mask_list;
 
   std::shared_ptr<SiglusSceneRenderer> renderer;
+  std::weak_ptr<lop::MovieFrame> movie_frame;
+  std::function<void()> GetFrameRenderer() const;
+  void RenderFrame(bool display = true);
 
   // ------------------------------------------------------------------------------
   std::shared_ptr<CaptureManager> captures;

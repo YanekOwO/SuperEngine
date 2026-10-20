@@ -10,6 +10,7 @@
 
 #include <limits>
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -120,6 +121,46 @@ TEST(QuakeStateTest, UnsupportedTypeIsNoopAndOrderRangeIsInclusive) {
   EXPECT_FALSE(quake.Contains(2));
   EXPECT_FALSE(quake.Start(QuakeState::StartParams{.type = 3}));
   EXPECT_EQ(quake.Check(), 1);
+}
+
+TEST(QuakeStateTest, QueuedOffsetsPreserveDiscreteFramesAndDurationBoundaries) {
+  QuakeState quake;
+  const std::vector<QuakeState::OffsetFrame> frames = {
+      {12, -7, 10}, {-5, 8, 20}, {3, 4, 30}};
+  quake.QueueOffsets(frames);
+  ASSERT_TRUE(quake.IsActive());
+  EXPECT_TRUE(quake.Contains(std::numeric_limits<int>::min()));
+  EXPECT_TRUE(quake.Contains(std::numeric_limits<int>::max()));
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_x, 12);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_y, -7);
+
+  quake.Advance(10);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_x, 12);
+  quake.Advance(1);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_x, -5);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_y, 8);
+  quake.Advance(20);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_x, 3);
+  quake.Advance(29);
+  EXPECT_TRUE(quake.IsActive());
+  quake.Advance(1);
+  EXPECT_FALSE(quake.IsActive());
+  EXPECT_TRUE(quake.CurrentTransform().IsIdentity());
+}
+
+TEST(QuakeStateTest, QueuedOffsetsCatchUpAcrossFramesWithoutLosingTime) {
+  QuakeState quake;
+  const std::vector<QuakeState::OffsetFrame> frames = {
+      {10, 0, 10}, {20, 0, 20}, {30, 0, 30}};
+  quake.QueueOffsets(frames);
+  quake.Advance(45);
+  EXPECT_DOUBLE_EQ(quake.CurrentTransform().translate_x, 30);
+  quake.Advance(16);
+  EXPECT_FALSE(quake.IsActive());
+
+  quake.QueueOffsets(frames);
+  quake.Advance(std::numeric_limits<std::int64_t>::max());
+  EXPECT_FALSE(quake.IsActive());
 }
 
 TEST(QuakeTransformTest, CompositionAppliesLaterTransformAfterEarlierOne) {

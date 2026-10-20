@@ -112,14 +112,14 @@ ScrModule::ScrModule() : RLModule("Scr", 1, 30) {
   AddOpcode(4, 0, "stackTrunc", std::make_shared<StackTrunc>());
 
   AddOpcode(20, 0, "DrawAuto",
-            CallFunctionWith(&GraphicsSystem::SetScreenUpdateMode,
-                             GraphicsSystem::SCREENUPDATEMODE_AUTOMATIC));
+            CallFunctionWith(&RLMachine::SetScreenUpdateMode,
+                             RLMachine::SCREENUPDATEMODE_AUTOMATIC));
   AddOpcode(21, 0, "DrawSemiAuto",
-            CallFunctionWith(&GraphicsSystem::SetScreenUpdateMode,
-                             GraphicsSystem::SCREENUPDATEMODE_SEMIAUTOMATIC));
+            CallFunctionWith(&RLMachine::SetScreenUpdateMode,
+                             RLMachine::SCREENUPDATEMODE_SEMIAUTOMATIC));
   AddOpcode(22, 0, "DrawManual",
-            CallFunctionWith(&GraphicsSystem::SetScreenUpdateMode,
-                             GraphicsSystem::SCREENUPDATEMODE_MANUAL));
+            CallFunctionWith(&RLMachine::SetScreenUpdateMode,
+                             RLMachine::SCREENUPDATEMODE_MANUAL));
 
   AddOpcode(31, 0, "GetDCPixel", std::make_shared<GetDCPixel>());
 }
