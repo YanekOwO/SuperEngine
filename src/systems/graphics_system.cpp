@@ -462,6 +462,23 @@ std::shared_ptr<SDLSurface> GraphicsSystem::RenderToSurface() {
   return impl_->RenderToSurface(config, draw_scene);
 }
 
+std::shared_ptr<SDLSurface> GraphicsSystem::RenderToSurface(
+    Size size,
+    const DrawCallback& draw,
+    bool transparent,
+    Point offset) {
+  if (size.width() <= 0 || size.height() <= 0)
+    throw std::invalid_argument("Capture dimensions must be positive");
+  RenderFrameConfig config{.screen_size = size,
+                           .display_size = size,
+                           .screen_origin = {},
+                           .manual_update_mode = false,
+                           .frame_dump_path = std::nullopt,
+                           .transparent = transparent,
+                           .render_offset = offset};
+  return impl_->RenderToSurface(config, draw);
+}
+
 // -----------------------------------------------------------------------
 
 void GraphicsSystem::UpdateWindowTitle() {
@@ -614,6 +631,9 @@ std::shared_ptr<SDLSurface> GraphicsSystem::LoadSurfaceFromFile(
         std::format("Could not load image file '{}'", short_filename));
 
   std::shared_ptr<SDLSurface> result = impl_->LoadSurface(*pth);
+  std::erase_if(loaded_images_,
+                [](const auto& entry) { return entry.second.expired(); });
+  loaded_images_.emplace_back(short_filename, result);
   // handle tone curve effect loading
   if (auto pos = short_filename.find("?"); pos != short_filename.npos) {
     auto effect_str = std::string_view(short_filename).substr(pos + 1);

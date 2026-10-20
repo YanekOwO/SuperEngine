@@ -34,6 +34,8 @@
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "vm/exception.hpp"
+#include "vm/future.hpp"
+#include "vm/promise.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
@@ -57,7 +59,51 @@ SiglusMachine::~SiglusMachine() {
     s->prepared_.reset();
   }
 
+  ResetCaptures();
   vm.reset();
+}
+
+sr::Value SiglusMachine::RequestCapture(CaptureRequest request) {
+  if (!vm || !captures)
+    throw std::logic_error(
+        "SiglusMachine::RequestCapture requires a VM and capture manager");
+
+  auto* future = vm->gc_->Allocate<sr::Future>();
+  auto prepared = captures->PrepareRequest(std::move(request));
+  if (!prepared) {
+    future->promise->Resolve(sr::nil);
+    return future;
+  }
+  vm->TrackPendingPromise(future->promise);
+  pending_captures_.push_back({std::move(*prepared), future->promise});
+  return future;
+}
+
+void SiglusMachine::ProcessCaptureFrame() {
+  if (pending_captures_.empty())
+    return;
+
+  auto job = std::move(pending_captures_.front());
+  pending_captures_.pop_front();
+  if (job.promise->HasResult())
+    return;
+
+  try {
+    const auto result = captures->Capture(job.request);
+    job.promise->Resolve(result ? sr::Value(*result) : sr::nil);
+  } catch (const std::exception& e) {
+    job.promise->Reject(e.what());
+  }
+}
+
+void SiglusMachine::ResetCaptures() {
+  auto pending = std::move(pending_captures_);
+  pending_captures_.clear();
+  if (captures)
+    captures->Reset();
+  for (auto& job : pending)
+    if (!job.promise->HasResult())
+      job.promise->Reject("Capture cancelled by runtime reset");
 }
 
 void SiglusMachine::Start(std::optional<int> start_scene) {
@@ -144,25 +190,41 @@ void SiglusMachine::Run() {
   while (!vm->IsStopRequested() && !system->IsQuitRequested() &&
          vm->HasPendingWork()) {
     const auto next_frame = FrameClock::now() + frame_period;
+    const bool capture_frame = HasPendingCaptures();
     input_event_listener->ResetState();
-    system->Run([this, &last_frame_tick, &frame_clock] {
-      interaction_manager->Update();
+    {
+      auto& graphics = system->graphics();
+      struct RestorePresentation {
+        GraphicsSystem& graphics;
+        bool previous;
+        ~RestorePresentation() {
+          graphics.set_is_responsible_for_update(previous);
+        }
+      } restore{graphics, graphics.is_responsible_for_update()};
+      if (capture_frame && !CaptureDisplayEnabled())
+        graphics.set_is_responsible_for_update(false);
+      system->Run([this, &last_frame_tick, &frame_clock] {
+        interaction_manager->Update();
 
-      const auto now = frame_clock->GetTicks();
-      const auto real_delta =
-          std::max(now - last_frame_tick, Clock::duration_t::zero());
-      last_frame_tick = now;
+        const auto now = frame_clock->GetTicks();
+        const auto real_delta =
+            std::max(now - last_frame_tick, Clock::duration_t::zero());
+        last_frame_tick = now;
 
-      const bool fast_forward = system->ShouldFastForward();
-      const auto fast_forward_delta = real_delta > Clock::duration_t::max() / 32
-                                          ? Clock::duration_t::max()
-                                          : real_delta * 32;
-      const auto game_delta = fast_forward ? fast_forward_delta : real_delta;
+        const bool fast_forward = system->ShouldFastForward();
+        const auto fast_forward_delta =
+            real_delta > Clock::duration_t::max() / 32
+                ? Clock::duration_t::max()
+                : real_delta * 32;
+        const auto game_delta = fast_forward ? fast_forward_delta : real_delta;
 
-      Update(real_delta, game_delta);
-    });
+        Update(real_delta, game_delta);
+      });
+    }
     if (vm->IsStopRequested() || system->IsQuitRequested())
       break;
+    if (capture_frame)
+      ProcessCaptureFrame();
 
     vm->Run(std::max(next_frame - FrameClock::now(), minimum_vm_budget));
     if (vm->IsStopRequested() || system->IsQuitRequested() ||

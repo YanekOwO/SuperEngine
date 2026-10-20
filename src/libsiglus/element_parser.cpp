@@ -834,12 +834,14 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[308] | b(Type::Int, Member("get_font_decoration")),
 
            // capture
-           id[286] | b(Type::Callable, Member("create_capture_buffer")),
-           id[287] | b(Type::None, Member("destroy_capture_buffer")),
-           id[316] | b(Type::Callable, Member("capture_to_capture_buffer")),
-           id[314] | b(Type::Callable, Member("save_capture_buffer_to_file")),
-           id[315] | b(Type::Callable, Member("load_flag_from_capture_file")),
-           id[290] | b(Type::Callable, Member("capture_to_png")),
+           id[286] | b_callable("create_capture_buffer"),
+           id[287] | b_callable("destroy_capture_buffer"),
+           id[290] | b_callable("capture_to_capture_buffer", Type::None, AWAIT),
+           id[314] | b_callable("save_capture_buffer_to_file", Type::Int,
+                                NONSIMPLE | AWAIT),
+           id[315] | b_callable("load_flag_from_capture_file", Type::Int,
+                                NONSIMPLE | AWAIT),
+           id[316] | b_callable("capture_to_png", Type::None, AWAIT),
            id[327] | b(Type::None, Member("twitter")),
            id[328] | b(Type::Callable, Member("set_ret_scene_once")),
            id[330] | b(Type::Callable, Member("get_sys_extra_int")),
@@ -1984,6 +1986,7 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
     case 136:  // CAPTURE_FOR_OBJECT_FREE
     case 164:  // CAPTURE_FOR_TWEET
     case 165:  // CAPTURE_FREE_FOR_TWEET
+    case 144:  // CAPTURE_FOR_LOCAL_SAVE
     {
       std::string_view name = root == 80    ? "capture"
                               : root == 163 ? "capture_from_file"
@@ -1991,9 +1994,15 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
                               : root == 130 ? "capture_for_object"
                               : root == 136 ? "capture_for_object_free"
                               : root == 164 ? "capture_for_tweet"
+                              : root == 144 ? "capture_for_local_save"
                                             : "capture_free_for_tweet";
-      elm.bind_ctx.return_type = Type::None;
-      auto call = Node::BuildCall(std::move(elm.bind_ctx));
+      elm.bind_ctx.return_type = root == 144 ? Type::Int : Type::None;
+      const bool waits =
+          root == 80 || root == 130 || root == 164 || root == 144;
+      auto flags = waits ? AWAIT : CallFlags{};
+      if (root == 130 || root == 144)
+        flags = flags | NONSIMPLE;
+      auto call = Node::BuildCall(std::move(elm.bind_ctx), flags);
       elm.force_bind = false;
       return AccessChain{
           .root = std::monostate(),

@@ -9,6 +9,7 @@ set(RLVM_REQUIRED_LIBRARIES
     PkgConfig::SDL3
     PkgConfig::SDL3_TTF
     ${ZLIB_LIBRARIES}
+    PNG::PNG
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
     GLEW::GLEW

@@ -64,6 +64,8 @@ struct RenderingConfig {
   std::optional<int> blend_type;
   std::optional<AlphaMaskConfig> alpha_mask;
   bool sample_texture_in_screen_space = false;
+  // Framebuffer composites already contain the destination's translation.
+  bool apply_render_offset = true;
 };
 
 class glRenderer {

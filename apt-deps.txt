@@ -4,7 +4,7 @@ libvorbis-dev libtheora-dev libavformat-dev libavcodec-dev libavutil-dev
 libswscale-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev libfontconfig1-dev gettext libtbb-dev
 clang-tidy clang-format
 ninja-build ccache
-libjpeg-dev
+libjpeg-dev libpng-dev
 python3-numpy python3-soundfile
 libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev
 libwayland-dev libxkbcommon-dev libegl1-mesa-dev libdrm-dev libgbm-dev

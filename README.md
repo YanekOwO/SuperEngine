@@ -76,6 +76,10 @@ rlvm --engine siglus --hook hooks.sr /path/to/GameDirectory/
 The hook's globals, state changes, and debug registrations remain available to
 the game. Hook errors stop startup.
 
+rlvm uses Boost.Serialization text archives for save files and other persistent
+metadata. Compatibility with the original RealLive and Siglus serialization
+formats is outside the scope of this project and will not be supported.
+
 ## COMPILING RLVM
 
 ### Prerequisites
@@ -96,6 +100,7 @@ Before you begin, ensure you have the following libraries and utilities installe
 - **Fontconfig**
 - **GNU gettext**
 - **zlib**
+- **libpng**
 - **vorbisfile** (part of the Ogg Vorbis audio codec):
   [https://xiph.org/vorbis/](https://xiph.org/vorbis/)
 - **theoradec** (part of the Theora video codec):

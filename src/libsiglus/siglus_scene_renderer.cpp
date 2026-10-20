@@ -123,9 +123,14 @@ void SiglusSceneRenderer::ExecuteFrame() {
 
 void SiglusSceneRenderer::RenderScene() { RenderStageObjects(); }
 
-void SiglusSceneRenderer::RenderStageObjects() {
+void SiglusSceneRenderer::RenderCapture(std::pair<int, int> inclusive_end) {
+  RenderStageObjects(inclusive_end);
+}
+
+void SiglusSceneRenderer::RenderStageObjects(
+    std::optional<std::pair<int, int>> inclusive_end) {
   if (!stage_.transition_render_range()) {
-    RenderObjects(kLayerFg);
+    RenderObjects(kLayerFg, ObjectRange::All, inclusive_end);
     return;
   }
 
@@ -133,13 +138,15 @@ void SiglusSceneRenderer::RenderStageObjects() {
   ScopedTransitionCanvas render_state;
   const double progress = stage_.foreground_render_alpha();
 
-  RenderObjects(kLayerFg, ObjectRange::Below);
-  RenderObjects(progress >= 1.0 ? kLayerFg : kLayerNext, ObjectRange::Within);
+  RenderObjects(kLayerFg, ObjectRange::Below, inclusive_end);
+  RenderObjects(progress >= 1.0 ? kLayerFg : kLayerNext, ObjectRange::Within,
+                inclusive_end);
 
   if (progress > 0.0 && progress < 1.0) {
     const Size size = screen->GetSize();
     if (!transition_canvas_ || transition_canvas_->GetSize() != size)
       transition_canvas_ = std::make_shared<ScreenCanvas>(size);
+    transition_canvas_->set_render_offset(screen->render_offset());
 
     SDLSurface::screen_ = transition_canvas_;
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -148,11 +155,12 @@ void SiglusSceneRenderer::RenderStageObjects() {
 
     // Rebuild from live stage state each frame. ScreenCanvas also supplies
     // safe framebuffer snapshots to colour-filter objects while drawing.
-    RenderObjects(kLayerFg, ObjectRange::Below);
-    RenderObjects(kLayerFg, ObjectRange::Within);
+    RenderObjects(kLayerFg, ObjectRange::Below, inclusive_end);
+    RenderObjects(kLayerFg, ObjectRange::Within, inclusive_end);
 
     SDLSurface::screen_ = screen;
     RenderingConfig config;
+    config.apply_render_offset = false;
     config.alpha = static_cast<float>(progress);
     const Rect bounds(Point(0, 0), size);
     glRenderer().Render(
@@ -160,12 +168,17 @@ void SiglusSceneRenderer::RenderStageObjects() {
         {screen, bounds});
   }
 
-  RenderObjects(kLayerFg, ObjectRange::Above);
+  RenderObjects(kLayerFg, ObjectRange::Above, inclusive_end);
 }
 
-void SiglusSceneRenderer::RenderObjects(int stage_layer, ObjectRange range) {
+void SiglusSceneRenderer::RenderObjects(
+    int stage_layer,
+    ObjectRange range,
+    std::optional<std::pair<int, int>> inclusive_end) {
   to_render_.clear();
   const auto in_range = [&](std::pair<int, int> sorter) {
+    if (inclusive_end && sorter > *inclusive_end)
+      return false;
     if (range == ObjectRange::All)
       return true;
     const auto& bounds = *stage_.transition_render_range();

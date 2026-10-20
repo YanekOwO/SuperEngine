@@ -75,6 +75,12 @@ void glRenderer::RenderColormask(glRenderable src,
   int fdx1 = dst.region.x(), fdy1 = dst.region.y(), fdx2 = dst.region.x2(),
       fdy2 = dst.region.y2();
 
+  const Point offset = canvas->render_offset();
+  fdx1 += offset.x();
+  fdx2 += offset.x();
+  fdy1 += offset.y();
+  fdy2 += offset.y();
+
   auto toNDC = [screen_size = canvas_size](int x, int y) {
     const auto w = screen_size.width();
     const auto h = screen_size.height();
@@ -199,6 +205,11 @@ void glRenderer::Render(glRenderable src,
 
   auto model = cfg.model.value_or(
       glm::translate(glm::mat4(1.0f), glm::vec3(fdx1, fdy1, 0)));
+  const Point offset =
+      cfg.apply_render_offset ? canvas->render_offset() : Point{};
+  model =
+      glm::translate(glm::mat4(1.0f), glm::vec3(offset.x(), offset.y(), 0)) *
+      model;
 
   auto toNDC = [w = canvas_size.width(),
                 h = canvas_size.height()](glm::vec4 point) {
@@ -255,10 +266,10 @@ void glRenderer::Render(glRenderable src,
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, cfg.alpha_mask->texture->GetID());
     shader->SetUniform("alpha_mask", 1);
-    shader->SetUniform("alpha_mask_rect", static_cast<float>(rect.x()),
-                       static_cast<float>(rect.y()),
-                       static_cast<float>(rect.width()),
-                       static_cast<float>(rect.height()));
+    shader->SetUniform(
+        "alpha_mask_rect", static_cast<float>(rect.x() + offset.x()),
+        static_cast<float>(rect.y() + offset.y()),
+        static_cast<float>(rect.width()), static_cast<float>(rect.height()));
   }
 
   auto color = cfg.color.value_or(RGBAColour(0, 0, 0, 0));
@@ -271,7 +282,8 @@ void glRenderer::Render(glRenderable src,
 
   switch (cfg.blend_type.value_or(0)) {
     case 0:
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
+                          GL_ONE_MINUS_SRC_ALPHA);
       glBlendEquation(GL_FUNC_ADD);
       break;
     case 1:
@@ -291,7 +303,8 @@ void glRenderer::Render(glRenderable src,
       glBlendEquation(GL_FUNC_ADD);
       break;
     default:
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
+                          GL_ONE_MINUS_SRC_ALPHA);
       glBlendEquation(GL_FUNC_ADD);
       break;
   }

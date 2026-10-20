@@ -24,11 +24,13 @@
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/avdec/gan.hpp"
+#include "core/capture.hpp"
 #include "core/colour.hpp"
 #include "core/frame_counter.hpp"
 #include "core/memory_internal/facade.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/drawer/colour_filter.hpp"
+#include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/object_internal/drawer/movie.hpp"
 #include "core/object_internal/objdrawer.hpp"
@@ -706,6 +708,34 @@ struct ObjectEventPropertyBinder {
   }
 };
 
+void CreateCaptureObject(GraphicsObject& object,
+                         const std::shared_ptr<CaptureManager>& captures,
+                         std::vector<sr::Value> args,
+                         bool thumbnail,
+                         bool local) {
+  const std::size_t required = thumbnail ? 1 : 0;
+  if (args.size() != required && args.size() != required + 1 &&
+      args.size() != required + 3)
+    throw sr::RuntimeError(
+        "Capture object expects optional display and x/y arguments");
+  if (!captures)
+    throw sr::RuntimeError("Capture support is unavailable");
+  object.Reset();
+  auto surface = thumbnail ? captures->LoadThumbnail(
+                                 RequireInt(args[0], "thumbnail number"), local)
+                           : captures->Snapshot(CaptureKind::Object);
+  if (surface)
+    object.SetDrawer(
+        std::make_unique<GraphicsObjectOfFile>(std::move(surface)));
+  auto& param = object.Param();
+  if (args.size() > required)
+    param.SetVisible(RequireInt(args[required], "capture display"));
+  if (args.size() == required + 3) {
+    param.SetX(RequireInt(args[required + 1], "capture x"));
+    param.SetY(RequireInt(args[required + 2], "capture y"));
+  }
+}
+
 void BindObject(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage_state = runtime.stage.get();
@@ -868,6 +898,28 @@ void BindObject(SiglusMachine& runtime) {
     object.InitializeParams();
   });
   object.def("free", [](ObjectHandle* h) { h->object->FreeOwnObjectData(); });
+  object.def(
+      "create_capture",
+      [captures = runtime.captures](ObjectHandle* h,
+                                    std::vector<sr::Value> args) {
+        CreateCaptureObject(*h->object, captures, std::move(args), false,
+                            false);
+      },
+      sb::vararg);
+  object.def(
+      "create_capture_thumb",
+      [captures = runtime.captures](ObjectHandle* h,
+                                    std::vector<sr::Value> args) {
+        CreateCaptureObject(*h->object, captures, std::move(args), true, true);
+      },
+      sb::vararg);
+  object.def(
+      "create_save_thumb",
+      [captures = runtime.captures](ObjectHandle* h,
+                                    std::vector<sr::Value> args) {
+        CreateCaptureObject(*h->object, captures, std::move(args), true, false);
+      },
+      sb::vararg);
   object.def(
       "create",
       [system](ObjectHandle* h, std::vector<sr::Value> args) -> void {

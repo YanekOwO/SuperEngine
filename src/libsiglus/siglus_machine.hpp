@@ -25,6 +25,7 @@
 #pragma once
 
 #include "core/asset_scanner.hpp"
+#include "core/capture.hpp"
 #include "core/counter.hpp"
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
@@ -51,6 +52,7 @@
 
 namespace serilang {
 class VM;
+class Promise;
 struct Fiber;
 };  // namespace serilang
 
@@ -90,6 +92,7 @@ struct SiglusMachine {
   std::unique_ptr<System> system;
   std::unique_ptr<InteractionManager> interaction_manager;
 
+  // ------------------------------------------------------------------------------
   std::shared_ptr<SelState> selection_state;
   std::shared_ptr<EventListener> selection_event_listener;
   void StartSelection(std::shared_ptr<Selection> session);
@@ -104,6 +107,13 @@ struct SiglusMachine {
   // Called once after input or automation accepts a new selection result.
   void OnSelectionChosen(const Selection& session);
 
+ private:
+  std::map<std::pair<int, int>, int> debug_selection_choices_;
+  std::deque<int> debug_selection_choice_queue_;
+  bool updating_selection_ = false;
+
+  // ------------------------------------------------------------------------------
+ public:
   std::shared_ptr<BgmTable> bgm_table;
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
@@ -112,6 +122,28 @@ struct SiglusMachine {
   std::shared_ptr<MaskList> mask_list;
 
   std::shared_ptr<SiglusSceneRenderer> renderer;
+
+  // ------------------------------------------------------------------------------
+  std::shared_ptr<CaptureManager> captures;
+  // Queue eagerly and complete at most one request after each system frame.
+  serilang::Value RequestCapture(CaptureRequest request);
+  void ProcessCaptureFrame();
+  void ResetCaptures();
+  inline bool HasPendingCaptures() const { return !pending_captures_.empty(); }
+  inline bool CaptureDisplayEnabled() const {
+    return pending_captures_.empty() ||
+           pending_captures_.front().request.display;
+  }
+
+ private:
+  struct PendingCapture {
+    CaptureRequest request;
+    std::shared_ptr<serilang::Promise> promise;
+  };
+  std::deque<PendingCapture> pending_captures_;
+
+  // ------------------------------------------------------------------------------
+ public:
   std::shared_ptr<EventListener> system_event_listener;
   std::shared_ptr<EventListener> mwnd_button_event_listener;
   std::shared_ptr<InputListener> input_event_listener;
@@ -145,9 +177,6 @@ struct SiglusMachine {
   std::shared_ptr<Counter> CreateCounter();
 
  private:
-  std::map<std::pair<int, int>, int> debug_selection_choices_;
-  std::deque<int> debug_selection_choice_queue_;
-  bool updating_selection_ = false;
   std::vector<std::weak_ptr<Counter>> counters_;
 };
 

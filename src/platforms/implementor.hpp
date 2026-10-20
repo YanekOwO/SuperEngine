@@ -83,6 +83,15 @@ class IPlatformImplementor {
    */
   virtual std::filesystem::path SelectGameDirectory() = 0;
 
+  // An empty path represents cancellation or an unavailable dialog backend.
+  virtual std::filesystem::path SelectFile(
+      bool save,
+      const std::string& title,
+      const std::filesystem::path& initial_path,
+      const std::string& extension) {
+    return {};
+  }
+
   /**
    * @brief Reports a fatal error with details before the program exits.
    * @param message_text Main error message to be displayed.

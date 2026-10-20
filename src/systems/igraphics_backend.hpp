@@ -48,6 +48,9 @@ struct RenderFrameConfig {
   Point screen_origin;
   bool manual_update_mode;
   std::optional<std::filesystem::path> frame_dump_path;
+  // Offscreen captures can preserve alpha and translate the scene in pixels.
+  bool transparent = false;
+  Point render_offset;
 };
 
 using DrawCallback = std::function<void()>;

@@ -31,6 +31,7 @@
 
 #include <compare>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -52,6 +53,7 @@ class SiglusSceneRenderer final : public ISceneRenderer {
 
   void ExecuteFrame() override;
   void RenderScene() override;
+  void RenderCapture(std::pair<int, int> inclusive_end);
 
   void RenderObject(
       GraphicsObject& object,
@@ -69,8 +71,11 @@ class SiglusSceneRenderer final : public ISceneRenderer {
     }
   };
 
-  void RenderStageObjects();
-  void RenderObjects(int stage_layer, ObjectRange range = ObjectRange::All);
+  void RenderStageObjects(
+      std::optional<std::pair<int, int>> inclusive_end = std::nullopt);
+  void RenderObjects(int stage_layer,
+                     ObjectRange range,
+                     std::optional<std::pair<int, int>> inclusive_end);
   void RenderQueuedObjects(int stage_layer);
   QuakeTransform TransformForOrder(int order, int stage_layer) const;
   bool QuakeRenderingStopped() const;

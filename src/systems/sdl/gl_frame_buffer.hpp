@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "core/rect.hpp"
+
 #include <memory>
 
 class glTexture;
@@ -38,8 +40,11 @@ class glFrameBuffer {
   virtual Size GetSize() const;
 
   virtual std::shared_ptr<glTexture> GetTexture() const;
+  inline Point render_offset() const { return render_offset_; }
+  inline void set_render_offset(Point offset) { render_offset_ = offset; }
 
  private:
   std::shared_ptr<glTexture> texture_;
   unsigned int id_;
+  Point render_offset_;
 };

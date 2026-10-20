@@ -31,6 +31,10 @@
 class SdlImplementor : public IPlatformImplementor {
  public:
   std::filesystem::path SelectGameDirectory() override;
+  std::filesystem::path SelectFile(bool save,
+                                   const std::string& title,
+                                   const std::filesystem::path& initial_path,
+                                   const std::string& extension) override;
 
   void ReportFatalError(const std::string& message_text,
                         const std::string& informative_text) override;

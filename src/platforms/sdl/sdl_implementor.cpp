@@ -38,34 +38,31 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct FolderDialogResult {
+struct FileDialogResult {
   std::mutex mutex;
   fs::path path;
   std::atomic<bool> done{false};
 };
 
-void SDLCALL OnFolderChosen(void* userdata,
-                            const char* const* filelist,
-                            int /*filter*/) {
-  auto* result = static_cast<FolderDialogResult*>(userdata);
+void SDLCALL OnFileChosen(void* userdata,
+                          const char* const* filelist,
+                          int /*filter*/) {
+  auto* result = static_cast<FileDialogResult*>(userdata);
   {
     std::lock_guard<std::mutex> lock(result->mutex);
     if (!filelist)
-      std::cerr << "Folder dialog error: " << SDL_GetError() << std::endl;
+      std::cerr << "File dialog error: " << SDL_GetError() << std::endl;
     else if (filelist[0])
       result->path = filelist[0];
   }
   result->done = true;
 }
 
-// SDL_ShowOpenFolderDialog is asynchronous. On some platforms the callback
+// SDL file dialogs are asynchronous. On some platforms the callback
 // fires during event processing on this thread. On other platforms it fires
 // from a helper thread. Thus the wait loop pumps events until the callback
 // sets the flag.
-fs::path RunFolderDialog() {
-  FolderDialogResult result;
-  SDL_ShowOpenFolderDialog(OnFolderChosen, &result, /*window=*/nullptr,
-                           /*default_location=*/nullptr, /*allow_many=*/false);
+fs::path WaitForFileDialog(FileDialogResult& result) {
   while (!result.done) {
     SDL_PumpEvents();
     SDL_Delay(10);
@@ -74,7 +71,37 @@ fs::path RunFolderDialog() {
   return result.path;
 }
 
+fs::path RunFolderDialog() {
+  FileDialogResult result;
+  SDL_ShowOpenFolderDialog(OnFileChosen, &result, /*window=*/nullptr,
+                           /*default_location=*/nullptr, /*allow_many=*/false);
+  return WaitForFileDialog(result);
+}
+
 }  // namespace
+
+fs::path SdlImplementor::SelectFile(bool save,
+                                    const std::string& title,
+                                    const fs::path& initial_path,
+                                    const std::string& extension) {
+  FileDialogResult result;
+  SDL_DialogFileFilter filter{extension.c_str(), extension.c_str()};
+  const auto props = SDL_CreateProperties();
+  if (!props)
+    return {};
+  SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, &filter);
+  SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 1);
+  SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING,
+                        title.c_str());
+  SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING,
+                        initial_path.string().c_str());
+  SDL_ShowFileDialogWithProperties(
+      save ? SDL_FILEDIALOG_SAVEFILE : SDL_FILEDIALOG_OPENFILE, OnFileChosen,
+      &result, props);
+  auto path = WaitForFileDialog(result);
+  SDL_DestroyProperties(props);
+  return path;
+}
 
 fs::path SdlImplementor::SelectGameDirectory() {
   // This function runs before System exists. The dialog needs the video

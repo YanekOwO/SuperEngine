@@ -24,10 +24,13 @@
 
 #include "core/avdec/image_decoder.hpp"
 
+#include <png.h>
 #include "xclannad/file.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -72,6 +75,34 @@ void saveBGRAasPPM(std::ostream& os,
 // ------------------------------------------------------------------------------
 
 ImageDecoder::ImageDecoder(std::string_view sv) {
+  if (sv.size() >= 8 &&
+      png_sig_cmp(reinterpret_cast<const png_byte*>(sv.data()), 0, 8) == 0) {
+    // Decode PNG
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    struct Cleanup {
+      png_image& image;
+      ~Cleanup() { png_image_free(&image); }
+    } cleanup{image};
+    if (!png_image_begin_read_from_memory(&image, sv.data(), sv.size()))
+      throw std::runtime_error(std::string("PNG header: ") + image.message);
+    if (!image.width || !image.height ||
+        static_cast<std::uint64_t>(image.width) * image.height >
+            std::numeric_limits<int>::max() / 4)
+      throw std::runtime_error("PNG dimensions are invalid or too large");
+    image.format = PNG_FORMAT_BGRA;
+    mem.resize(PNG_IMAGE_SIZE(image));
+    if (!png_image_finish_read(&image, nullptr, mem.data(), 0, nullptr))
+      throw std::runtime_error(std::string("PNG decode: ") + image.message);
+    width = image.width;
+    height = image.height;
+    ismask = false;
+    for (std::size_t i = 3; i < mem.size(); i += 4)
+      ismask |= static_cast<unsigned char>(mem[i]) != 255;
+    return;
+  }
+
+  // Decode PDT/G00
   std::unique_ptr<IConverter> conv =
       IConverter::CreateConverter(sv.data(), sv.size());
   if (!conv)

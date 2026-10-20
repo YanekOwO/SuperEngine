@@ -25,6 +25,7 @@
 
 #include "core/asset_scanner.hpp"
 #include "core/button_action_table.hpp"
+#include "core/capture.hpp"
 #include "core/counter.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
@@ -103,6 +104,54 @@ static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
   return {};
 }
 
+static std::shared_ptr<CaptureManager> CreateCaptureManager(
+    SiglusMachine& runtime) {
+  auto& graphics = runtime.system->graphics();
+  const auto screen_size = graphics.screen_size();
+  auto captures = std::make_shared<CaptureManager>(
+      CaptureConfig::Parse(*runtime.gameexe, screen_size), runtime.save_pth,
+      [&graphics, renderer = runtime.renderer,
+       screen_size](const CaptureRequest& request) {
+        const bool buffer = request.kind == CaptureKind::Buffer;
+        return graphics.RenderToSurface(
+            buffer ? request.size : screen_size,
+            [&] { renderer->RenderCapture(request.end); }, buffer,
+            request.offset);
+      },
+      [&runtime, &graphics](fs::path path) {
+        std::string name = path.string();
+        std::replace(name.begin(), name.end(), '\\', '/');
+        path = fs::path(name);
+        path = CorrectPath(
+            path.is_absolute() ? path.root_path() : runtime.base_pth,
+            path.relative_path().string());
+        if (path.empty()) {
+          const auto found = runtime.asset_scanner->FindFile(
+              name, {"g00", "pdt", "png", "bmp"});
+          if (!found)
+            throw found.error();
+          path = *found;
+        }
+        return graphics.GetBackend()->LoadSurface(path);
+      },
+      [&graphics] {
+        std::vector<std::string> names;
+        for (const auto& [name, image] : graphics.loaded_images())
+          if (!image.expired())
+            names.push_back(name);
+        return names;
+      });
+  const auto table = (*runtime.gameexe)("THUMBTABLE_FILE").Str();
+  if (table && !table->empty()) {
+    auto name = fs::path(*table).replace_extension("dat").string();
+    const auto path = runtime.asset_scanner->FindFile(name, {"dat"});
+    if (!path)
+      throw path.error();
+    captures->LoadThumbnailTable(*path);
+  }
+  return captures;
+}
+
 std::unique_ptr<Stage> SGVMFactory::CreateStage(Gameexe& gexe) {
   const int obj_count = gexe("OBJECT.CNT").Int().value_or(256);
   const int effect_cnt = gexe("EFFECT.CNT").Int().value_or(0);
@@ -170,6 +219,8 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   rt.renderer = std::make_shared<SiglusSceneRenderer>(
       *rt.stage, *rt.system, rt.mask_list, rt.screen_quakes, rt.local_config);
   rt.system->graphics().BindSceneRenderer(rt.renderer);
+  rt.captures = CreateCaptureManager(rt);
+  rt.reset_local_memory.emplace_back([&rt] { rt.ResetCaptures(); });
 
   rt.kidoku_table = std::make_shared<KidokuTable>();
 
@@ -431,10 +482,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
     // TODO: implement save/load and serialization support
     return 0;
   });
-  m.def("capture", [] {
-    // TODO: create capture thumb image
-  });
-  m.def("capture_for_tweet", [] {});
 
   return ret;
 }

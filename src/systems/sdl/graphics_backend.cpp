@@ -39,6 +39,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -73,6 +74,54 @@ SDL_SurfacePtr CreateRGBASurface(Size size) {
       SDL_DestroySurface);
 }
 
+// Offscreen rendering shares presentation shaders and can be nested. Restore
+// the caller's canvas and GL state even when drawing the scene throws.
+class ScopedOffscreenRenderState {
+ public:
+  ScopedOffscreenRenderState() : screen_(SDLSurface::screen_) {
+    glGetIntegerv(GL_VIEWPORT, viewport_);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer_);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer_);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program_);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertex_array_);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture_);
+    glGetIntegerv(GL_MATRIX_MODE, &matrix_mode_);
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+  }
+
+  ~ScopedOffscreenRenderState() {
+    SDLSurface::screen_ = std::move(screen_);
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(matrix_mode_);
+    glPopClientAttrib();
+    glPopAttrib();
+    glViewport(viewport_[0], viewport_[1], viewport_[2], viewport_[3]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_framebuffer_);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_framebuffer_);
+    glUseProgram(program_);
+    glBindVertexArray(vertex_array_);
+    glActiveTexture(active_texture_);
+  }
+
+ private:
+  std::shared_ptr<glFrameBuffer> screen_;
+  GLint viewport_[4];
+  GLint draw_framebuffer_;
+  GLint read_framebuffer_;
+  GLint program_;
+  GLint vertex_array_;
+  GLint active_texture_;
+  GLint matrix_mode_;
+};
+
 void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
   if (!config.frame_dump_path)
     return;
@@ -91,9 +140,8 @@ void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
   if (!parent.empty()) {
     std::filesystem::create_directories(parent, ec);
     if (ec) {
-      logger(Severity::Warn)
-          << "Could not create frame dump directory " << parent.string()
-          << ": " << ec.message();
+      logger(Severity::Warn) << "Could not create frame dump directory "
+                             << parent.string() << ": " << ec.message();
       return;
     }
   }
@@ -123,8 +171,8 @@ void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
 
   for (int y = 0; y < height; ++y) {
     void* dst = static_cast<uint8_t*>(surface->pixels) + y * surface->pitch;
-    const void* src = pixels.data() +
-                      static_cast<size_t>(height - y - 1) * width * 4;
+    const void* src =
+        pixels.data() + static_cast<size_t>(height - y - 1) * width * 4;
     std::memcpy(dst, src, static_cast<size_t>(width) * 4);
   }
 
@@ -140,8 +188,8 @@ void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
 }  // namespace
 
 SDLGraphicsBackend::SDLGraphicsBackend()
-    : screen_contents_texture_(nullptr), screen_contents_texture_valid_(false) {
-}
+    : screen_contents_texture_(nullptr),
+      screen_contents_texture_valid_(false) {}
 
 void SDLGraphicsBackend::InitSystem(Size screen_size, bool is_fullscreen) {
   SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
@@ -325,11 +373,10 @@ void SDLGraphicsBackend::PresentFrame(const RenderFrameConfig& config) {
 
   glBindFramebuffer(GL_READ_FRAMEBUFFER, SDLSurface::screen_->GetID());
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-  glBlitFramebuffer(0, 0, config.screen_size.width(),
-                    config.screen_size.height(), origin.x(),
-                    window_height - (origin.y() + view.height()),
-                    origin.x() + view.width(), window_height - origin.y(),
-                    GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  glBlitFramebuffer(
+      0, 0, config.screen_size.width(), config.screen_size.height(), origin.x(),
+      window_height - (origin.y() + view.height()), origin.x() + view.width(),
+      window_height - origin.y(), GL_COLOR_BUFFER_BIT, GL_LINEAR);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -351,7 +398,8 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
 
   if (config.manual_update_mode) {
     if (!screen_contents_texture_)
-      screen_contents_texture_ = std::make_shared<glTexture>(config.screen_size);
+      screen_contents_texture_ =
+          std::make_shared<glTexture>(config.screen_size);
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, SDLSurface::screen_->GetID());
     glBindTexture(GL_TEXTURE_2D, screen_contents_texture_->GetID());
@@ -401,17 +449,23 @@ bool SDLGraphicsBackend::RedrawLastFrame(const RenderFrameConfig& config,
 std::shared_ptr<SDLSurface> SDLGraphicsBackend::RenderToSurface(
     const RenderFrameConfig& config,
     const DrawCallback& draw_scene) {
+  ScopedOffscreenRenderState render_state;
   auto canvas = std::make_shared<glCanvas>(
       config.screen_size, config.display_size, config.screen_origin);
   canvas->Use();
 
-  const std::shared_ptr<glFrameBuffer> original_screen = SDLSurface::screen_;
-  SDLSurface::screen_ = canvas->GetBuffer();
+  auto target = std::make_shared<ScreenCanvas>(config.screen_size);
+  target->set_render_offset(config.render_offset);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glRenderer().ClearBuffer(target, config.transparent ? RGBAColour(0, 0, 0, 0)
+                                                      : RGBAColour::Black());
+  if (!config.transparent)
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  SDLSurface::screen_ = target;
   if (draw_scene)
     draw_scene();
-  SDLSurface::screen_ = original_screen;
 
-  std::shared_ptr<glTexture> texture = canvas->GetBuffer()->GetTexture();
+  std::shared_ptr<glTexture> texture = target->glFrameBuffer::GetTexture();
   const int width = config.screen_size.width();
   const int height = config.screen_size.height();
 
@@ -428,6 +482,19 @@ std::shared_ptr<SDLSurface> SDLGraphicsBackend::RenderToSurface(
     void* dst = static_cast<uint8_t*>(surface->pixels) + y * surface->pitch;
     const void* src = buf.data() + (height - y - 1) * width * 4;
     std::memcpy(dst, src, width * 4);
+
+    if (config.transparent) {
+      // Source-over compositing produces premultiplied RGB on a transparent
+      // target; SDL surfaces and PNG files store straight-alpha pixels.
+      auto* pixels = static_cast<std::uint8_t*>(dst);
+      for (int x = 0; x < width; ++x) {
+        const unsigned alpha = pixels[x * 4 + 3];
+        if (alpha > 0)
+          for (int c = 0; c < 3; ++c)
+            pixels[x * 4 + c] =
+                std::min(255u, (pixels[x * 4 + c] * 255u + alpha / 2) / alpha);
+      }
+    }
   }
 
   return std::make_shared<SDLSurface>(surface);

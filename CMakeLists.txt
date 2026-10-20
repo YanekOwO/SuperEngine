@@ -117,6 +117,7 @@ endif()
 # Find zlib Library
 # -------------------------------------------------------------------
 find_package(ZLIB REQUIRED)
+find_package(PNG REQUIRED)
 
 if (ZLIB_FOUND)
   message(STATUS "zlib found: ${ZLIB_VERSION}")

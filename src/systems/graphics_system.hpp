@@ -219,6 +219,13 @@ class GraphicsSystem : public EventListener {
   // Draws the screen (as if refresh() was called), but draw to the returned
   // surface instead of the screen.
   std::shared_ptr<SDLSurface> RenderToSurface();
+  std::shared_ptr<SDLSurface> RenderToSurface(Size size,
+                                              const DrawCallback& draw,
+                                              bool transparent = false,
+                                              Point offset = {});
+
+  // Image resources in load order, without extending their lifetime.
+  const auto& loaded_images() const { return loaded_images_; }
 
   // Called from the game loop; Does everything that's needed to keep
   // things up.
@@ -380,6 +387,7 @@ class GraphicsSystem : public EventListener {
   typedef std::pair<std::string, std::shared_ptr<SDLSurface>> G00ArrayItem;
   typedef LazyArray<G00ArrayItem> G00ScriptList;
   G00ScriptList preloaded_g00_;
+  std::vector<std::pair<std::string, std::weak_ptr<SDLSurface>>> loaded_images_;
 
   // LRU cache filled with recently accessed images.
   //
