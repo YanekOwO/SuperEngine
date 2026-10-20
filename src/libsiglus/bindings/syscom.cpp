@@ -106,6 +106,8 @@ void ResetLocalSyscomState(System* sys,
   local.disable_mwnd_btn_touch = false;
   std::fill(local.mwnd_btn_disable.begin(), local.mwnd_btn_disable.end(),
             false);
+  sys->text().SetSkipMode(false);
+  sys->text().SetAutoSkipMode(false);
   sys->text().mwnd_capture_window_.reset();
 }
 
@@ -123,7 +125,6 @@ void BindSyscom(SiglusMachine& runtime) {
   ResetLocalSyscomState(sys, gameexe, *local_config);
   runtime.reset_local_memory.emplace_back([sys, gameexe, local_config] {
     ResetLocalSyscomState(sys, gameexe, *local_config);
-    sys->text().SetSkipMode(false);
   });
   const GlobalConfig defaults =
       gameexe ? MakeSiglusGlobalConfig(*gameexe) : GlobalConfig{};
@@ -179,6 +180,10 @@ void BindSyscom(SiglusMachine& runtime) {
     const auto& entry = local_config->syscommenu.read_skip;
     return entry.exist && entry.enable && sys->text().kidoku_read() ? 1 : 0;
   });
+
+  m.def("set_autoskip",
+        [sys](int value) { sys->text().SetAutoSkipMode(value != 0); });
+  m.def("get_autoskip", [sys] { return sys->text().auto_skip_mode() ? 1 : 0; });
 
   m.def("get_automode", [local_config, global_config] {
     return EffectiveAutoMode(*local_config, *global_config) ? 1 : 0;
@@ -387,6 +392,22 @@ void BindSyscom(SiglusMachine& runtime) {
   m.def("set_automode", [global_config](int value) {
     global_config->enable_auto_mode = value != 0;
   });
+  m.def("set_jitan_normal_onoff", [global_config](int value) {
+    global_config->enable_jitan_normal = value != 0;
+  });
+  m.def("get_jitan_normal_onoff",
+        [global_config] { return global_config->enable_jitan_normal ? 1 : 0; });
+  m.def("set_jitan_auto_mode_onoff", [global_config](int value) {
+    global_config->enable_jitan_auto_mode = value != 0;
+  });
+  m.def("set_jitan_speed",
+        [global_config](int value) { global_config->jitan_speed = value; });
+  m.def("set_global_extraswitch_onoff", [global_config](int id, int value) {
+    auto& switches = global_config->global_extra_switch_flag;
+    if (id >= 0 && static_cast<std::size_t>(id) < switches.size())
+      switches[id] = value != 0;
+  });
+
   const auto apply_sound = [sys] { sys->sound().ApplyConfiguration(); };
   const auto add_sound = [&](std::string_view name, SoundCategory category) {
     const unsigned index = SoundIndex(category);
@@ -458,6 +479,13 @@ void BindSyscom(SiglusMachine& runtime) {
           apply_sound();
         });
   m.def("get_koemode", [global_config] { return global_config->koe_mode; });
+  m.def("set_charakoe_volume", [global_config](int id, int volume) {
+    global_config->chrkoe[id].volume = volume;
+  });
+  m.def("get_charakoe_volume", [global_config](int id) -> int {
+    return global_config->chrkoe[id].volume;
+  });
+
   m.def("set_bgmfade_volume", [global_config, apply_sound](int value) {
     global_config->bgmfade_volume = std::clamp(value, 0, 255);
     apply_sound();

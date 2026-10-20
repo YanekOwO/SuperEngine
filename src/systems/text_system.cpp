@@ -160,6 +160,11 @@ TextSystem::~TextSystem() {
 }
 
 void TextSystem::ExecuteTextSystem() {
+  if (auto_skip_mode_ && !auto_skip_suspended_ &&
+      !local_config_.disable_skip &&
+      (kidoku_read_ || local_config_.skip_unread_message ||
+       global_config_.system.allow_skip_unread_message))
+    SetSkipMode(true);
   auto current = FindMwnd(kLayerFg, active_window_);
   if (!mwnd_config_.layered_windows() && current &&
       ShowWindow(active_window_) && current->IsVisible() && in_pause_state_ &&
@@ -460,9 +465,6 @@ void TextSystem::ExpireOldPages() {
 }
 
 void TextSystem::OnEvent(std::shared_ptr<Event> event) {
-  if (!CurrentlySkipping() || in_selection_mode_)
-    return;
-
   const bool result = std::visit(
       [&](auto& event) -> bool {
         using T = std::decay_t<decltype(event)>;
@@ -473,8 +475,14 @@ void TextSystem::OnEvent(std::shared_ptr<Event> event) {
       },
       *event);
 
+  if (result)
+    auto_skip_suspended_ = false;
+  if (!CurrentlySkipping() || in_selection_mode_)
+    return;
+
   if (result) {  // quit skipping mode, and discard the event
     SetSkipMode(false);
+    auto_skip_suspended_ = true;
     *event = std::monostate();
   }
 }
@@ -972,18 +980,20 @@ void TextSystem::Reset() {
   in_selection_mode_ = false;
   kidoku_read_ = false;
   skip_mode_ = false;
+  auto_skip_mode_ = false;
+  auto_skip_suspended_ = false;
   mwnd_capture_window_.reset();
 }
 
 void TextSystem::ApplyConfiguration() { UpdateWindowsForChangeToWindowAttr(); }
 
 void TextSystem::SetKidokuRead(const int in) {
-  bool value_changed = kidoku_read_ != in;
-
   kidoku_read_ = in;
-  if (value_changed && !kidoku_read_ && skip_mode_) {
+  if (!kidoku_read_ && !local_config_.skip_unread_message &&
+      !global_config_.system.allow_skip_unread_message) {
     // Auto leave skip mode when we stop reading previously read text.
     SetSkipMode(false);
+    auto_skip_suspended_ = true;
   }
 }
 
@@ -1056,7 +1066,9 @@ std::string parseNames(MemoryHandle& memory, const std::string& input) {
 }
 
 bool TextSystem::CurrentlySkipping() const {
-  return kidoku_read_ && skip_mode();
+  return !local_config_.disable_skip && skip_mode() &&
+         (kidoku_read_ || local_config_.skip_unread_message ||
+          global_config_.system.allow_skip_unread_message);
 }
 
 // ------------------------------------------------------------------------------

@@ -483,7 +483,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            id[206] | b(Type::Int, Member("is_readskip_enable")),
            // autoskip
            id[207] | b(Type::Callable, Member("set_autoskip")),
-           id[208] | b(Type::Int, Member("get_autoskip")),
+           id[208] | b_callable("get_autoskip", Type::Int),
            id[209] | b(Type::Callable, Member("set_enable_autoskip")),
            id[210] | b(Type::Int, Member("get_enable_autoskip")),
            id[211] | b(Type::Callable, Member("set_exist_autoskip")),
@@ -728,7 +728,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
            // jitan
            id[153] | b(Type::Callable, Member("set_jitan_normal_onoff")),
            id[154] | b(Type::None, Member("set_jitan_normal_onoff_default")),
-           id[155] | b(Type::Int, Member("get_jitan_normal_onoff")),
+           id[155] | b_callable("get_jitan_normal_onoff", Type::Int),
            id[156] | b(Type::Callable, Member("set_jitan_auto_mode_onoff")),
            id[157] | b(Type::None, Member("set_jitan_auto_mode_onoff_default")),
            id[158] | b(Type::Int, Member("get_jitan_auto_mode_onoff")),

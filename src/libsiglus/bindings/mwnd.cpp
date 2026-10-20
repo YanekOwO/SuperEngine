@@ -47,6 +47,7 @@
 
 #include <utf8.h>
 
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -162,6 +163,9 @@ void BindMwnd(SiglusMachine& runtime) {
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
+  m.def("get_mwnd",
+        [&text = sys->text()]() -> int { return text.active_window(); });
+
   sb::class_<MwndHandle> mwnd(m, "Mwnd");
   mwnd.def(sb::init([sys](int index) {
              if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
@@ -228,12 +232,13 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::arg("index"));
   auto close_all = [sys, stage = runtime.stage.get()](MwndArrayHandle*) {
     sys->text().set_in_pause_state(false);
-    for (const auto& layer : stage->mwnd.storage)
+    for (const auto& layer : stage->mwnd.storage) {
       for (const auto& window : layer)
         if (window) {
           window->SetVisible(false);
           window->ClearMouseCapture();
         }
+    }
   };
   array.def("close", close_all);
   array.def("close_nowait", close_all);
@@ -260,7 +265,14 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("open_wait", open);
   mwnd.def("check_open",
            [get](MwndHandle* h) { return get(h)->IsVisible() ? 1 : 0; });
-  mwnd.def("close", close);
+  mwnd.def("close", [close](MwndHandle* h) {
+    // some script call this on an non-existing mwnd, ignore the error if that's
+    // the case
+    try {
+      close(h);
+    } catch (std::exception&) {
+    }
+  });
   mwnd.def("close_nowait", close);
   mwnd.def("close_wait", close);
   mwnd.def("end_close", [](MwndHandle*) {});

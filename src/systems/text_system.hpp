@@ -214,6 +214,8 @@ class TextSystem final : public EventListener {
 
   bool skip_mode() const { return skip_mode_; }
   void SetSkipMode(int in);
+  bool auto_skip_mode() const { return auto_skip_mode_; }
+  void SetAutoSkipMode(bool enabled) { auto_skip_mode_ = enabled; }
 
   bool CurrentlySkipping() const;
 
@@ -292,6 +294,10 @@ class TextSystem final : public EventListener {
 
   // Whether we skip text that we've already seen
   bool skip_mode_;
+  // Automatically start skipping eligible text until interrupted by input or
+  // unread text. The preference survives those interruptions.
+  bool auto_skip_mode_ = false;
+  bool auto_skip_suspended_ = false;
 
   // Whether we are currently on a page of text that we've previously read.
   bool kidoku_read_;
