@@ -30,18 +30,14 @@
 
 class MaskList;
 
-// Runtime-specific scene policy. GraphicsSystem owns the reusable frame
-// presentation machinery; implementations decide what scene state is advanced
-// and drawn for a particular VM/runtime.
+// Runtime-specific scene traversal and draw order. Machines advance these
+// renderers and submit their drawing callbacks to FramePresenter.
 class ISceneRenderer {
  public:
   virtual ~ISceneRenderer() = default;
 
   virtual void ExecuteFrame() = 0;
   virtual void RenderScene() = 0;
-
-  // Translation applied to the complete presented scene and scene captures.
-  virtual Point GetScreenOrigin() const { return {}; }
 
   virtual void RenderObject(
       GraphicsObject& object,

@@ -33,7 +33,6 @@
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"

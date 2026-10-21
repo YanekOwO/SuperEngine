@@ -29,11 +29,11 @@
 
 #include "encodings/codepage.hpp"
 #include "utf8.h"
-#include "utilities/exception.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 
 using std::string;
@@ -116,7 +116,7 @@ int Codepoint(const string& c) {
 void AdvanceOneShiftJISChar(const char*& c) {
   if (shiftjis_lead_byte(c[0])) {
     if (c[1] == '\0') {
-      throw rlvm::Exception("Malformed Shift_JIS string!");
+      throw std::runtime_error("Malformed Shift_JIS string!");
     } else {
       c += 2;
     }
@@ -128,7 +128,7 @@ void AdvanceOneShiftJISChar(const char*& c) {
 void CopyOneShiftJisCharacter(const char*& str, string& output) {
   if (shiftjis_lead_byte(str[0])) {
     if (str[1] == '\0') {
-      throw rlvm::Exception("Malformed Shift_JIS string!");
+      throw std::runtime_error("Malformed Shift_JIS string!");
     } else {
       output += *str++;
       output += *str++;
@@ -142,7 +142,7 @@ bool ReadFullwidthLatinLetter(const char*& str, string& output) {
   // The fullwidth uppercase latin characters are 0x8260 through 0x8279.
   if (str[0] == 0x82) {
     if (str[1] == 0) {
-      throw rlvm::Exception("Malformed Shift_JIS string!");
+      throw std::runtime_error("Malformed Shift_JIS string!");
     } else if (str[1] >= 0x60 && str[1] <= 0x79) {
       char printable = str[1] - 0x1F;
       output += printable;

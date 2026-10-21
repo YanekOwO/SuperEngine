@@ -46,7 +46,6 @@
 #include "machine/rlmachine.hpp"
 #include "machine/save_game_header.hpp"
 #include "machine/serialization.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -58,6 +57,12 @@ namespace fs = std::filesystem;
 namespace Serialization {
 
 RLMachine* g_current_machine = NULL;
+
+RLMachine& currentMachine() {
+  if (!g_current_machine)
+    throw std::logic_error("No machine is being deserialized");
+  return *g_current_machine;
+}
 
 System& currentSystem() {
   if (!g_current_machine)
@@ -103,7 +108,7 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
   filtered_output.push(boost::iostreams::zlib_compressor());
   filtered_output.push(oss);
 
-  const SaveGameHeader header(machine.GetSystem().graphics().window_subtitle());
+  const SaveGameHeader header(machine.window_title()->subtitle_);
 
   g_current_machine = &machine;
 
@@ -112,7 +117,6 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
     oa << CURRENT_LOCAL_VERSION << std::string(LOCAL_FORMAT_SIGNATURE) << header
        << machine.GetMemoryStorage().GetLocalMemory()
        << const_cast<const RLMachine&>(machine)
-       << const_cast<const GraphicsSystem&>(machine.GetSystem().graphics())
        << const_cast<const TextSystem&>(machine.GetSystem().text())
        << const_cast<const SoundSystem&>(machine.GetSystem().sound());
   } catch (std::exception& e) {
@@ -205,13 +209,12 @@ void loadGameFrom(std::istream& iss, RLMachine& machine) {
     // Long operations may borrow subsystem objects; clear the stack first.
     // Validate the layout before resetting any current machine state.
     machine.Reset();
-    ia >> machine >> machine.GetSystem().graphics() >>
-        machine.GetSystem().text() >> machine.GetSystem().sound();
+    ia >> machine >> machine.GetSystem().text() >> machine.GetSystem().sound();
 
     machine.GetMemoryStorage().PartialReset(std::move(local_memory));
-    machine.GetSystem().ApplyConfiguration();
+    machine.ApplyConfiguration();
     machine.ReplayGraphicsStackCommand();
-    machine.GetSystem().graphics().ForceRefresh();
+    machine.ForceRefresh();
   } catch (std::exception& e) {
     std::cerr << "--- WARNING: ERROR DURING LOADING FILE: " << e.what()
               << " ---" << std::endl;

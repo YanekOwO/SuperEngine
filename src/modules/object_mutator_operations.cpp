@@ -33,7 +33,6 @@
 #include "machine/rlmachine.hpp"
 #include "modules/module_obj.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "utilities/clock.hpp"
 

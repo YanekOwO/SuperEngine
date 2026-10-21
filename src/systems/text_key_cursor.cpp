@@ -28,11 +28,11 @@
 #include "systems/text_key_cursor.hpp"
 
 #include "core/gameexe.hpp"
-#include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
-#include "systems/text_window.hpp"
 #include "systems/event_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
+#include "systems/system.hpp"
+#include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
 
 #include <string>
 #include <vector>
@@ -87,7 +87,7 @@ void TextKeyCursor::Render(TextWindow& text_window) {
 
 void TextKeyCursor::SetCursorImage(System& system, const std::string& name) {
   if (!name.empty()) {
-    cursor_image_ = system.graphics().GetSurfaceNamed(name);
+    cursor_image_ = system.text().LoadImage(name);
     cursor_image_file_ = name;
   } else {
     cursor_image_.reset();

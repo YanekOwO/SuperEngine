@@ -27,7 +27,6 @@
 #include "core/rlevent_listener.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
@@ -91,16 +90,15 @@ void PauseLongOperation::OnMouseMotion(const Point& p) {
 
 bool PauseLongOperation::OnMouseButtonStateChanged(MouseButton mouseButton,
                                                    bool pressed) {
-  GraphicsSystem& graphics = machine_.GetSystem().graphics();
   TextSystem& text = machine_.GetSystem().text();
 
   switch (mouseButton) {
     case MouseButton::LEFT: {
       Point pos = machine_.GetSystem().rlEvent().GetCursorPos();
       // Only unhide the interface on release of the left mouse button
-      if (graphics.is_interface_hidden()) {
+      if (machine_.is_interface_hidden()) {
         if (!pressed) {
-          graphics.ToggleInterfaceHidden();
+          machine_.ToggleInterfaceHidden();
           return true;
         }
       } else if (!text.HandleMouseClick(pos, pressed)) {
@@ -151,10 +149,8 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
   bool handled = false;
 
   if (pressed) {
-    GraphicsSystem& graphics = machine_.GetSystem().graphics();
-
-    if (graphics.is_interface_hidden()) {
-      graphics.ToggleInterfaceHidden();
+    if (machine_.is_interface_hidden()) {
+      machine_.ToggleInterfaceHidden();
       handled = true;
     } else {
       TextSystem& text = machine_.GetSystem().text();
@@ -165,7 +161,7 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
         is_done_ = true;
         handled = true;
       } else if (keyCode == KeyCode::SPACE) {
-        graphics.ToggleInterfaceHidden();
+        machine_.ToggleInterfaceHidden();
         handled = true;
       } else if (keyCode == KeyCode::UP) {
         text.BackPage();

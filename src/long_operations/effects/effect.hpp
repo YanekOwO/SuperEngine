@@ -68,7 +68,6 @@ class EffectLongOperation : public LongOperation {
 
   // Wait for completion; drawing is performed by the engine.
   Task<int> Run(WaitContext& waits) override;
-  FrameRenderer GetFrameRenderer() override;
 
   // Accessors for which surfaces we're composing. These are public as
   // an ugly hack for ScrollOnScrollOff.cpp.
@@ -86,6 +85,8 @@ class EffectLongOperation : public LongOperation {
   virtual void PerformEffectForTime(int currentTime) = 0;
 
  private:
+  void DrawFrame();
+
   // Whether the orriginal dc0 should be blitted onto the target
   // surface before we pass control to the effect
   virtual bool BlitOriginalImage() const = 0;

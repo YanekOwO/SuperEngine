@@ -26,6 +26,7 @@
 
 #include "core/colour.hpp"
 #include "core/hik.hpp"
+#include "core/image_resources.hpp"
 #include "libreallive/alldefs.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
@@ -59,8 +60,8 @@ std::string consume_string(const char*& curpointer) {
 
 class HIKScriptLoader {
  public:
-  explicit HIKScriptLoader(const Haikei::SurfaceLoader& load_surface)
-      : load_surface_(load_surface) {}
+  explicit HIKScriptLoader(std::shared_ptr<ImageResources> images)
+      : images_(std::move(images)) {}
 
   std::shared_ptr<HIKScript> Load(const fs::path& file) {
     std::ifstream ifs(file, std::ios::binary);
@@ -227,7 +228,7 @@ class HIKScriptLoader {
         case 40100: {
           HIKScript::Frame& frame = CurrentFrame();
           frame.image = consume_string(curpointer);
-          frame.surface = load_surface_(frame.image);
+          frame.surface = images_->GetSurfaceNamed(frame.image);
           if (!frame.surface) {
             std::ostringstream oss;
             oss << "Could not load image " << frame.image << " for HIK";
@@ -285,7 +286,7 @@ class HIKScriptLoader {
     return animation.frames.back();
   }
 
-  Haikei::SurfaceLoader load_surface_;
+  std::shared_ptr<ImageResources> images_;
   std::vector<HIKScript::Layer> layers_;
   int number_of_layers_ = 0;
   Size size_of_hik_;
@@ -295,11 +296,11 @@ class HIKScriptLoader {
 
 Haikei::Haikei(Size screen_size,
                SurfaceFactory surface_factory,
-               SurfaceLoader surface_loader,
+               std::shared_ptr<ImageResources> images,
                std::shared_ptr<Clock> clock)
     : screen_size_(screen_size),
       surface_factory_(std::move(surface_factory)),
-      surface_loader_(std::move(surface_loader)),
+      images_(std::move(images)),
       clock_(std::move(clock)),
       background_type_(BACKGROUND_DC0),
       preloaded_hik_scripts_(32) {
@@ -402,7 +403,7 @@ void Haikei::LoadHikRenderer(const std::string& name,
 
 std::shared_ptr<HIKScript> Haikei::LoadHikFile(
     const std::filesystem::path& file_path) {
-  HIKScriptLoader loader(surface_loader_);
+  HIKScriptLoader loader(images_);
   return loader.Load(file_path);
 }
 

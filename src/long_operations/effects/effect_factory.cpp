@@ -34,7 +34,6 @@
 #include "long_operations/effects/sel_record.hpp"
 #include "long_operations/effects/wipe_effect.hpp"
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 
@@ -189,7 +188,7 @@ EffectLongOperation* EffectFactory::Build(RLMachine& machine,
                                           std::shared_ptr<SDLSurface> src,
                                           std::shared_ptr<SDLSurface> dst,
                                           selRecord record) {
-  Size screen_size = machine.GetSystem().graphics().screen_size();
+  Size screen_size = machine.presenter().screen_size();
 
   const auto time = record.duration;
   const auto direction = record.direction;

@@ -28,7 +28,6 @@
 
 #include "long_operations/effects/effect.hpp"
 
-class GraphicsSystem;
 
 namespace lop {
 

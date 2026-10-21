@@ -29,7 +29,6 @@
 #include "libsiglus/siglus_machine.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "vm/exception.hpp"
 #include "vm/list.hpp"
@@ -98,16 +97,9 @@ static QuakeState::StartParams ParseParams(std::vector<sr::Value> args,
   return params;
 }
 
-static void RefreshQuake(System* system) {
-  if (system)
-    system->graphics().ForceRefresh();
-}
-
 static void StartQuake(QuakeHandle* h,
-                       System* system,
                        QuakeState::StartParams params) {
-  if (h->quake->Start(params))
-    RefreshQuake(system);
+  h->quake->Start(params);
 }
 
 static sr::Value WaitQuake(QuakeHandle* h,
@@ -117,15 +109,11 @@ static sr::Value WaitQuake(QuakeHandle* h,
   auto done = [quake = h->quake, system]() {
     if (system && system->ShouldFastForward()) {
       quake->End(0);
-      RefreshQuake(system);
       return true;
     }
     return !quake->IsActive();
   };
-  auto on_key = [quake = h->quake, system]() {
-    quake->End(0);
-    RefreshQuake(system);
-  };
+  auto on_key = [quake = h->quake]() { quake->End(0); };
   return lop::MakePollingWaitFuture(
       vm, std::move(done), key_skip,
       system ? system->event_ptr().get() : nullptr,
@@ -162,53 +150,53 @@ void BindQuake(SiglusMachine& runtime) {
   quake.def(
       "start",
       [system](QuakeHandle* h, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), false));
+        StartQuake(h, ParseParams(std::move(args), false));
       },
       sb::vararg);
   quake.def(
       "start_wait",
       [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), false));
+        StartQuake(h, ParseParams(std::move(args), false));
         return WaitQuake(h, system, vm, false);
       },
       sb::vararg);
   quake.def(
       "start_wait_key",
       [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), false));
+        StartQuake(h, ParseParams(std::move(args), false));
         return WaitQuake(h, system, vm, true);
       },
       sb::vararg);
   quake.def(
       "start_nowait",
       [system](QuakeHandle* h, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), false));
+        StartQuake(h, ParseParams(std::move(args), false));
       },
       sb::vararg);
   quake.def(
       "start_all",
       [system](QuakeHandle* h, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), true));
+        StartQuake(h, ParseParams(std::move(args), true));
       },
       sb::vararg);
   quake.def(
       "start_all_wait",
       [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), true));
+        StartQuake(h, ParseParams(std::move(args), true));
         return WaitQuake(h, system, vm, false);
       },
       sb::vararg);
   quake.def(
       "start_all_wait_key",
       [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), true));
+        StartQuake(h, ParseParams(std::move(args), true));
         return WaitQuake(h, system, vm, true);
       },
       sb::vararg);
   quake.def(
       "start_all_nowait",
       [system](QuakeHandle* h, std::vector<sr::Value> args) {
-        StartQuake(h, system, ParseParams(std::move(args), true));
+        StartQuake(h, ParseParams(std::move(args), true));
       },
       sb::vararg);
   quake.def(
@@ -220,7 +208,6 @@ void BindQuake(SiglusMachine& runtime) {
                 ? 0
                 : RequireInt(packet.args[0], "quake.end duration");
         h->quake->End(duration);
-        RefreshQuake(system);
       },
       sb::vararg);
   quake.def(

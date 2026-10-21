@@ -29,7 +29,6 @@
 #include "srbind/args.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "utilities/file.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
@@ -117,8 +116,11 @@ void BindSystem(SiglusMachine& runtime) {
                                           sys->event_ptr().get());
       },
       sb::arg("msecs") = 0);
-  gm.def("set_title", [sys](std::string title) {
-    sys->graphics().SetWindowSubtitle(std::move(title));
+  gm.def("set_title", [window_title = runtime.window_title](std::string title) {
+    window_title->base_title_ = std::move(title);
+    window_title->subtitle_.clear();
+    window_title->subtitle_visible_ = false;
+    window_title->Apply();
   });
 }
 

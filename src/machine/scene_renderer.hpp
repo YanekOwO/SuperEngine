@@ -41,7 +41,7 @@ class rlSceneRenderer final : public ISceneRenderer {
 
   void ExecuteFrame() override;
   void RenderScene() override;
-  Point GetScreenOrigin() const override;
+  Point GetScreenOrigin() const;
   void QueueShake(std::vector<QuakeState::OffsetFrame> frames);
 
   void RenderObject(

@@ -27,7 +27,6 @@
 #include "libsiglus/sgvm_factory.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "m6/compiler_pipeline.hpp"
-#include "systems/graphics_system.hpp"
 #include "utilities/file.hpp"
 #include "vm/vm.hpp"
 
@@ -49,7 +48,6 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
     std::unique_ptr<SiglusMachine> machine = factory.Create();
     SiglusMachine& rt = *machine;
 
-    rt.system->graphics().SetDebugFrameDumpConfig(debug_frame_dump_config_);
     sr::VM& vm = *rt.vm;
 
     if (hook_path_) {  // inject custom script

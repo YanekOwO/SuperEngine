@@ -27,7 +27,6 @@
 #include <cmath>
 
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 

@@ -38,7 +38,7 @@
 class GraphicsObjectData;
 class ObjectMutator;
 class GraphicsObject;
-class GraphicsSystem;
+class ImageResources;
 
 struct ParentObjState {
   RenderState render_state = RenderState::Id();
@@ -117,7 +117,8 @@ class GraphicsObject {
   void ResetChildren(std::size_t count = 0);
   void EnsureChildCapacity(std::size_t count);
 
-  void ReplaceFileDrawer(GraphicsSystem& graphics, std::string filename);
+  void ReplaceFileDrawer(const std::shared_ptr<ImageResources>& images,
+                         std::string filename);
 
   // Frees the object data. Corresponds to objFree, but is also invoked by
   // other commands.
@@ -141,8 +142,7 @@ class GraphicsObject {
   // including hidden objects and parents without drawers.
   void ExecuteMutators();
 
-  // Adds a mutator to the list of active mutators. GraphicsSystem takes
-  // ownership of the passed in object. Callers are responsible for deciding
+  // Adds a mutator owned by this graphics object. Callers decide
   // whether a matching operation may be added.
   void AddObjectMutator(ObjectMutator mutator);
 

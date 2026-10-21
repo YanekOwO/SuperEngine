@@ -28,7 +28,6 @@
 #include "core/object_internal/objdrawer.hpp"
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
 #include <optional>
@@ -133,7 +132,7 @@ void ButtonObjectSelectLongOperation::OnEvent(std::shared_ptr<Event> event) {
 
             // Changes override properties doesn't automatically refresh the
             // screen the way mouse movement does.
-            machine_.GetSystem().graphics().ForceRefresh();
+            machine_.ForceRefresh();
 
             return true;
           } else if (event.button == MouseButton::RIGHT && !pressed &&

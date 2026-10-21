@@ -27,7 +27,6 @@
 #include "core/rlevent_listener.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 

@@ -26,7 +26,9 @@
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
+#include "core/mwnd_config.hpp"
 #include "core/stage.hpp"
+#include "core/window_title.hpp"
 #include "libreallive/archive.hpp"
 #include "libreallive/scriptor.hpp"
 #include "log/domain_logger.hpp"
@@ -35,9 +37,10 @@
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
+#include "systems/sdl/graphics_backend.hpp"
 #include "systems/system.hpp"
 #include "utilities/file.hpp"
+#include "utilities/graphics.hpp"
 
 #include <stdexcept>
 
@@ -82,7 +85,6 @@ GameLoader::GameLoader(fs::path gameroot,
   auto stage =
       std::make_unique<Stage>((*gameexe_)("OBJECT_MAX").Int().value_or(256));
   SystemOptions system_options;
-  system_options.engine = SystemOptions::Engine::Reallive;
   system_options.fast_forward = fast_forward;
   auto local_config =
       std::make_unique<LocalConfig>(MakeRealliveLocalConfig(*gameexe_));
@@ -91,7 +93,15 @@ GameLoader::GameLoader(fs::path gameroot,
   auto system = std::make_unique<System>(
       *gameexe_, *stage, *local_config, *global_config,
       std::make_shared<AssetScanner>(AssetScanner::BuildFromGameexe(*gameexe_)),
-      system_options);
+      MwndConfig::ParseReallive(*gameexe_), system_options);
+  auto backend = std::make_shared<SDLGraphicsBackend>();
+  auto presenter = std::make_unique<FramePresenter>(
+      backend, GetRealliveScreenSize(*gameexe_),
+      global_config->screen_size_mode == 1);
+  auto window_title = std::make_shared<WindowTitle>(
+      [backend](const std::string& title) { backend->SetWindowTitle(title); });
+  auto images = std::make_shared<ImageResources>(
+      system->GetAssetScanner(), backend, CreateToneCurve(*gameexe_));
 
   // Instantiate the rl machine
   auto memory = std::make_unique<Memory>();
@@ -123,7 +133,8 @@ GameLoader::GameLoader(fs::path gameroot,
   // instantiate virtual machine
   machine_ = std::make_shared<RLMachine>(
       gameexe_, std::move(system), std::move(stage), scriptor,
-      std::move(local_config), std::move(global_config), std::move(memory));
+      std::move(local_config), std::move(global_config), std::move(presenter),
+      std::move(window_title), std::move(images), std::move(memory));
   machine_->GetCallStack().Push(
       StackFrame(scriptor->Load(first_seen), StackFrame::TYPE_ROOT));
 
@@ -156,17 +167,17 @@ GameLoader::GameLoader(fs::path gameroot,
                   return true;
                 }
                 if constexpr (std::same_as<T, VideoExpose>) {
-                  machine_.GetSystem().graphics().ForceRefresh();
+                  machine_.ForceRefresh();
                   return true;
                 }
                 if constexpr (std::same_as<T, VideoResize>) {
-                  machine_.GetSystem().graphics().Resize(event.size);
+                  machine_.Resize(event.size);
                   return true;
                 }
                 if constexpr (std::same_as<T, MouseMotion>) {
                   event.pos =
-                      machine_.GetSystem().graphics().DisplayToScreenPoint(
-                          event.pos);
+                      machine_.presenter().DisplayToScreenPoint(event.pos);
+                  machine_.SetCursorPosition(event.pos);
                   return false;
                 }
                 return false;

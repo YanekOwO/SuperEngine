@@ -34,9 +34,9 @@
 #include <thread>
 #include <vector>
 
-class GraphicsSystem;
 class Rect;
 class SoundSystem;
+class IGraphicsBackend;
 class System;
 template <class T>
 class Queue;
@@ -59,6 +59,7 @@ struct MovieFrame {
 class SiglusMovieOperation final : public LongOperation {
  public:
   SiglusMovieOperation(System* system,
+                       std::shared_ptr<IGraphicsBackend> backend,
                        std::filesystem::path path,
                        MovieRect rect,
                        int volume,
@@ -90,7 +91,7 @@ class SiglusMovieOperation final : public LongOperation {
   bool stopped_ = false;
   std::shared_ptr<Clock> clock_;
   SoundSystem& sound_;
-  std::shared_ptr<GraphicsSystem> graphics_;
+  std::shared_ptr<IGraphicsBackend> backend_;
   Clock::timepoint_t start_;
   std::atomic<int> playback_time_ms_ = 0;
   std::jthread decoder_;

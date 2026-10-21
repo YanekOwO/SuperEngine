@@ -29,25 +29,17 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <span>
 
 class Album;
 // TODO: Extract SDLSurface abstraction from SDLSurface class
 class SDLSurface;
 
-struct DebugFrameDumpConfig {
-  bool enabled = false;
-  int frame_interval = 0;
-  std::filesystem::path output_dir;
-};
-
 struct RenderFrameConfig {
   Size screen_size;
   Size display_size;
   Point screen_origin;
   bool cache_scene;
-  std::optional<std::filesystem::path> frame_dump_path;
   // Offscreen captures can preserve alpha and translate the scene in pixels.
   bool transparent = false;
   Point render_offset;

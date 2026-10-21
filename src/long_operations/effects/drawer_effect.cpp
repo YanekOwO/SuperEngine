@@ -26,7 +26,6 @@
 
 #include "long_operations/effects/drawer_effect.hpp"
 
-#include "systems/graphics_system.hpp"
 
 #include <sstream>
 

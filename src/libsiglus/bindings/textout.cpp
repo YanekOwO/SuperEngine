@@ -64,7 +64,6 @@ void BindTextout(SiglusMachine& runtime) {
     if (window->HasName())
       return;
 
-    name = text.InterpretName(name);
     if (!name.empty())
       text.GetCurrentPage().Name(name, "");
   });

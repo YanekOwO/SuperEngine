@@ -47,7 +47,6 @@
 #include "modules/module_obj.hpp"
 #include "modules/object_mutator_operations.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/graphics.hpp"

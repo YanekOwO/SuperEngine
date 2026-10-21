@@ -26,7 +26,6 @@
 
 #include "systems/text_waku_type4.hpp"
 
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/text_waku.hpp"
 #include "systems/text_waku_normal.hpp"

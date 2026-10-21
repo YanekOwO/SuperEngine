@@ -43,7 +43,6 @@
 #include <fstream>
 #include <memory>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include <cstring>
@@ -64,15 +63,6 @@ static std::string LoadFile(const std::filesystem::path& pth) {
 }
 
 namespace {
-
-using SDL_SurfacePtr =
-    std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
-
-SDL_SurfacePtr CreateRGBASurface(Size size) {
-  return SDL_SurfacePtr(
-      SDL_CreateSurface(size.width(), size.height(), SDL_PIXELFORMAT_RGBA32),
-      SDL_DestroySurface);
-}
 
 // Offscreen rendering shares presentation shaders and can be nested. Restore
 // the caller's canvas and GL state even when drawing the scene throws.
@@ -121,69 +111,6 @@ class ScopedOffscreenRenderState {
   GLint active_texture_;
   GLint matrix_mode_;
 };
-
-void SaveFrameBMP(const RenderFrameConfig& config, unsigned int framebuffer) {
-  if (!config.frame_dump_path)
-    return;
-
-  const auto& path = *config.frame_dump_path;
-  const int width = config.screen_size.width();
-  const int height = config.screen_size.height();
-  if (width <= 0 || height <= 0) {
-    logger(Severity::Warn) << "Skipping frame dump for invalid screen size "
-                           << config.screen_size.DebugString();
-    return;
-  }
-
-  std::error_code ec;
-  const std::filesystem::path parent = path.parent_path();
-  if (!parent.empty()) {
-    std::filesystem::create_directories(parent, ec);
-    if (ec) {
-      logger(Severity::Warn) << "Could not create frame dump directory "
-                             << parent.string() << ": " << ec.message();
-      return;
-    }
-  }
-
-  std::vector<GLubyte> pixels(static_cast<size_t>(width) * height * 4);
-  GLint previous_pack_alignment = 0;
-  glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
-  glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
-  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-  glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
-  ShowGLErrors();
-
-  SDL_SurfacePtr surface = CreateRGBASurface(config.screen_size);
-  if (!surface) {
-    logger(Severity::Warn) << "Could not allocate frame dump surface: "
-                           << SDL_GetError();
-    return;
-  }
-
-  if (SDL_MUSTLOCK(surface.get()) && !SDL_LockSurface(surface.get())) {
-    logger(Severity::Warn) << "Could not lock frame dump surface: "
-                           << SDL_GetError();
-    return;
-  }
-
-  for (int y = 0; y < height; ++y) {
-    void* dst = static_cast<uint8_t*>(surface->pixels) + y * surface->pitch;
-    const void* src =
-        pixels.data() + static_cast<size_t>(height - y - 1) * width * 4;
-    std::memcpy(dst, src, static_cast<size_t>(width) * 4);
-  }
-
-  if (SDL_MUSTLOCK(surface.get()))
-    SDL_UnlockSurface(surface.get());
-
-  if (!SDL_SaveBMP(surface.get(), path.string().c_str())) {
-    logger(Severity::Warn) << "Could not save frame dump " << path.string()
-                           << ": " << SDL_GetError();
-  }
-}
 
 }  // namespace
 
@@ -413,7 +340,6 @@ void SDLGraphicsBackend::RenderFrame(const RenderFrameConfig& config,
 
   PresentFrame(config);
   glFlush();
-  SaveFrameBMP(config, SDLSurface::screen_->GetID());
   SDL_GL_SwapWindow(window_);
   ShowGLErrors();
 }
@@ -436,7 +362,6 @@ bool SDLGraphicsBackend::RedrawLastFrame(const RenderFrameConfig& config,
 
   PresentFrame(config);
   glFlush();
-  SaveFrameBMP(config, SDLSurface::screen_->GetID());
   SDL_GL_SwapWindow(window_);
   ShowGLErrors();
   return true;

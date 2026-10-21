@@ -29,11 +29,11 @@
 #include "systems/text_system.hpp"
 
 #include "core/gameexe.hpp"
+#include "core/image_resources.hpp"
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
 #include "modules/jump.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/itext_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
@@ -102,7 +102,7 @@ static std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(
     return nullptr;
 
   auto koe = std::make_unique<TextWindow::KoeReplayInfo>();
-  koe->icon = system.graphics().GetSurfaceNamed(config->icon_name);
+  koe->icon = system.text().LoadImage(config->icon_name);
   koe->repos = Size(config->x_offset, config->y_offset);
   return koe;
 }
@@ -112,7 +112,6 @@ static std::unique_ptr<TextWindow::KoeReplayInfo> BuildKoeReplayInfo(
 // -----------------------------------------------------------------------
 TextSystem::TextSystem(System& system,
                        Stage& stage,
-                       Gameexe& gexe,
                        std::unique_ptr<ITextSystem> impl,
                        MwndConfig mwnd_config)
     : text_impl_(std::move(impl)),
@@ -137,19 +136,6 @@ TextSystem::TextSystem(System& system,
                            : 0);
   text_impl_->InitSystem();
 
-  // Iterate over all the NAMAE keys, which is a feature that Clannad English
-  // Edition uses to translate the Japanese names into English.
-  for (auto it : gexe.Filter("NAMAE")) {
-    try {
-      // Data in the Gameexe.ini file is implicitly in Shift-JIS and needs to
-      // be converted to UTF-8.
-      std::string key = cp932toUTF8(it.StrAt(0).value(), 0);
-      std::string value = cp932toUTF8(it.StrAt(1).value(), 0);
-      namae_mapping_[key] = value;
-    } catch (...) {
-      // Gameexe.ini file is malformed.
-    }
-  }
   previous_page_it_ = previous_page_sets_.end();
 }
 
@@ -160,8 +146,7 @@ TextSystem::~TextSystem() {
 }
 
 void TextSystem::ExecuteTextSystem() {
-  if (auto_skip_mode_ && !auto_skip_suspended_ &&
-      !local_config_.disable_skip &&
+  if (auto_skip_mode_ && !auto_skip_suspended_ && !local_config_.disable_skip &&
       (kidoku_read_ || local_config_.skip_unread_message ||
        global_config_.system.allow_skip_unread_message))
     SetSkipMode(true);
@@ -182,7 +167,7 @@ void TextSystem::ExecuteTextSystem() {
 
 void TextSystem::RenderWindow(TextWindow& window) {
   if (!system_visible() || !ShowWindow(window.window_number()) ||
-      system_.graphics().is_interface_hidden())
+      IsInterfaceHidden())
     return;
   window.Render();
 }
@@ -194,7 +179,7 @@ void TextSystem::Render() {
   auto current = FindMwnd(kLayerFg, active_window_);
   if (!mwnd_config_.layered_windows() && system_visible() && current &&
       ShowWindow(active_window_) && current->IsVisible() && in_pause_state_ &&
-      !IsReadingBacklog() && !system_.graphics().is_interface_hidden()) {
+      !IsReadingBacklog() && !IsInterfaceHidden()) {
     if (!text_key_cursor_)
       SetKeyCursor(0);
     text_key_cursor_->Render(*current);
@@ -430,7 +415,7 @@ void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
       global_config_.enable_auto_mode = button.mode == 0;
       break;
     case Action::ClearWindow:
-      system_.graphics().ToggleInterfaceHidden();
+      ToggleInterfaceHidden();
       break;
     default:
       break;
@@ -593,13 +578,6 @@ void TextSystem::StopReadingBacklog() {
   HideAllTextWindows();
   CollectCurrentPages();
   ReplayPageSet(current_pageset_, true);
-}
-
-std::string TextSystem::InterpretName(const std::string& utf8name) {
-  auto it = namae_mapping_.find(utf8name);
-  if (it == namae_mapping_.end())
-    return utf8name;
-  return it->second;
 }
 
 void TextSystem::SetKeyCursor(int new_cursor) {
@@ -901,7 +879,7 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
           emoji_id = num_one * 10 + num_two;
 
           // Look up what g00 surface we should use for emoji.
-          emoji_surface = system().graphics().GetEmojiSurface();
+          emoji_surface = LoadEmoji();
           is_emoji = true;
           add_char = false;
         }
@@ -1025,45 +1003,6 @@ template void TextSystem::save<boost::archive::text_oarchive>(
 template void TextSystem::load<boost::archive::text_iarchive>(
     boost::archive::text_iarchive& ar,
     unsigned int version);
-
-// -----------------------------------------------------------------------
-
-std::string parseNames(MemoryHandle& memory, const std::string& input) {
-  std::string output;
-  const char* cur = input.c_str();
-
-  const char LOWER_BYTE_FULLWIDTH_ASTERISK = 0x96;
-  const char LOWER_BYTE_FULLWIDTH_PERCENT = 0x93;
-
-  while (*cur) {
-    if (cur[0] == 0x81 && (cur[1] == LOWER_BYTE_FULLWIDTH_ASTERISK ||
-                           cur[1] == LOWER_BYTE_FULLWIDTH_PERCENT)) {
-      char type = cur[1];
-      cur += 2;
-
-      string strindex;
-      if (ReadFullwidthLatinLetter(cur, strindex)) {
-        // Try to read a second character. We don't care if it fails.
-        ReadFullwidthLatinLetter(cur, strindex);
-      } else {
-        // It was "as-is" character, not a name reference.
-        output += (char)0x81;
-        output += type;
-        continue;
-      }
-
-      int index = ConvertLetterIndexToInt(strindex);
-      if (type == LOWER_BYTE_FULLWIDTH_ASTERISK)
-        output += memory.Read(StrBank::global_name, index);
-      else
-        output += memory.Read(StrBank::local_name, index);
-    } else {
-      CopyOneShiftJisCharacter(cur, output);
-    }
-  }
-
-  return output;
-}
 
 bool TextSystem::CurrentlySkipping() const {
   return !local_config_.disable_skip && skip_mode() &&
@@ -1239,4 +1178,25 @@ std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
     }
   }
   return it->second;
+}
+
+std::shared_ptr<SDLSurface> TextSystem::LoadImage(
+    const std::string& name) const {
+  if (!graphics_hooks_.images)
+    throw std::logic_error("Text graphics hooks are not bound");
+  return graphics_hooks_.images->GetSurfaceNamed(name);
+}
+std::shared_ptr<SDLSurface> TextSystem::LoadEmoji() const {
+  return graphics_hooks_.load_emoji ? graphics_hooks_.load_emoji() : nullptr;
+}
+void TextSystem::RequestRefresh() const {
+  if (graphics_hooks_.request_refresh)
+    graphics_hooks_.request_refresh();
+}
+bool TextSystem::IsInterfaceHidden() const {
+  return graphics_hooks_.interface_hidden && graphics_hooks_.interface_hidden();
+}
+void TextSystem::ToggleInterfaceHidden() {
+  if (graphics_hooks_.toggle_interface)
+    graphics_hooks_.toggle_interface();
 }

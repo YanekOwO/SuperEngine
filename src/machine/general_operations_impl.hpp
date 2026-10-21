@@ -50,9 +50,6 @@ System& GetSystemObj(RLMachine& machine);
 template <>
 EventSystem& GetSystemObj(RLMachine& machine);
 
-// Equivalent to machine.system().graphics().
-template <>
-GraphicsSystem& GetSystemObj(RLMachine& machine);
 
 // Equivalent to machine.haikei().
 template <>
@@ -70,7 +67,7 @@ TextSystem& GetSystemObj(RLMachine& machine);
 template <>
 SoundSystem& GetSystemObj(RLMachine& machine);
 
-// Equivalent to machine.system().graphics().cg_table().
+// Equivalent to machine.cg_table().
 template <>
 CGMTable& GetSystemObj(RLMachine& machine);
 

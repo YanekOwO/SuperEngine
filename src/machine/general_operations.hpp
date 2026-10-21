@@ -37,7 +37,6 @@
 
 class System;
 class EventSystem;
-class GraphicsSystem;
 class Haikei;
 class Stage;
 class TextPage;
@@ -201,8 +200,7 @@ class UndefinedFunction : public RLOp_SpecialCase {
 // extern template declarations; manually instantiated in the cc file.
 extern template RLOperation* CallFunction<EventSystem>(
     void (EventSystem::*)(int));
-extern template RLOperation* CallFunction<GraphicsSystem>(
-    void (GraphicsSystem::*)(int));
+extern template RLOperation* CallFunction<RLMachine>(void (RLMachine::*)(int));
 extern template RLOperation* CallFunction<Haikei>(void (Haikei::*)(int));
 extern template RLOperation* CallFunction<Haikei>(void (Haikei::*)());
 extern template RLOperation* CallFunction<SoundSystem>(
@@ -212,8 +210,6 @@ extern template RLOperation* CallFunction<TextSystem>(
     void (TextSystem::*)(int));
 extern template RLOperation* ReturnIntValue<EventSystem, int>(
     int (EventSystem::*)() const);
-extern template RLOperation* ReturnIntValue<GraphicsSystem, int>(
-    int (GraphicsSystem::*)() const);
 extern template RLOperation* ReturnIntValue<RLMachine, int>(int (RLMachine::*)()
                                                                 const);
 extern template RLOperation* ReturnIntValue<SoundSystem, int>(

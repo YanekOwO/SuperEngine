@@ -28,7 +28,6 @@
 
 #include "core/object.hpp"
 #include "core/render_geometry.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/gl_frame_buffer.hpp"
 #include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/gltexture.hpp"

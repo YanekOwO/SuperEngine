@@ -25,7 +25,6 @@
 #include "systems/text_window.hpp"
 
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/itext_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
@@ -256,8 +255,8 @@ void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
 }
 
 void TextWindow::Execute(bool update_controls) {
-  const bool controls_visible = update_controls && IsVisible() &&
-                                !system_.graphics().is_interface_hidden();
+  const bool controls_visible =
+      update_controls && IsVisible() && !system_.text().IsInterfaceHidden();
   const auto execute = [controls_visible](TextWaku* waku) {
     if (!waku)
       return;
@@ -274,7 +273,7 @@ bool TextWindow::IsTextboxWakuVisible() const {
   const auto& text = system_.text();
   return textbox_waku_ && IsVisible() && text_surface_ &&
          text.system_visible() && text.ShowWindow(window_num_) &&
-         !system_.graphics().is_interface_hidden();
+         !system_.text().IsInterfaceHidden();
 }
 
 bool TextWindow::IsNameboxWakuVisible() const {
@@ -297,13 +296,13 @@ void TextWindow::HideWaitIcon() {
 void TextWindow::SetWakuMainFile(const std::string& file) {
   if (textbox_waku_)
     textbox_waku_->SetMainSurface(
-        file.empty() ? nullptr : system_.graphics().GetSurfaceNamed(file));
+        file.empty() ? nullptr : system_.text().LoadImage(file));
 }
 
 void TextWindow::SetWakuFilterFile(const std::string& file) {
   if (textbox_waku_)
     textbox_waku_->SetFilterSurface(
-        file.empty() ? nullptr : system_.graphics().GetSurfaceNamed(file));
+        file.empty() ? nullptr : system_.text().LoadImage(file));
 }
 
 void TextWindow::SetTextboxPadding(const std::vector<int>& pos_data) {
@@ -542,8 +541,7 @@ Point TextWindow::KeycursorPosition(const Size& cursor_size) const {
 
 void TextWindow::FaceOpen(const std::string& filename, int index) {
   if (face_slot_[index]) {
-    face_slot_[index]->face_surface =
-        system_.graphics().GetSurfaceNamed(filename);
+    face_slot_[index]->face_surface = system_.text().LoadImage(filename);
 
     if (face_slot_[index]->hide_other_windows) {
       system_.text().HideAllTextWindowsExcept(window_number());
@@ -619,7 +617,7 @@ void TextWindow::Render() {
     Point textOrigin =
         GetTextSurfaceRect().origin() - Size(0, layout_.GetRubyTopPadding());
 
-    textbox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
+    textbox_waku_->renderer_ = system_.text().GetSceneRenderer();
     textbox_waku_->Render(box, GetWakuContentSize(), GetColour(),
                           GetIsFilter());
     RenderFaces(1);
@@ -628,7 +626,7 @@ void TextWindow::Render() {
       Rect r = GetNameboxWakuRect();
 
       if (namebox_waku_) {
-        namebox_waku_->renderer_ = system_.graphics().GetSceneRenderer();
+        namebox_waku_->renderer_ = system_.text().GetSceneRenderer();
         // TODO(erg): The waku needs to be adjusted to be the minimum size
         // of the window in characters
         namebox_waku_->Render(r.origin(), GetNameboxTextArea(), GetColour(),
@@ -813,8 +811,8 @@ void TextWindow::SetMousePosition(const Point& pos, bool update_waku) {
 }
 
 bool TextWindow::HasMwndButtonAt(const Point& pos) const {
-  return IsVisible() && !system_.graphics().is_interface_hidden() &&
-         textbox_waku_ && textbox_waku_->HasButtonAt(pos);
+  return IsVisible() && !system_.text().IsInterfaceHidden() && textbox_waku_ &&
+         textbox_waku_->HasButtonAt(pos);
 }
 
 bool TextWindow::HandleMouseClick(const Point& pos, bool pressed) {
@@ -830,7 +828,7 @@ bool TextWindow::HandleMouseClick(const Point& pos, bool pressed) {
     }
   }
 
-  if (IsVisible() && !system_.graphics().is_interface_hidden()) {
+  if (IsVisible() && !system_.text().IsInterfaceHidden()) {
     return textbox_waku_->HandleMouseClick(pos, pressed);
   }
 

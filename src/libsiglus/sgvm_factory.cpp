@@ -35,6 +35,7 @@
 #include "core/mask.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/stage.hpp"
+#include "core/window_title.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
@@ -47,10 +48,11 @@
 #include "m6/vm_factory.hpp"
 #include "srbind/module.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
+#include "systems/sdl/graphics_backend.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/file.hpp"
+#include "utilities/graphics.hpp"
 #include "utilities/mapped_file.hpp"
 #include "utilities/string_utilities.hpp"
 #include "vm/function.hpp"
@@ -106,19 +108,19 @@ static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
 
 static std::shared_ptr<CaptureManager> CreateCaptureManager(
     SiglusMachine& runtime) {
-  auto& graphics = runtime.system->graphics();
-  const auto screen_size = graphics.screen_size();
+  auto& presenter = *runtime.presenter;
+  const auto screen_size = presenter.screen_size();
   auto captures = std::make_shared<CaptureManager>(
       CaptureConfig::Parse(*runtime.gameexe, screen_size), runtime.save_pth,
-      [&graphics, renderer = runtime.renderer,
+      [&presenter, renderer = runtime.renderer,
        screen_size](const CaptureRequest& request) {
         const bool buffer = request.kind == CaptureKind::Buffer;
-        return graphics.RenderToSurface(
+        return presenter.RenderToSurface(
             buffer ? request.size : screen_size,
             [&] { renderer->RenderCapture(request.end); }, buffer,
             request.offset);
       },
-      [&runtime, &graphics](fs::path path) {
+      [&runtime, &presenter](fs::path path) {
         std::string name = path.string();
         std::replace(name.begin(), name.end(), '\\', '/');
         path = fs::path(name);
@@ -132,11 +134,11 @@ static std::shared_ptr<CaptureManager> CreateCaptureManager(
             throw found.error();
           path = *found;
         }
-        return graphics.GetBackend()->LoadSurface(path);
+        return presenter.backend()->LoadSurface(path);
       },
-      [&graphics] {
+      [images = runtime.images] {
         std::vector<std::string> names;
-        for (const auto& [name, image] : graphics.loaded_images())
+        for (const auto& [name, image] : images->loaded_images())
           if (!image.expired())
             names.push_back(name);
         return names;
@@ -183,8 +185,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   gexe.SetStringAt("CAPTION", "SiglusTest");
   gexe.SetStringAt("REGNAME", "sjis: SIGLUS\\TEST");
   gexe.SetIntAt("NAME_ENC", 0);
-  gexe.SetIntAt("SUBTITLE", 0);
-  gexe.SetIntAt("MOUSE_CURSOR", 0);
   gexe.SetStringAt("__GAMEPATH", base_path_.string());
   MwndConfig mwnd_config = MwndConfig::ParseSiglus(gexe);
   const int default_window = mwnd_config.default_window();
@@ -196,11 +196,18 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   // Init sdl system
   SystemOptions system_options;
-  system_options.engine = SystemOptions::Engine::Siglus;
   system_options.fast_forward = fast_forward_;
   rt.system = std::make_unique<System>(gexe, *rt.stage, rt.local_config,
                                        rt.global_config, rt.asset_scanner,
                                        std::move(mwnd_config), system_options);
+  auto backend = std::make_shared<SDLGraphicsBackend>();
+  rt.presenter =
+      std::make_unique<FramePresenter>(backend, GetSiglusScreenSize(gexe),
+                                       rt.global_config.screen_size_mode == 1);
+  rt.window_title = std::make_shared<WindowTitle>(
+      [backend](const std::string& title) { backend->SetWindowTitle(title); });
+  rt.images = std::make_shared<ImageResources>(rt.asset_scanner, backend,
+                                               CreateToneCurve(gexe));
   rt.system->text().set_active_window(default_window);
   rt.screen_quakes =
       std::make_shared<QuakeList>(rt.stage->quakes.Size(kLayerFg));
@@ -217,8 +224,9 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   rt.mask_list =
       std::make_shared<MaskList>(static_cast<std::size_t>(mask_count));
   rt.renderer = std::make_shared<SiglusSceneRenderer>(
-      *rt.stage, *rt.system, rt.mask_list, rt.screen_quakes, rt.local_config);
-  rt.system->graphics().BindSceneRenderer(rt.renderer);
+      *rt.stage, *rt.system, rt.mask_list, rt.screen_quakes, rt.local_config,
+      rt.presenter->screen_size(), [&rt] { return rt.is_interface_hidden(); });
+  rt.BindGraphics();
   rt.captures = CreateCaptureManager(rt);
   rt.reset_local_memory.emplace_back([&rt] { rt.ResetCaptures(); });
 
@@ -357,8 +365,8 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   struct SystemEventListener : public EventListener {
     sr::VM& vm;
-    System& sys;
-    SystemEventListener(sr::VM& v, System& s) : vm(v), sys(s) {}
+    SiglusMachine& runtime;
+    SystemEventListener(sr::VM& v, SiglusMachine& rt) : vm(v), runtime(rt) {}
     void OnEvent(std::shared_ptr<Event> event) override {
       if (std::visit(
               [&](auto& event) -> bool {
@@ -368,15 +376,16 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
                   return true;
                 }
                 if constexpr (std::same_as<T, VideoExpose>) {
-                  sys.graphics().ForceRefresh();
                   return true;
                 }
                 if constexpr (std::same_as<T, VideoResize>) {
-                  sys.graphics().Resize(event.size);
+                  runtime.presenter->Resize(
+                      event.size, runtime.global_config.screen_size_mode == 1);
                   return true;
                 }
                 if constexpr (std::same_as<T, MouseMotion>) {
-                  event.pos = sys.graphics().DisplayToScreenPoint(event.pos);
+                  event.pos =
+                      runtime.presenter->DisplayToScreenPoint(event.pos);
                   return false;
                 }
                 return false;
@@ -385,8 +394,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
         *event = std::monostate();
     }
   };
-  rt.system_event_listener =
-      std::make_shared<SystemEventListener>(vm, *rt.system);
+  rt.system_event_listener = std::make_shared<SystemEventListener>(vm, rt);
   rt.system->event().AddListener(30, rt.system_event_listener);
 
   for (auto it = binding::SiglusBindingRegistry::cbegin();

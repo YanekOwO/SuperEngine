@@ -45,7 +45,6 @@
 #include "machine/rloperation/default_value_t.hpp"
 #include "machine/rloperation/rect_t.hpp"
 #include "modules/module_obj.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "utilities/graphics.hpp"
@@ -98,7 +97,7 @@ void SetObjectDataToGan(RLMachine& machine,
     imgFilename = dec.raw_file_name.empty() ? ganFilename : dec.raw_file_name;
   else if (imgFilename == "?")
     imgFilename = ganFilename;
-  auto image = system_.graphics().GetSurfaceNamed(imgFilename);
+  auto image = machine.GetSurfaceNamed(imgFilename);
 
   // create graphics object
   auto obj_data = std::make_unique<GanGraphicsObjectData>(
@@ -127,15 +126,15 @@ void objOfFileLoader(RLMachine& machine,
 
   string file_str = full_path.string();
   if (file_str.ends_with("g00") || file_str.ends_with("pdt")) {
-    auto surface = system.graphics().GetSurfaceNamed(filename);
+    auto surface = machine.GetSurfaceNamed(filename);
     auto obj_data = std::make_unique<GraphicsObjectOfFile>(surface);
     InitObjectWith(obj, std::move(obj_data));
   } else if (file_str.ends_with("anm")) {
     std::vector<char> file_content = LoadFile(full_path);
     AnmDecoder decoder(std::move(file_content));
 
-    auto surface = system.graphics().GetSurfaceNamed(decoder.raw_file_name);
-    Size screen_size = system.graphics().screen_size();
+    auto surface = machine.GetSurfaceNamed(decoder.raw_file_name);
+    Size screen_size = machine.presenter().screen_size();
     for (auto& frame : decoder.frames)
       decoder.FixAxis(frame, screen_size.width(), screen_size.height());
 
@@ -164,15 +163,17 @@ void objOfTextBuilder(RLMachine& machine,
 void objOfDriftLoader(RLMachine& machine,
                       GraphicsObject& obj,
                       const std::string& value) {
-  InitObjectWith(
-      obj, std::make_unique<DriftGraphicsObject>(machine.GetSystem(), value));
+  InitObjectWith(obj, std::make_unique<DriftGraphicsObject>(
+                          machine.image_resources(),
+                          machine.GetSystem().event().GetClock(),
+                          machine.presenter().screen_rect(), value));
 }
 
 void objOfDigitsLoader(RLMachine& machine,
                        GraphicsObject& obj,
                        const std::string& value) {
-  InitObjectWith(
-      obj, std::make_unique<DigitsGraphicsObject>(machine.GetSystem(), value));
+  InitObjectWith(obj, std::make_unique<DigitsGraphicsObject>(
+                          machine.image_resources(), value));
 }
 
 struct objGeneric_0 : public RLOpcode<IntConstant_T, StrConstant_T> {

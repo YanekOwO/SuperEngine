@@ -25,14 +25,21 @@
 
 #pragma once
 
+#include "core/cgm_table.hpp"
 #include "core/frame_counter.hpp"
 #include "core/game_config.hpp"
+#include "core/image_resources.hpp"
 #include "core/kidoku_table.hpp"
+#include "core/name_mapping.hpp"
+#include "core/window_title.hpp"
 #include "machine/call_stack.hpp"
 #include "machine/instruction.hpp"
 #include "machine/iscriptor.hpp"
 #include "machine/module_manager.hpp"
+#include "systems/frame_presenter.hpp"
+#include "systems/object_settings.hpp"
 #include "utilities/stopwatch.hpp"
+#include "utilities/string_utilities.hpp"
 
 #include <boost/serialization/split_member.hpp>
 
@@ -57,6 +64,7 @@ class RealLiveDLL;
 class System;
 class Stage;
 class Haikei;
+class MouseCursor;
 struct StackFrame;
 class EventListener;
 class Debugger;
@@ -86,6 +94,9 @@ class RLMachine {
             std::shared_ptr<IScriptor> scriptor,
             std::unique_ptr<LocalConfig> local_config,
             std::unique_ptr<GlobalConfig> global_config,
+            std::unique_ptr<FramePresenter> presenter,
+            std::shared_ptr<WindowTitle> window_title,
+            std::shared_ptr<ImageResources> images,
             std::unique_ptr<Memory> memory = nullptr);
   virtual ~RLMachine();
 
@@ -127,6 +138,35 @@ class RLMachine {
   GlobalConfig& GetGlobalConfig() { return *global_config_; }
   const GlobalConfig& GetGlobalConfig() const { return *global_config_; }
 
+  FramePresenter& presenter() { return *presenter_; }
+  const FramePresenter& presenter() const { return *presenter_; }
+  std::shared_ptr<ImageResources> image_resources() const { return images_; }
+  std::shared_ptr<SDLSurface> GetSurfaceNamed(const std::string& name);
+  std::shared_ptr<SDLSurface> GetSurfaceNamedAndMarkViewed(
+      const std::string& name);
+  std::shared_ptr<SDLSurface> GetEmojiSurface();
+  inline CGMTable& cg_table() { return cg_table_; }
+  inline const CGMTable& cg_table() const { return cg_table_; }
+  inline const auto& GetObjectSettings() const {
+    return *graphics_object_settings_;
+  }
+
+  void ForceRefresh();
+  bool screen_needs_refresh() const { return screen_needs_refresh_; }
+  // The running visual coroutine owns the callback until completion or cancel.
+  void SetFrameRenderer(std::weak_ptr<DrawCallback> source);
+  void RenderFrame(const DrawCallback& draw = {});
+  std::shared_ptr<SDLSurface> RenderToSurface();
+  void Resize(Size size);
+  void ApplyGraphicsConfiguration();
+  void ApplyConfiguration();
+  bool is_interface_hidden() const { return interface_hidden_; }
+  void ToggleInterfaceHidden();
+  void SetCursorPosition(Point pos) { cursor_pos_ = pos; }
+  inline std::shared_ptr<WindowTitle> window_title() const {
+    return window_title_;
+  }
+
   Stage& stage();
   const Stage& stage() const;
   Haikei& haikei();
@@ -135,6 +175,7 @@ class RLMachine {
   std::shared_ptr<IScriptor> GetScriptor();
 
   Gameexe& GetGameexe();
+  inline const NameMapping& name_mapping() const { return name_mapping_; }
 
   // Returns the memory view bound to the active call stack.
   MemoryHandle& GetMemory() { return call_stack_.GetMemory(); }
@@ -269,6 +310,7 @@ class RLMachine {
   // These owners precede borrowers so configuration and templates outlive
   // System, Stage, and any execution objects referring to them.
   std::shared_ptr<Gameexe> gexe_;
+  NameMapping name_mapping_;
   std::unique_ptr<LocalConfig> local_config_;
   std::unique_ptr<GlobalConfig> global_config_;
   std::unique_ptr<Stage> stage_;
@@ -294,9 +336,36 @@ class RLMachine {
   // The most recent line marker we've come across
   int line_ = 0;
 
+  void InitializeGraphics();
+  void ExecuteGraphics();
+  void ResetGraphics();
+  int ShouldUseCustomCursor();
+  std::shared_ptr<MouseCursor> GetCurrentCursor();
+
+  // Engine policy and script-owned graphics state.
+  bool screen_needs_refresh_ = true;
+  bool interface_hidden_ = false;
+  CGMTable cg_table_;
+  struct GraphicsObjectSettings {
+    int objects_in_a_layer;
+    std::vector<unsigned char> position;
+    std::vector<ObjectSettings> data;
+    explicit GraphicsObjectSettings(Gameexe& gameexe);
+    const ObjectSettings& GetObjectSettingsFor(int obj_num) const;
+  };
+  std::unique_ptr<GraphicsObjectSettings> graphics_object_settings_;
+  Point cursor_pos_;
+  std::shared_ptr<MouseCursor> mouse_cursor_;
+  using MouseCursorCache = std::map<int, std::shared_ptr<MouseCursor>>;
+  MouseCursorCache cursor_cache_;
+  std::unique_ptr<FramePresenter> presenter_;
+  std::shared_ptr<WindowTitle> window_title_;
+  std::shared_ptr<ImageResources> images_;
+
   std::unique_ptr<Haikei> haikei_;
 
   std::shared_ptr<rlSceneRenderer> renderer_;
+  std::weak_ptr<DrawCallback> frame_renderer_;
 
   std::map<std::pair<int, int>, Stopwatch> rltimer_;
   std::map<std::pair<int, int>, FrameCounter> frame_counter_;
@@ -328,11 +397,17 @@ class RLMachine {
   BOOST_SERIALIZATION_SPLIT_MEMBER();
 
   void save(auto& ar, const unsigned int file_version) const {
-    ar << LineNumber() << savepoint_call_stack_ << savepoint_local_config_;
+    ar << LineNumber() << savepoint_call_stack_ << savepoint_local_config_
+       << window_title_->subtitle_;
   }
 
   void load(auto& ar, const unsigned int file_version) {
-    ar >> line_ >> call_stack_ >> *local_config_;
+    ar >> line_ >> call_stack_ >> *local_config_ >> window_title_->subtitle_;
+    window_title_->subtitle_ =
+        cp932toUTF8(window_title_->subtitle_, GetTextEncoding());
+    window_title_->subtitle_visible_ =
+        GetGlobalConfig().reallive.display_subtitle;
+    window_title_->Apply();
     savepoint_local_config_ = *local_config_;
   }
 };

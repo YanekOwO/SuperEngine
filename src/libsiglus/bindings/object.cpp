@@ -44,7 +44,6 @@
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "utilities/file.hpp"
 #include "vm/exception.hpp"
@@ -140,14 +139,14 @@ void SetOwnClipRectValue(ObjectParameter& param,
 
 void LoadGan(GraphicsObject& object,
              System* system,
+             const std::shared_ptr<ImageResources>& images,
              AssetScanner* asset_scanner,
              std::string filename) {
-  GraphicsSystem* graphics = system ? system->graphics_ptr().get() : nullptr;
   EventSystem* event = system ? system->event_ptr().get() : nullptr;
   if (filename.empty())
     return;
-  if (!graphics)
-    throw std::runtime_error("Object.load_gan requires a graphics system");
+  if (!images)
+    throw std::runtime_error("Object.load_gan requires image resources");
   if (!asset_scanner)
     throw std::runtime_error("Object.load_gan requires an asset scanner");
 
@@ -160,7 +159,7 @@ void LoadGan(GraphicsObject& object,
   GanDecoder decoder(LoadFile(*gan_path));
   const std::string image_name =
       decoder.raw_file_name.empty() ? filename : decoder.raw_file_name;
-  auto image = graphics->GetSurfaceNamed(image_name);
+  auto image = images->GetSurfaceNamed(image_name);
   auto data = std::make_unique<GanGraphicsObjectData>(
       image, std::move(decoder.animation_sets),
       event ? event->GetClock() : std::make_shared<Clock>());
@@ -240,15 +239,15 @@ MovieCreateParams ParseCreateMovie(std::vector<sr::Value> raw_args,
 
 bool CreateMovie(GraphicsObject& object,
                  System* system,
+                 std::shared_ptr<IGraphicsBackend> backend,
                  AssetScanner* asset_scanner,
                  std::vector<sr::Value> raw_args,
                  bool loop,
                  bool wait,
                  bool key_skip) {
-  GraphicsSystem* graphics = system ? system->graphics_ptr().get() : nullptr;
   EventSystem* event = system ? system->event_ptr().get() : nullptr;
-  if (!graphics)
-    throw std::runtime_error("Object.create_movie requires a graphics system");
+  if (!backend)
+    throw std::runtime_error("Object.create_movie requires a graphics backend");
   if (!asset_scanner)
     throw std::runtime_error("Object.create_movie requires an asset scanner");
 
@@ -264,7 +263,7 @@ bool CreateMovie(GraphicsObject& object,
   object.Reset();
   object.SetDrawer(std::make_unique<ObjectMovieData>(
       movie_path.value(), params.loop, params.auto_free, params.real_time,
-      params.ready_only, graphics->GetBackend(),
+      params.ready_only, backend,
       event ? event->GetClock() : std::make_shared<Clock>()));
   object.SetFilePath(params.file_name);
 
@@ -744,6 +743,8 @@ void BindObject(SiglusMachine& runtime) {
   if (!runtime.frame_action_manager)
     throw std::runtime_error("Object binding requires frame-action state");
   System* system = runtime.system.get();
+  auto backend = runtime.presenter ? runtime.presenter->backend() : nullptr;
+  auto images = runtime.images;
   AssetScanner* asset_scanner = runtime.asset_scanner.get();
   FrameActionManager* frame_actions = runtime.frame_action_manager.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -922,7 +923,7 @@ void BindObject(SiglusMachine& runtime) {
       sb::vararg);
   object.def(
       "create",
-      [system](ObjectHandle* h, std::vector<sr::Value> args) -> void {
+      [images](ObjectHandle* h, std::vector<sr::Value> args) -> void {
         if (args.size() != 1 && args.size() != 2 && args.size() != 4 &&
             args.size() != 5) {
           throw std::runtime_error("Object.create expects 1, 2, 4, or 5 args");
@@ -940,7 +941,7 @@ void BindObject(SiglusMachine& runtime) {
           pattern = RequireInt(args[4], "pat");
 
         h->object->Reset();
-        h->object->ReplaceFileDrawer(system->graphics(), std::move(filename));
+        h->object->ReplaceFileDrawer(images, std::move(filename));
         if (visible)
           h->object->Param().SetVisible(*visible);
         if (x)
@@ -953,42 +954,44 @@ void BindObject(SiglusMachine& runtime) {
       sb::vararg);
   object.def(
       "create_movie",
-      [system, asset_scanner](ObjectHandle* h, std::vector<sr::Value> args) {
-        CreateMovie(*h->object, system, asset_scanner, std::move(args), false,
-                    false, false);
+      [system, asset_scanner, backend](ObjectHandle* h,
+                                       std::vector<sr::Value> args) {
+        CreateMovie(*h->object, system, backend, asset_scanner, std::move(args),
+                    false, false, false);
       },
       sb::vararg);
   object.def(
       "create_movie_loop",
-      [system, asset_scanner](ObjectHandle* h, std::vector<sr::Value> args) {
-        CreateMovie(*h->object, system, asset_scanner, std::move(args), true,
-                    false, false);
+      [system, asset_scanner, backend](ObjectHandle* h,
+                                       std::vector<sr::Value> args) {
+        CreateMovie(*h->object, system, backend, asset_scanner, std::move(args),
+                    true, false, false);
       },
       sb::vararg);
   object.def(
       "create_movie_wait",
-      [system, asset_scanner](ObjectHandle* h, sr::VM& vm,
-                              std::vector<sr::Value> args) {
-        if (CreateMovie(*h->object, system, asset_scanner, std::move(args),
-                        false, true, false))
+      [system, asset_scanner, backend](ObjectHandle* h, sr::VM& vm,
+                                       std::vector<sr::Value> args) {
+        if (CreateMovie(*h->object, system, backend, asset_scanner,
+                        std::move(args), false, true, false))
           return WaitMovie(h->object, system, vm, false);
         return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   object.def(
       "create_movie_waitkey",
-      [system, asset_scanner](ObjectHandle* h, sr::VM& vm,
-                              std::vector<sr::Value> args) {
-        if (CreateMovie(*h->object, system, asset_scanner, std::move(args),
-                        false, true, true))
+      [system, asset_scanner, backend](ObjectHandle* h, sr::VM& vm,
+                                       std::vector<sr::Value> args) {
+        if (CreateMovie(*h->object, system, backend, asset_scanner,
+                        std::move(args), false, true, true))
           return WaitMovie(h->object, system, vm, true);
         return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
-  object.def("load_gan",
-             [system, asset_scanner](ObjectHandle* h, std::string filename) {
-               LoadGan(*h->object, system, asset_scanner, std::move(filename));
-             });
+  object.def("load_gan", [system, asset_scanner, images](ObjectHandle* h,
+                                                         std::string filename) {
+    LoadGan(*h->object, system, images, asset_scanner, std::move(filename));
+  });
   object.def(
       "start_gan",
       [](ObjectHandle* h, std::vector<sr::Value> args) {
@@ -1205,8 +1208,8 @@ void BindObject(SiglusMachine& runtime) {
     GraphicsObject& o = *h->object;
     return o.CountMutators() > 0;
   });
-  object.def("change_file", [system](ObjectHandle* h, std::string filename) {
-    h->object->ReplaceFileDrawer(system->graphics(), std::move(filename));
+  object.def("change_file", [images](ObjectHandle* h, std::string filename) {
+    h->object->ReplaceFileDrawer(images, std::move(filename));
   });
   object.def(
       "copy_from",

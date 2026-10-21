@@ -35,7 +35,6 @@
 #include "machine/rlmodule.hpp"
 #include "machine/rloperation.hpp"
 #include "modules/module_obj.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
 // -----------------------------------------------------------------------
@@ -53,8 +52,7 @@ void ForEachTargetObject(RLMachine& machine, RLOperation* op, Function fn) {
   int parentobj;
   if (op->GetProperty(P_PARENTOBJ, parentobj)) {
     GraphicsObject& parent = stage.GetObject(fgbg, parentobj);
-    EnsureIsParentObject(parent,
-                         machine.GetSystem().graphics().GetObjectLayerSize());
+    EnsureIsParentObject(parent, machine.GetObjectSettings().objects_in_a_layer);
 
     for (auto& child : parent.GetChildren()) {
       if (child)
@@ -179,7 +177,6 @@ struct objChildCopy : public RLOpcode<IntConstant_T, IntConstant_T> {
   explicit objChildCopy(int fgbg) : fgbg_(fgbg) {}
 
   void operator()(RLMachine& machine, int sbuf, int dbuf) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     Stage& stage = machine.stage();
 
     // By the time we enter this method, our parameters have already been
@@ -188,7 +185,7 @@ struct objChildCopy : public RLOpcode<IntConstant_T, IntConstant_T> {
     int parentobj;
     if (GetProperty(P_PARENTOBJ, parentobj)) {
       GraphicsObject& go = stage.GetObject(fgbg_, parentobj);
-      EnsureIsParentObject(go, graphics.GetObjectLayerSize());
+      EnsureIsParentObject(go, machine.GetObjectSettings().objects_in_a_layer);
 
       GraphicsObject& src_obj = go.TouchChild(sbuf);
       go.SetChild(dbuf, src_obj.Clone());

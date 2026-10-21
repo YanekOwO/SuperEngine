@@ -30,6 +30,7 @@
 #include "systems/text_window.hpp"
 
 #include <compare>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -49,7 +50,9 @@ class SiglusSceneRenderer final : public ISceneRenderer {
                       ::System& system,
                       std::shared_ptr<MaskList> mask_list,
                       std::shared_ptr<::QuakeList> screen_quakes,
-                      ::LocalConfig& local_config);
+                      ::LocalConfig& local_config,
+                      Size screen_size,
+                      std::function<bool()> interface_hidden);
 
   void ExecuteFrame() override;
   void RenderScene() override;
@@ -80,6 +83,8 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   QuakeTransform TransformForOrder(int order, int stage_layer) const;
   bool QuakeRenderingStopped() const;
 
+  Size screen_size_;
+  std::function<bool()> interface_hidden_;
   ::Stage& stage_;
   ::System& system_;
   std::shared_ptr<MaskList> mask_list_;

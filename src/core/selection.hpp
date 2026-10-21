@@ -36,6 +36,7 @@
 #include <vector>
 
 class Gameexe;
+class ImageResources;
 class SDLSurface;
 class TextWindow;
 class System;
@@ -203,6 +204,8 @@ std::shared_ptr<Selection> BuildSelection(
     System& system,
     SelectionRequest request,
     BtnSelTemplate config,
+    const std::shared_ptr<ImageResources>& images,
+    Size screen_size,
     std::shared_ptr<TextWindow> window = nullptr);
 
 struct SelState {
@@ -211,7 +214,10 @@ struct SelState {
 
   // Draws an active session or stage snapshot without advancing it. The caller
   // supplies stage ordering and transition compositing.
-  static void Render(const Selection& session, System& system);
+  static void Render(const Selection& session,
+                     System& system,
+                     Size screen_size,
+                     bool interface_hidden);
 
   struct InputResult {
     bool focus_changed = false;

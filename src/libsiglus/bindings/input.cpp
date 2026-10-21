@@ -26,7 +26,6 @@
 #include "core/input.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 
 #include <memory>
 
@@ -61,7 +60,7 @@ void BindInput(SiglusMachine& runtime) {
 
   mouse.def("wheel", [listener] { return listener->mouse_wheel; });
   mouse.def("set_pos", [&runtime](int x, int y) {
-    runtime.system->graphics().WarpMouse(Point(x, y));
+    runtime.presenter->WarpMouse(Point(x, y));
   });
 
   enum class Source { Decide, Cancel, Left, Right };

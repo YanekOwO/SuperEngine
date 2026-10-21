@@ -49,7 +49,6 @@
 #include "machine/rloperation/rgb_colour_t.hpp"
 #include "machine/rloperation/special_t.hpp"
 #include "machine/scene_renderer.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -133,7 +132,6 @@ void loadImageToDC1(RLMachine& machine,
                     const Point& dest,
                     int opacity,
                     bool useAlpha) {
-  GraphicsSystem& graphics = machine.GetSystem().graphics();
   Haikei& haikei = machine.haikei();
 
   if (name != "?") {
@@ -150,7 +148,7 @@ void loadImageToDC1(RLMachine& machine,
 
     // Load the section of the image file on top of dc1
     std::shared_ptr<const SDLSurface> surface(
-        graphics.GetSurfaceNamedAndMarkViewed(machine, name));
+        machine.GetSurfaceNamedAndMarkViewed(name));
     surface->BlitToSurface(*haikei.GetDC(1), Rect(srcRect.origin(), size),
                            Rect(dest, size), opacity, useAlpha);
   }
@@ -298,11 +296,10 @@ struct load_1
   explicit load_1(bool in) : use_alpha_(in) {}
 
   void operator()(RLMachine& machine, string filename, int dc, int opacity) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     Haikei& haikei = machine.haikei();
 
     std::shared_ptr<const SDLSurface> surface(
-        graphics.GetSurfaceNamedAndMarkViewed(machine, filename));
+        machine.GetSurfaceNamedAndMarkViewed(filename));
 
     if (dc != 0 && dc != 1) {
       haikei.AllocateDC(dc, surface->GetSize());
@@ -333,10 +330,9 @@ struct load_3 : public RLOpcode<StrConstant_T,
                   Rect srcRect,
                   Point dest,
                   int opacity) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     Haikei& haikei = machine.haikei();
     std::shared_ptr<const SDLSurface> surface(
-        graphics.GetSurfaceNamedAndMarkViewed(machine, filename));
+        machine.GetSurfaceNamedAndMarkViewed(filename));
 
     Rect destRect = Rect(dest, srcRect.size());
 
@@ -358,12 +354,10 @@ void DisplayEffect(RLMachine& machine, int dc, const lop::selRecord& param) {
   const Point& dest = param.point;
   const auto transparency = param.transparency;
 
-  GraphicsSystem& graphics = machine.GetSystem().graphics();
-
-  std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+  std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
   loadDCToDC1(machine, dc, src, dest, transparency);
   blitDC1toDC0(machine);
-  std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+  std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
   performEffect(machine, after, before, param);
 }
@@ -492,13 +486,12 @@ struct open_1 : public RLOpcode<StrConstant_T, IntConstant_T, IntConstant_T> {
     Point dest;
     GetSELPointAndRect(machine, effectNum, src, dest);
 
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     loadImageToDC1(machine, filename, src, dest, opacity, use_alpha_);
     blitDC1toDC0(machine);
 
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
     performEffect(machine, after, before, effectNum);
     performHideAllTextWindows(machine);
   }
@@ -534,16 +527,14 @@ struct open_3 : public RLOpcode<StrConstant_T,
                   Rect srcRect,
                   Point dest,
                   int opacity) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     // Kanon uses the recOpen('?', ...) form for rendering Last Regrets. This
     // isn't documented in the rldev manual.
     loadImageToDC1(machine, filename, srcRect, dest, opacity, use_alpha_);
     blitDC1toDC0(machine);
 
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
     performEffect(machine, after, before, effectNum);
     performHideAllTextWindows(machine);
   }
@@ -602,16 +593,14 @@ struct open_4 : public RLOpcode<StrConstant_T,
                   int b,
                   int opacity,
                   int c) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
-
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     // Kanon uses the recOpen('?', ...) form for rendering Last Regrets. This
     // isn't documented in the rldev manual.
     loadImageToDC1(machine, fileName, srcRect, dest, opacity, use_alpha_);
     blitDC1toDC0(machine);
 
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
     performEffect(
         machine, after, before,
@@ -626,19 +615,18 @@ struct openBg_1 : public RLOpcode<StrConstant_T, IntConstant_T, IntConstant_T> {
                   string fileName,
                   int effectNum,
                   int opacity) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     Rect srcRect;
     Point destPoint;
     GetSELPointAndRect(machine, effectNum, srcRect, destPoint);
 
     OpenBgPrelude(machine, fileName);
 
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     loadImageToDC1(machine, fileName, srcRect, destPoint, opacity, false);
     blitDC1toDC0(machine);
 
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
     performEffect(machine, after, before, effectNum);
     performHideAllTextWindows(machine);
   }
@@ -668,16 +656,15 @@ struct openBg_3 : public RLOpcode<StrConstant_T,
                   Rect srcRect,
                   Point destPt,
                   int opacity) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     OpenBgPrelude(machine, fileName);
 
     // Set the long operation for the correct transition long operation
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     loadImageToDC1(machine, fileName, srcRect, destPt, opacity, use_alpha_);
     blitDC1toDC0(machine);
 
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
     performEffect(machine, after, before, effectNum);
     performHideAllTextWindows(machine);
   }
@@ -730,17 +717,16 @@ struct openBg_4 : public RLOpcode<StrConstant_T,
                   int b,
                   int opacity,
                   int c) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     OpenBgPrelude(machine, fileName);
 
     // Set the long operation for the correct transition long operation
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
     loadImageToDC1(machine, fileName, srcRect, destPt, opacity, use_alpha_);
     blitDC1toDC0(machine);
 
     // Render the screen to a temporary
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
     performEffect(
         machine, after, before,
@@ -907,11 +893,10 @@ template <typename SPACE>
 struct fade_7
     : public RLOpcode<Rect_T<SPACE>, RGBColour_T, DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, Rect rect, RGBAColour colour, int time) {
-    GraphicsSystem& graphics = machine.GetSystem().graphics();
     Haikei& haikei = machine.haikei();
-    std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
     haikei.GetDC(0)->Fill(colour, rect);
-    std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
     if (time > 0) {
       performEffect(machine, after, before,
@@ -936,7 +921,7 @@ struct fade_3 : public RLOpcode<RGBColour_T, DefaultIntValue_T<0>> {
   fade_7<rect_impl::REC> delegate_;
 
   void operator()(RLMachine& machine, RGBAColour colour, int time) {
-    Size screen_size = machine.GetSystem().graphics().screen_size();
+    Size screen_size = machine.presenter().screen_size();
     delegate_(machine, Rect(0, 0, screen_size), colour, time);
   }
 };
@@ -945,7 +930,7 @@ struct fade_1 : public RLOpcode<IntConstant_T, DefaultIntValue_T<0>> {
   fade_7<rect_impl::REC> delegate_;
 
   void operator()(RLMachine& machine, int colour_num, int time) {
-    Size screen_size = machine.GetSystem().graphics().screen_size();
+    Size screen_size = machine.presenter().screen_size();
     Gameexe& gexe = machine.GetSystem().gameexe();
     const std::vector<int> rgb = gexe("COLOR_TABLE", colour_num).ToIntVec();
     delegate_(machine, Rect(0, 0, screen_size), RGBAColour(rgb), time);

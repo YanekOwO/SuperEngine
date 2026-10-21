@@ -4,6 +4,7 @@
 //
 // -----------------------------------------------------------------------
 //
+// Copyright (C) 2006, 2007 Elliot Glaysher
 // Copyright (C) 2025 Serina Sakurai
 //
 // This program is free software; you can redistribute it and/or modify
@@ -24,13 +25,13 @@
 
 #include "libsiglus/siglus_machine.hpp"
 #include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/siglus_scene_renderer.hpp"
 
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
@@ -62,6 +63,14 @@ SiglusMachine::~SiglusMachine() {
 
   ResetCaptures();
   vm.reset();
+  if (system) {
+    system->text().BindGraphics({});
+    if (stage)
+      stage->Reset();
+    system->text().Reset();
+  }
+  captures.reset();
+  renderer.reset();
 }
 
 sr::Value SiglusMachine::RequestCapture(CaptureRequest request) {
@@ -154,19 +163,11 @@ void SiglusMachine::Update(std::chrono::milliseconds real_delta,
                   return true;
                 });
 
-  bool should_refresh = (screen_quakes && screen_quakes->IsActive()) ||
-                        (stage && stage->HasActiveQuakes());
   if (!time_stopped && screen_quakes)
     screen_quakes->Advance(game_delta.count());
 
   if (!time_stopped && !local_config.stage_time_stop && stage)
     stage->AdvanceQuakes(game_delta.count());
-  should_refresh |= (screen_quakes && screen_quakes->IsActive()) ||
-                    (stage && stage->HasActiveQuakes());
-
-  if (should_refresh)
-    system->graphics().ForceRefresh();
-
   if (frame_action_manager)
     frame_action_manager->AdvanceAndDispatch(real_delta, game_delta);
   if (update_wipe_after_frame_actions)
@@ -214,12 +215,14 @@ void SiglusMachine::Run() {
     system->text().ExecuteTextSystem();
     system->sound().ExecuteSoundSystem();
 
-    auto& graphics = system->graphics();
-    graphics.ExecuteGraphicsSystem();
+    if (renderer)
+      renderer->ExecuteFrame();
 
     if (vm->IsStopRequested() || system->IsQuitRequested())
       break;
-    RenderFrame(!capture_frame || CaptureDisplayEnabled());
+
+    if (!capture_frame || CaptureDisplayEnabled())
+      RenderFrame();
     if (capture_frame)
       ProcessCaptureFrame();
 
@@ -235,20 +238,47 @@ void SiglusMachine::Run() {
     vm->RequestStop();
 }
 
+void SiglusMachine::BindGraphics() {
+  window_title->LoadSiglus(*gameexe);
+  ResetGraphics();
+  system->text().BindGraphics(
+      {.images = images,
+       .interface_hidden = [this] { return is_interface_hidden(); },
+       .toggle_interface = [this] { ToggleInterfaceHidden(); },
+       .renderer = renderer});
+}
+
+void SiglusMachine::ResetGraphics() {
+  interface_hidden_ = false;
+  if (window_title) {
+    window_title->base_title_.clear();
+    window_title->subtitle_.clear();
+    window_title->subtitle_visible_ = false;
+    window_title->Apply();
+  }
+  if (presenter)
+    presenter->backend()->ShowSystemCursor(true);
+}
+
+void SiglusMachine::RenderFrame() {
+  if (const auto custom = GetFrameRenderer())
+    presenter->RenderFrame({}, custom);
+  else {
+    presenter->RenderFrame({}, [this] {
+      if (renderer)
+        renderer->RenderScene();
+    });
+  }
+}
+
+std::shared_ptr<SDLSurface> SiglusMachine::RenderToSurface() {
+  return presenter->RenderToSurface([this] { renderer->RenderScene(); });
+}
+
 std::function<void()> SiglusMachine::GetFrameRenderer() const {
   if (const auto frame = movie_frame.lock())
     return frame->draw;
   return {};
-}
-
-void SiglusMachine::RenderFrame(bool display) {
-  if (!display)
-    return;
-  auto& graphics = system->graphics();
-  const auto draw = GetFrameRenderer();
-  graphics.RenderFrame({}, draw);
-  if (!draw)
-    graphics.AcknowledgeRefresh();
 }
 
 std::shared_ptr<Counter> SiglusMachine::CreateCounter() {
@@ -327,7 +357,6 @@ void SiglusMachine::FinishSelection(std::shared_ptr<Selection> s) {
   }
 
   system->text().set_in_selection_mode(false);
-  system->graphics().ForceRefresh();
 }
 
 void SiglusMachine::CancelSelection(std::shared_ptr<Selection> s) {
@@ -363,11 +392,10 @@ void SiglusMachine::UpdateSelection(int ms) {
     return;
   }
 
-  const bool was_visible = s->Visible();
   s->Advance(ms);
   if (s->phase() == Selection::Phase::Waiting && !s->open_hook_done) {
     if (s->request.capture)
-      s->capture = system->graphics().RenderToSurface();
+      s->capture = RenderToSurface();
 
     // Mark before entering script code so a reentrant update cannot run the
     // capture/start hook twice.
@@ -388,9 +416,6 @@ void SiglusMachine::UpdateSelection(int ms) {
         break;
       }
   }
-
-  if (was_visible || s->Visible())
-    system->graphics().ForceRefresh();
 
   // A wipe can replace the stage's reference while its snapshot remains
   // visible. The displaced, undecided session must stop owning input.
@@ -420,8 +445,6 @@ void SiglusMachine::UpdateSelection(int ms) {
         "Invalid registered selection choice {} for scene {}, kidoku {}",
         *choice, s->request.scene, s->request.kidoku));
   OnSelectionChosen(*s);
-  if (system)
-    system->graphics().ForceRefresh();
 }
 
 }  // namespace libsiglus

@@ -36,7 +36,6 @@
 #include "long_operations/wait_for_selection.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/text_page.hpp"
@@ -163,6 +162,7 @@ std::shared_ptr<Selection> Build(SiglusMachine& machine,
                  : text.GetCurrentMwnd();
   }
   auto s = BuildSelection(*machine.system, std::move(request), config,
+                          machine.images, machine.presenter->screen_size(),
                           std::move(window));
   if (buttons)
     s->sorter = {machine.stage ? machine.stage->mwnd_order : 1, 0};
@@ -191,8 +191,6 @@ struct SelEventListener : public EventListener {
       sound(0);
     if (feedback.choice)
       machine.OnSelectionChosen(*s);
-    if (machine.system)
-      machine.system->graphics().ForceRefresh();
   }
 };
 
@@ -261,7 +259,6 @@ void BindSelection(SiglusMachine& rt) {
               Build(rt, std::move(request), /*mwnd=*/nullptr);
           state->prepared_ = sel;
           rt.stage->selection[kLayerFg] = sel;
-          rt.system->graphics().ForceRefresh();
         },
         sb::vararg);
   }

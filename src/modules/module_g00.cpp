@@ -26,22 +26,37 @@
 
 #include "modules/module_g00.hpp"
 
+#include <stdexcept>
 #include <string>
 
-#include "machine/general_operations.hpp"
-#include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
+#include "core/image_resources.hpp"
+#include "machine/rlmachine.hpp"
+#include "machine/rloperation.hpp"
 
 struct g00Preload : public RLOpcode<IntConstant_T, StrConstant_T> {
-  void operator()(RLMachine& machine, int slot, string name) {
-    machine.GetSystem().graphics().PreloadG00(slot, name);
+  void operator()(RLMachine& machine, int slot, std::string name) override {
+    if (slot < 0 || slot >= 256)
+      throw std::out_of_range("Image preload slot out of range");
+    machine.image_resources()->PreloadImage(slot, name);
+  }
+};
+
+struct g00Clear : public RLOpcode<IntConstant_T> {
+  void operator()(RLMachine& machine, int slot) override {
+    if (slot < 0 || slot >= 256)
+      throw std::out_of_range("Image preload slot out of range");
+    machine.image_resources()->ClearPreloadedImage(slot);
+  }
+};
+
+struct g00ClearAll : public RLOpcode<> {
+  void operator()(RLMachine& machine) override {
+    machine.image_resources()->ClearPreloadedImages();
   }
 };
 
 G00Module::G00Module() : RLModule("G00", 1, 14) {
-  AddOpcode(1000, 0, "g00Preload", new g00Preload);
-  AddOpcode(1001, 0, "g00Clear",
-            CallFunction(&GraphicsSystem::ClearPreloadedG00));
-  AddOpcode(1002, 0, "g00ClearAll",
-            CallFunction(&GraphicsSystem::ClearAllPreloadedG00));
+  AddOpcode(1000, 0, "g00Preload", std::make_shared<g00Preload>());
+  AddOpcode(1001, 0, "g00Clear", std::make_shared<g00Clear>());
+  AddOpcode(1002, 0, "g00ClearAll", std::make_shared<g00ClearAll>());
 }

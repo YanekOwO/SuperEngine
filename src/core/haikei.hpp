@@ -36,6 +36,7 @@
 #include <utility>
 
 class SDLSurface;
+class ImageResources;
 
 // Which type of mutually exclusive background should we display?
 enum GraphicsBackgroundType { BACKGROUND_DC0, BACKGROUND_HIK };
@@ -46,12 +47,9 @@ class Haikei {
  public:
   using SurfaceFactory =
       std::function<std::shared_ptr<SDLSurface>(Size screen_size)>;
-  using SurfaceLoader =
-      std::function<std::shared_ptr<SDLSurface>(const std::string& name)>;
-
   Haikei(Size screen_size,
          SurfaceFactory surface_factory,
-         SurfaceLoader surface_loader,
+         std::shared_ptr<ImageResources> images,
          std::shared_ptr<Clock> clock);
   ~Haikei();
 
@@ -91,7 +89,7 @@ class Haikei {
 
   Size screen_size_;
   SurfaceFactory surface_factory_;
-  SurfaceLoader surface_loader_;
+  std::shared_ptr<ImageResources> images_;
   std::shared_ptr<Clock> clock_;
 
   GraphicsBackgroundType background_type_;

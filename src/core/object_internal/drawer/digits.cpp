@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -24,30 +21,30 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "core/object_internal/drawer/digits.hpp"
+
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/export.hpp>
 
-#include "core/object_internal/drawer/digits.hpp"
+#include "core/colour.hpp"
+#include "core/object.hpp"
+#include "systems/sdl/sdl_surface.hpp"
 
 #include <algorithm>
 #include <iostream>
 
-#include "core/colour.hpp"
-#include "core/object.hpp"
-#include "systems/graphics_system.hpp"
-#include "systems/system.hpp"
-#include "systems/sdl/sdl_surface.hpp"
+DigitsGraphicsObject::DigitsGraphicsObject(
+    std::shared_ptr<ImageResources> images)
+    : images_(std::move(images)), value_(0) {}
 
-DigitsGraphicsObject::DigitsGraphicsObject(System& system)
-    : system_(system), value_(0) {}
-
-DigitsGraphicsObject::DigitsGraphicsObject(System& system,
-                                           const std::string& font)
-    : system_(system),
+DigitsGraphicsObject::DigitsGraphicsObject(
+    std::shared_ptr<ImageResources> images,
+    const std::string& font)
+    : images_(std::move(images)),
       value_(0),
       font_name_(font),
-      font_(system.graphics().GetSurfaceNamed(font)) {}
+      font_(images_->GetSurfaceNamed(font)) {}
 
 DigitsGraphicsObject::~DigitsGraphicsObject() {}
 
@@ -153,7 +150,7 @@ void DigitsGraphicsObject::load(Archive& ar, unsigned int version) {
 
   value_ = 0;
   surface_.reset();
-  font_ = system_.graphics().GetSurfaceNamed(font_name_);
+  font_ = images_->GetSurfaceNamed(font_name_);
 }
 
 template <class Archive>

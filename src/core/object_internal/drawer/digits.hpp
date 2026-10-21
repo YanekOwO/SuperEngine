@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -28,11 +25,13 @@
 
 #include <boost/serialization/split_member.hpp>
 
+#include "core/image_resources.hpp"
+#include "core/object_internal/objdrawer.hpp"
+#include "machine/rlmachine.hpp"
+#include "machine/serialization.hpp"
+
 #include <memory>
 #include <string>
-
-#include "machine/serialization.hpp"
-#include "core/object_internal/objdrawer.hpp"
 
 class GraphicsObject;
 class SDLSurface;
@@ -40,8 +39,9 @@ class System;
 
 class DigitsGraphicsObject : public GraphicsObjectData {
  public:
-  explicit DigitsGraphicsObject(System& system);
-  DigitsGraphicsObject(System& system, const std::string& font);
+  explicit DigitsGraphicsObject(std::shared_ptr<ImageResources> images);
+  DigitsGraphicsObject(std::shared_ptr<ImageResources> images,
+                       const std::string& font);
   virtual ~DigitsGraphicsObject();
 
   virtual int PixelWidth(const GraphicsObject& rendering_properties) override;
@@ -57,7 +57,7 @@ class DigitsGraphicsObject : public GraphicsObjectData {
   void UpdateSurface(const GraphicsObject& rp);
   bool NeedsUpdate(const GraphicsObject& rendering_properties);
 
-  System& system_;
+  std::shared_ptr<ImageResources> images_;
 
   // The actual numerical value to display.
   int value_;
@@ -89,7 +89,8 @@ template <class Archive>
 inline void load_construct_data(Archive& ar,
                                 DigitsGraphicsObject* t,
                                 const unsigned int file_version) {
-  ::new (t) DigitsGraphicsObject(Serialization::currentSystem());
+  ::new (t)
+      DigitsGraphicsObject(Serialization::currentMachine().image_resources());
 }
 }  // namespace serialization
 }  // namespace boost

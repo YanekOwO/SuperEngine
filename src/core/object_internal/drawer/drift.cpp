@@ -35,7 +35,6 @@
 #include "core/rect.hpp"
 #include "log/domain_logger.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
@@ -61,19 +60,32 @@ double ScaleAmplitude(int amplitude) {
 
 static DomainLogger logger("DriftGraphicsObject");
 
-DriftGraphicsObject::DriftGraphicsObject(System& system)
-    : system_(system), filename_(), surface_(nullptr), last_rendered_time_(0) {}
+DriftGraphicsObject::DriftGraphicsObject(std::shared_ptr<ImageResources> images,
+                                         std::shared_ptr<Clock> clock,
+                                         Rect screen_rect)
+    : images_(std::move(images)),
+      clock_(std::move(clock)),
+      screen_rect_(screen_rect),
+      filename_(),
+      surface_(nullptr),
+      last_rendered_time_(0) {}
 
 DriftGraphicsObject::DriftGraphicsObject(const DriftGraphicsObject& obj)
     : GraphicsObjectData(obj),
-      system_(obj.system_),
+      images_(obj.images_),
+      clock_(obj.clock_),
+      screen_rect_(obj.screen_rect_),
       filename_(obj.filename_),
       surface_(obj.surface_),
       last_rendered_time_(0) {}
 
-DriftGraphicsObject::DriftGraphicsObject(System& system,
+DriftGraphicsObject::DriftGraphicsObject(std::shared_ptr<ImageResources> images,
+                                         std::shared_ptr<Clock> clock,
+                                         Rect screen_rect,
                                          const std::string& filename)
-    : system_(system),
+    : images_(std::move(images)),
+      clock_(std::move(clock)),
+      screen_rect_(screen_rect),
       filename_(filename),
       surface_(nullptr),
       last_rendered_time_(0) {
@@ -97,7 +109,7 @@ void DriftGraphicsObject::Render(const GraphicsObject& go,
   if (!surface)
     return;
 
-  int current_time = system_.event().GetTicks();
+  int current_time = static_cast<int>(clock_->GetTicks().count());
   last_rendered_time_ = current_time;
 
   size_t count = param.GetDriftParticleCount();
@@ -113,7 +125,7 @@ void DriftGraphicsObject::Render(const GraphicsObject& go,
 
   Rect bounding_box = param.drift.drift_area;
   if (bounding_box.x() == -1) {
-    bounding_box = system_.graphics().screen_rect();
+    bounding_box = screen_rect_;
   }
 
   double scaled_amplitude =
@@ -216,7 +228,7 @@ std::shared_ptr<const SDLSurface> DriftGraphicsObject::CurrentSurface(
 }
 
 void DriftGraphicsObject::LoadFile() {
-  surface_ = system_.graphics().GetSurfaceNamed(filename_);
+  surface_ = images_->GetSurfaceNamed(filename_);
 }
 
 template <class Archive>

@@ -38,7 +38,6 @@
 class glFrameBuffer;
 class ScreenCanvas;
 struct SDL_Surface;
-class GraphicsSystem;
 class GraphicsObject;
 class glTexture;
 
@@ -174,8 +173,8 @@ class SDLSurface {
   std::vector<TextureRecord> GetTextureArray() const;
 
  private:
-  // Called after each change to surface_. Marks the texture as
-  // invalid and notifies the active GraphicsSystem when appropriate.
+  // Called after each change to surface_. Marks the texture as invalid and
+  // accumulates the area that needs to be uploaded again.
   void markWrittenTo(const Rect& written_rect);
 
   // Makes sure that texture_ is a valid object and that it's

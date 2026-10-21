@@ -32,9 +32,14 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/image_resources.hpp"
+#include "utilities/clock.hpp"
 
 #include "core/object_internal/objdrawer.hpp"
+#include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
+#include "systems/event_system.hpp"
+#include "systems/system.hpp"
 
 class GraphicsObject;
 class SDLSurface;
@@ -52,8 +57,13 @@ class System;
 // now.
 class DriftGraphicsObject : public GraphicsObjectData {
  public:
-  explicit DriftGraphicsObject(System& system);
-  DriftGraphicsObject(System& system, const std::string& filename);
+  DriftGraphicsObject(std::shared_ptr<ImageResources> images,
+                      std::shared_ptr<Clock> clock,
+                      Rect screen_rect);
+  DriftGraphicsObject(std::shared_ptr<ImageResources> images,
+                      std::shared_ptr<Clock> clock,
+                      Rect screen_rect,
+                      const std::string& filename);
   DriftGraphicsObject(const DriftGraphicsObject& system);
   virtual ~DriftGraphicsObject();
 
@@ -87,7 +97,9 @@ class DriftGraphicsObject : public GraphicsObjectData {
   void LoadFile();
 
   // Current machine context.
-  System& system_;
+  std::shared_ptr<ImageResources> images_;
+  std::shared_ptr<Clock> clock_;
+  Rect screen_rect_;
 
   // The name of the graphics file that was loaded.
   std::string filename_;
@@ -121,7 +133,10 @@ template <class Archive>
 inline void load_construct_data(Archive& ar,
                                 DriftGraphicsObject* t,
                                 const unsigned int file_version) {
-  ::new (t) DriftGraphicsObject(Serialization::currentSystem());
+  ::new (t) DriftGraphicsObject(
+      Serialization::currentMachine().image_resources(),
+      Serialization::currentSystem().event().GetClock(),
+      Serialization::currentMachine().presenter().screen_rect());
 }
 }  // namespace serialization
 }  // namespace boost

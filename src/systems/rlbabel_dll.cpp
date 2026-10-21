@@ -527,7 +527,7 @@ int RlBabelDLL::StartNewScreen(const std::string& cnam) {
 
 int RlBabelDLL::SetCurrentWindowName(StringReferenceIterator buffer) {
   std::string name = cp932toUTF8(*buffer, machine_.GetTextEncoding());
-  name = machine_.GetSystem().text().InterpretName(name);
+  name = machine_.name_mapping().Map(name);
 
   // Haeleth's implementation of SetCurrentWindowName in rlBabel goes through
   // some monstrous hacks, including temporarily rewriting the bytecode at the

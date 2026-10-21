@@ -33,8 +33,6 @@
 #include <utility>
 #include <vector>
 
-#include "systems/igraphics_backend.hpp"
-
 class Gameexe;
 class Platform;
 class RLMachine;
@@ -56,9 +54,6 @@ class RLVMInstance {
 
   void SetStartScene(int scene_id) { start_scene_ = scene_id; }
   void SetCustomFont(std::string font) { custom_font_ = std::move(font); }
-  void SetDebugFrameDumpConfig(const DebugFrameDumpConfig& config) {
-    debug_frame_dump_config_ = config;
-  }
   void SetFastForward(bool fast_forward) { fast_forward_ = fast_forward; }
 
   void SetPlatformImplementor(std::shared_ptr<IPlatformImplementor> impl);
@@ -90,8 +85,6 @@ class RLVMInstance {
 
   // Which SEEN# we should start execution from
   std::optional<int> start_scene_;
-
-  DebugFrameDumpConfig debug_frame_dump_config_;
 
   bool fast_forward_ = false;
 

@@ -31,7 +31,6 @@
 #include "machine/general_operations.hpp"
 #include "machine/rlmachine.hpp"
 #include "modules/jump.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -152,7 +151,7 @@ EventLoopModule::EventLoopModule() : RLModule("EventLoop", 0, 4) {
   AddOpcode(371, 2, "rlm_wav_play", new rlm_wav_play_2);
 
   AddOpcode(1000, 0, "ShowBackground",
-            CallFunction(&GraphicsSystem::ToggleInterfaceHidden));
+            CallFunction(&RLMachine::ToggleInterfaceHidden));
   AddOpcode(1100, 0, "SetSkipMode",
             CallFunctionWith(&TextSystem::SetSkipMode, 1));
   AddOpcode(1101, 0, "ClearSkipMode",

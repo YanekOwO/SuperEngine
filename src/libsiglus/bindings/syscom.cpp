@@ -33,7 +33,6 @@
 #include "libsiglus/bindings/util.hpp"
 #include "platforms/implementor.hpp"
 #include "srbind/srbind.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -265,8 +264,9 @@ void BindSyscom(SiglusMachine& runtime) {
 
   m.def(
       "return_to_menu",
-      [sys, stage, loader, gameexe, &input = runtime.input_event_listener,
-       &mask_list = runtime.mask_list, &platform = runtime.platform_implementor,
+      [sys, stage, loader, gameexe, &runtime,
+       &input = runtime.input_event_listener, &mask_list = runtime.mask_list,
+       &platform = runtime.platform_implementor,
        &reset_local_memory = runtime.reset_local_memory,
        &frame_actions = runtime.frame_action_manager,
        &finish_active_wipe = runtime.finish_active_wipe](
@@ -295,7 +295,7 @@ void BindSyscom(SiglusMachine& runtime) {
         if (finish_active_wipe && *finish_active_wipe)
           (*finish_active_wipe)();
 
-        auto restart = [&vm, sys, stage, &input, &mask_list,
+        auto restart = [&vm, sys, stage, &runtime, &input, &mask_list,
                         &reset_local_memory, &frame_actions,
                         &finish_active_wipe, entry,
                         preserve = params.preserve_backlog]() mutable {
@@ -312,9 +312,9 @@ void BindSyscom(SiglusMachine& runtime) {
           if (mask_list)
             mask_list->Reset();
 
+          runtime.ResetGraphics();
           if (preserve) {
             sys->sound().Reset();
-            sys->graphics().Reset();
             sys->EnableSyscom();
           } else {
             sys->Reset();

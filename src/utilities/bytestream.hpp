@@ -26,8 +26,6 @@
 
 #include "utilities/byte_inserter.hpp"
 
-#include <vector>
-
 /* wrapper around ByteInserter */
 class oBytestream {
  public:

@@ -42,7 +42,6 @@
 #include <string>
 #include <vector>
 
-class Gameexe;
 class MemoryHandle;
 class Point;
 class RGBColour;
@@ -58,9 +57,34 @@ class TextWaku;
 class GraphicsObject;
 class ITextSystem;
 class IFont;
+class ISceneRenderer;
+class ImageResources;
 
 class TextSystem final : public EventListener {
  public:
+  struct GraphicsHooks {
+    std::shared_ptr<ImageResources> images;
+    std::function<std::shared_ptr<SDLSurface>()> load_emoji;
+    std::function<void()> request_refresh;
+    std::function<bool()> interface_hidden;
+    std::function<void()> toggle_interface;
+    std::shared_ptr<ISceneRenderer> renderer;
+  };
+
+ private:
+  GraphicsHooks graphics_hooks_;
+
+ public:
+  void BindGraphics(GraphicsHooks hooks) { graphics_hooks_ = std::move(hooks); }
+  std::shared_ptr<SDLSurface> LoadImage(const std::string& name) const;
+  std::shared_ptr<SDLSurface> LoadEmoji() const;
+  void RequestRefresh() const;
+  bool IsInterfaceHidden() const;
+  void ToggleInterfaceHidden();
+  std::shared_ptr<ISceneRenderer> GetSceneRenderer() const {
+    return graphics_hooks_.renderer;
+  }
+
   enum class MwndButtonSound { Hit, Push, Decide };
 
   struct MwndActionStatus {
@@ -83,7 +107,6 @@ class TextSystem final : public EventListener {
  public:
   TextSystem(System& system,
              Stage& stage,
-             Gameexe& gexe,
              std::unique_ptr<ITextSystem> impl,
              MwndConfig mwnd_config);
   virtual ~TextSystem();
@@ -179,9 +202,6 @@ class TextSystem final : public EventListener {
   bool IsReadingBacklog() const;
   void StopReadingBacklog();
 
-  // Performs #NAMAE replacement; used in the English Edition of Clannad.
-  std::string InterpretName(const std::string& utf8name);
-
   void SetKeyCursor(int new_cursor);
 
   // Returns the key cursor index. (or -1 if no key cursor).
@@ -271,10 +291,6 @@ class TextSystem final : public EventListener {
   void CollectCurrentPages();
   PageSet current_pageset_;
 
-  // Name mappings. Clannad English Edition maps name boxes from the key to the
-  // value.
-  std::map<std::string, std::string> namae_mapping_;
-
   // Previous Text Pages. The TextSystem owns the list of previous
   // pages because multiple windows can be displayed in one text page.
   std::list<PageSet> previous_page_sets_;
@@ -335,9 +351,3 @@ class TextSystem final : public EventListener {
 
   BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
-
-// Name parser. Takes a raw, local machine encoded string and replaces name
-// variable placeholders with the names from Memory. This function assumes that
-// text is in CP932 encoding, and will need to be generalized when we try to
-// support other hacks on top of cp932.
-std::string parseNames(MemoryHandle& memory, const std::string& input);

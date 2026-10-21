@@ -39,7 +39,6 @@
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/rlop_store.hpp"
 #include "modules/module_obj.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
 // -----------------------------------------------------------------------
@@ -50,7 +49,7 @@ struct objWaitAll : public RLOpcode<> {
   static bool WaitUntilDone(RLMachine& machine) {
     // Clannad puts us in DrawManual() right before calling us so we force
     // refreshes.
-    machine.GetSystem().graphics().ForceRefresh();
+    machine.ForceRefresh();
     auto& fgobj = machine.stage().objects[kLayerFg];
     bool animations_playing = false;
     for (const auto& object : fgobj) {

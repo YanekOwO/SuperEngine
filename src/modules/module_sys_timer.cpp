@@ -40,7 +40,6 @@
 #include "machine/rloperation/default_value_t.hpp"
 #include "machine/rloperation/rlop_store.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 
 #include <chrono>

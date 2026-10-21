@@ -39,7 +39,6 @@ class PerformAfterLongOperationDecorator : public LongOperation {
   ~PerformAfterLongOperationDecorator() override = default;
   void OnEvent(std::shared_ptr<Event> event) override;
   Task<int> Run(WaitContext& waits) override;
-  FrameRenderer GetFrameRenderer() override;
 
  private:
   virtual void PerformAfterLongOperation(RLMachine& machine) = 0;

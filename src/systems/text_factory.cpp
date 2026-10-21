@@ -26,7 +26,6 @@
 #include "core/object.hpp"
 #include "core/object_internal/drawer/file.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_waku_normal.hpp"
@@ -99,7 +98,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
         continue;
       auto object = waku->TouchButton(button.slot_id);
       object->SetDrawer(std::make_unique<GraphicsObjectOfFile>(
-          system.graphics().GetSurfaceNamed(button.file)));
+          system.text().LoadImage(button.file)));
       object->SetFilePath(button.file);
       object->Param().SetVisible(true);
       object->Param().SetButtonOpts(button.action_no, button.se_no, 0, 0);
@@ -107,7 +106,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
       object->Param().button.config = button;
     }
   }
-  waku->renderer_ = system.graphics().GetSceneRenderer();
+  waku->renderer_ = system.text().GetSceneRenderer();
 
   return waku;
 }
@@ -119,13 +118,12 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
   using namespace std::chrono_literals;
   auto result = std::make_unique<TextWakuNormal>();
   result->SetFilterRendering(config.filter_rendering);
-  GraphicsSystem& graphics = system.graphics();
   TextSystem& text = system.text();
 
   if (!config.main_file.empty())
-    result->SetWakuMain(graphics.GetSurfaceNamed(config.main_file));
+    result->SetWakuMain(text.LoadImage(config.main_file));
   if (!config.filter_file.empty())
-    result->SetWakuBacking(graphics.GetSurfaceNamed(config.filter_file));
+    result->SetWakuBacking(text.LoadImage(config.filter_file));
   result->SetFilterConfig(config.filter_margin, config.filter_colour,
                           config.use_config_colour, config.use_config_opacity);
   result->SetRenderFilter(config.draw_filter);
@@ -133,9 +131,9 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
   const MwndConfig::Icon* page_icon = config_.GetIcon(config.page_icon_no);
   std::shared_ptr<SDLSurface> key_surface, page_surface;
   if (key_icon && !key_icon->file.empty())
-    key_surface = graphics.GetSurfaceNamed(key_icon->file);
+    key_surface = text.LoadImage(key_icon->file);
   if (page_icon && !page_icon->file.empty())
-    page_surface = graphics.GetSurfaceNamed(page_icon->file);
+    page_surface = text.LoadImage(page_icon->file);
   result->SetWaitIcons(key_surface, key_icon ? *key_icon : MwndConfig::Icon{},
                        page_surface,
                        page_icon ? *page_icon : MwndConfig::Icon{},
@@ -150,7 +148,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
     std::shared_ptr<SDLSurface> surface;
     Size surface_size = button_config.explicit_size.value_or(Size());
     if (!button_config.file.empty()) {
-      surface = graphics.GetSurfaceNamed(button_config.file);
+      surface = text.LoadImage(button_config.file);
       if (surface && !button_config.explicit_size) {
         const int pattern =
             std::clamp(button_config.cut_no, 0,
@@ -216,12 +214,12 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuType4(
   auto result = std::make_unique<TextWakuType4>();
   result->SetFilterRendering(config.filter_rendering);
   if (!config.main_file.empty())
-    result->SetMainWaku(system.graphics().GetSurfaceNamed(config.main_file));
+    result->SetMainWaku(system.text().LoadImage(config.main_file));
   result->SetArea(config.filter_margin.y(), config.filter_margin.y2(),
                   config.filter_margin.x(), config.filter_margin.x2());
   result->SetFilter(config.filter_file.empty()
                         ? nullptr
-                        : system.graphics().GetSurfaceNamed(config.filter_file),
+                        : system.text().LoadImage(config.filter_file),
                     config.filter_colour, config.use_config_colour,
                     config.use_config_opacity);
   auto overlay_base = CreateWakuNormal(system, window, config);

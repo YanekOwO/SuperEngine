@@ -35,7 +35,6 @@
 #include "core/stage.hpp"
 #include "libreallive/parser.hpp"
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/exception.hpp"
@@ -52,10 +51,6 @@ EventSystem& GetSystemObj(RLMachine& machine) {
   return machine.GetSystem().event();
 }
 
-template <>
-GraphicsSystem& GetSystemObj(RLMachine& machine) {
-  return machine.GetSystem().graphics();
-}
 
 template <>
 Haikei& GetSystemObj(RLMachine& machine) {
@@ -79,7 +74,7 @@ SoundSystem& GetSystemObj(RLMachine& machine) {
 
 template <>
 CGMTable& GetSystemObj(RLMachine& machine) {
-  return machine.GetSystem().graphics().cg_table();
+  return machine.cg_table();
 }
 
 template <>
@@ -167,8 +162,7 @@ void UndefinedFunction::operator()(RLMachine& machine,
 
 // Template instantiations.
 template RLOperation* CallFunction<EventSystem>(void (EventSystem::*)(int));
-template RLOperation* CallFunction<GraphicsSystem>(
-    void (GraphicsSystem::*)(int));
+template RLOperation* CallFunction<RLMachine>(void (RLMachine::*)(int));
 template RLOperation* CallFunction<Haikei>(void (Haikei::*)(int));
 template RLOperation* CallFunction<Haikei>(void (Haikei::*)());
 template RLOperation* CallFunction<Stage>(void (Stage::*)(int));
@@ -178,8 +172,6 @@ template RLOperation* CallFunction<System>(void (System::*)(int));
 template RLOperation* CallFunction<TextSystem>(void (TextSystem::*)(int));
 template RLOperation* ReturnIntValue<EventSystem, int>(int (EventSystem::*)()
                                                            const);
-template RLOperation* ReturnIntValue<GraphicsSystem, int>(
-    int (GraphicsSystem::*)() const);
 template RLOperation* ReturnIntValue<RLMachine, int>(int (RLMachine::*)()
                                                          const);
 template RLOperation* ReturnIntValue<SoundSystem, int>(int (SoundSystem::*)()

@@ -34,7 +34,6 @@
 #include "log/domain_logger.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/object_settings.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
@@ -66,14 +65,14 @@ void rlSceneRenderer::ExecuteFrame() {
   last_quake_tick_ = now;
   if (GetScreenOrigin() != previous_origin ||
       (was_active && !stage.HasActiveQuakes())) {
-    machine_.GetSystem().graphics().ForceRefresh();
+    machine_.ForceRefresh();
   }
 }
 
 void rlSceneRenderer::QueueShake(std::vector<QuakeState::OffsetFrame> frames) {
   machine_.stage().GetQuake(kLayerFg, 0)->QueueOffsets(frames);
   last_quake_tick_ = machine_.GetSystem().event().GetTicks();
-  machine_.GetSystem().graphics().ForceRefresh();
+  machine_.ForceRefresh();
 }
 
 Point rlSceneRenderer::GetScreenOrigin() const {
@@ -87,21 +86,21 @@ void rlSceneRenderer::RenderScene() {
   Haikei& haikei = machine_.haikei();
   Stage& stage = machine_.stage();
   System& system = machine_.GetSystem();
-  GraphicsSystem& graphics = system.graphics();
 
   // Render background
   switch (haikei.background_type()) {
     case BACKGROUND_DC0: {
-      haikei.GetDC(0)->RenderToScreen(graphics.screen_rect(),
-                                      graphics.screen_rect(), 255);
+      haikei.GetDC(0)->RenderToScreen(machine_.presenter().screen_rect(),
+                                      machine_.presenter().screen_rect(), 255);
       break;
     }
     case BACKGROUND_HIK: {
       if (HIKRenderer* renderer = haikei.hik_renderer()) {
         renderer->Render();
       } else {
-        haikei.GetHaikei()->RenderToScreen(graphics.screen_rect(),
-                                           graphics.screen_rect(), 255);
+        haikei.GetHaikei()->RenderToScreen(machine_.presenter().screen_rect(),
+                                           machine_.presenter().screen_rect(),
+                                           255);
       }
     }
   }
@@ -124,10 +123,11 @@ void rlSceneRenderer::RenderScene() {
   }
 
   // Render text
-  if (!graphics.is_interface_hidden())
+  if (!machine_.is_interface_hidden())
     system.text().Render();
   if (auto selection = stage.selection[kLayerFg])
-    SelState::Render(*selection, system);
+    SelState::Render(*selection, system, machine_.presenter().screen_size(),
+                     machine_.is_interface_hidden());
 }
 
 void rlSceneRenderer::RenderObject(GraphicsObject& root,
@@ -159,9 +159,9 @@ void rlSceneRenderer::RenderObject(GraphicsObject& root,
 
 bool rlSceneRenderer::ShouldRenderObject(size_t obj_number,
                                          const GraphicsObject&) {
-  GraphicsSystem& graphics = machine_.GetSystem().graphics();
   const ObjectSettings& settings =
-      graphics.GetObjectSettings(static_cast<int>(obj_number));
+      machine_.GetObjectSettings().GetObjectSettingsFor(
+          static_cast<int>(obj_number));
   const auto& display_flags = machine_.GetGlobalConfig().object_disp_flag;
   if (settings.obj_on_off == 1 && display_flags.at(0) == 0)
     return false;
@@ -169,7 +169,7 @@ bool rlSceneRenderer::ShouldRenderObject(size_t obj_number,
     return false;
   if (settings.weather_on_off && display_flags.at(2) == 0)
     return false;
-  if (settings.space_key && graphics.is_interface_hidden())
+  if (settings.space_key && machine_.is_interface_hidden())
     return false;
 
   return true;

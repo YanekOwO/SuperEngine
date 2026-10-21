@@ -52,6 +52,7 @@ inline constexpr char LOCAL_FORMAT_SIGNATURE[] = "RLVM_LOCAL_GAME_CONFIG";
 extern RLMachine* g_current_machine;
 
 System& currentSystem();
+RLMachine& currentMachine();
 
 void saveGlobalMemory(RLMachine& machine);
 void saveGlobalMemoryTo(std::ostream& oss, RLMachine& machine);

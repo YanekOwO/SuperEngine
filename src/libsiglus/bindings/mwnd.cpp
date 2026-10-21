@@ -33,7 +33,6 @@
 #include "long_operations/siglus_wait.hpp"
 #include "long_operations/wait_for_selection.hpp"
 #include "srbind/srbind.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_factory.hpp"
@@ -416,7 +415,8 @@ void BindMwnd(SiglusMachine& runtime) {
   });
   mwnd.def(
       "set_face",
-      [get, sys](MwndHandle* h, std::vector<sr::Value> args) {
+      [get, images = runtime.images](MwndHandle* h,
+                                     std::vector<sr::Value> args) {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         if (packet.args.empty())
           return;
@@ -432,7 +432,7 @@ void BindMwnd(SiglusMachine& runtime) {
         if (file.empty())
           face->FreeOwnObjectData();
         else
-          face->ReplaceFileDrawer(sys->graphics(), file);
+          face->ReplaceFileDrawer(images, file);
       },
       sb::vararg);
   mwnd.def(

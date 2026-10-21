@@ -29,7 +29,6 @@
 
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 
@@ -54,6 +53,8 @@ EffectLongOperation::EffectLongOperation(RLMachine& machine,
       dst_surface_(dst) {}
 
 Task<int> EffectLongOperation::Run(WaitContext& waits) {
+  auto renderer = std::make_shared<DrawCallback>([this] { DrawFrame(); });
+  machine_.SetFrameRenderer(renderer);
   while (machine_.GetSystem().event().GetTicks() - start_time_ < duration_ &&
          !machine_.GetSystem().ShouldFastForward()) {
     co_await waits.Schedule();
@@ -61,21 +62,19 @@ Task<int> EffectLongOperation::Run(WaitContext& waits) {
   co_return 0;
 }
 
-FrameRenderer EffectLongOperation::GetFrameRenderer() {
-  return [this] {
-    const Rect screen(Point(0, 0), size());
-    if (duration_ == 0) {
-      src_surface().RenderToScreen(screen, screen, 255);
-      return;
-    }
-    if (BlitOriginalImage())
-      dst_surface().RenderToScreen(screen, screen, 255);
-    const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
-    const auto current_frame = machine_.GetSystem().ShouldFastForward()
-                                   ? duration_
-                                   : std::min(elapsed, duration_);
-    PerformEffectForTime(current_frame);
-  };
+void EffectLongOperation::DrawFrame() {
+  const Rect screen(Point(0, 0), size());
+  if (duration_ == 0) {
+    src_surface().RenderToScreen(screen, screen, 255);
+    return;
+  }
+  if (BlitOriginalImage())
+    dst_surface().RenderToScreen(screen, screen, 255);
+  const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
+  const auto current_frame = machine_.GetSystem().ShouldFastForward()
+                                 ? duration_
+                                 : std::min(elapsed, duration_);
+  PerformEffectForTime(current_frame);
 }
 
 // -----------------------------------------------------------------------
@@ -102,7 +101,7 @@ void BlitAfterEffectFinishes::PerformAfterLongOperation(RLMachine& machine) {
   src_surface_->BlitToSurface(*dst_surface_, src_rect_, dest_rect_, 255);
 
   // Now force a screen refresh
-  machine.GetSystem().graphics().ForceRefresh();
+  machine.ForceRefresh();
 }
 
 }  // namespace lop

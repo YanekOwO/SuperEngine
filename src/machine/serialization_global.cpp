@@ -44,7 +44,6 @@
 #include <utility>
 
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -75,11 +74,10 @@ void saveGlobalMemoryTo(std::ostream& oss, RLMachine& machine) {
   filtered_output.push(oss);
 
   boost::archive::text_oarchive oa(filtered_output);
-  System& sys = machine.GetSystem();
 
   oa << CURRENT_GLOBAL_VERSION << std::string(GLOBAL_FORMAT_SIGNATURE)
      << machine.GetMemoryStorage().GetGlobalMemory() << machine.GetKidokus()
-     << machine.GetGlobalConfig() << sys.graphics().cg_table();
+     << machine.GetGlobalConfig() << machine.cg_table();
 }
 
 void loadGlobalMemory(RLMachine& machine) {
@@ -122,7 +120,6 @@ void loadGlobalMemoryFrom(std::istream& iss, RLMachine& machine) {
   filtered_input.push(iss);
 
   boost::archive::text_iarchive ia(filtered_input);
-  System& sys = machine.GetSystem();
   int version;
   std::string signature;
   ia >> version >> signature;
@@ -133,14 +130,14 @@ void loadGlobalMemoryFrom(std::istream& iss, RLMachine& machine) {
   KidokuTable kidokus;
   GlobalConfig config;
   // CG asset metadata is not serialized, so retain its filename mapping.
-  CGMTable cg_table = sys.graphics().cg_table();
+  CGMTable cg_table = machine.cg_table();
   ia >> global_memory >> kidokus >> config >> cg_table;
 
   machine.GetMemoryStorage().PartialReset(std::move(global_memory));
   machine.GetKidokus() = std::move(kidokus);
   machine.GetGlobalConfig() = std::move(config);
-  sys.graphics().cg_table() = std::move(cg_table);
-  sys.ApplyConfiguration();
+  machine.cg_table() = std::move(cg_table);
+  machine.ApplyConfiguration();
 }
 
 }  // namespace Serialization

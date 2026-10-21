@@ -28,14 +28,12 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
-#include <system_error>
 
 #include "log/core.hpp"
 #include "platforms/implementor.hpp"
 #include "platforms/platform_factory.hpp"
 #include "rlvm_instance.hpp"
 #include "sgvm_instance.hpp"
-#include "systems/igraphics_backend.hpp"
 #include "utilities/file.hpp"
 #include "version.h"
 
@@ -86,7 +84,6 @@ int main(int argc, char* argv[]) {
   // Declare command line options
   po::options_description opts("Options");
   opts.add_options()("help", "Produce help message")(
-      "help-debug", "Print help message for people working on rlvm")(
       "version", "Display version and license information")(
       "font", po::value<std::string>(), "Specifies TrueType font to use.")(
       "scene", po::value<int>(),
@@ -106,11 +103,6 @@ int main(int argc, char* argv[]) {
       "Run a script before the game payload (Siglus only).")(
       "engine", po::value<std::string>()->default_value("reallive"));
 
-  po::options_description debugOpts("Debug options");
-  debugOpts.add_options()(
-      "debug-frame-dump", po::value<int>(),
-      "Dump every N presented frames to ./rlvm-frame-dumps as BMP files.");
-
   // Declare the final option to be game-root
   po::options_description hidden("Hidden");
   hidden.add_options()("game-root", po::value<std::string>(),
@@ -121,7 +113,7 @@ int main(int argc, char* argv[]) {
 
   // Use these on the command line
   po::options_description commandLineOpts;
-  commandLineOpts.add(opts).add(debugOpts).add(hidden);
+  commandLineOpts.add(opts).add(hidden);
 
   po::variables_map vm;
   try {
@@ -143,11 +135,6 @@ int main(int argc, char* argv[]) {
     std::cerr << "Couldn't parse command line: " << e.what() << std::endl;
     return -1;
   }
-
-  // -----------------------------------------------------------------------
-
-  po::options_description allOpts("Allowed options");
-  allOpts.add(opts).add(debugOpts);
 
   // -----------------------------------------------------------------------
   // Process command line options
@@ -175,11 +162,6 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  if (vm.count("help-debug")) {
-    printUsage(argv[0], allOpts);
-    return 0;
-  }
-
   if (vm.count("version")) {
     printVersionInformation();
     return 0;
@@ -197,29 +179,6 @@ int main(int argc, char* argv[]) {
   if (vm.count("hook") && engine != "siglus" && engine != "Siglus") {
     std::cerr << "ERROR: --hook requires --engine siglus." << std::endl;
     return -1;
-  }
-
-  DebugFrameDumpConfig debug_frame_dump_config;
-  if (vm.count("debug-frame-dump")) {
-    int interval = vm["debug-frame-dump"].as<int>();
-    if (interval <= 0) {
-      std::cerr << "ERROR: --debug-frame-dump must be greater than zero."
-                << std::endl;
-      return -1;
-    }
-
-    debug_frame_dump_config.enabled = true;
-    debug_frame_dump_config.frame_interval = interval;
-    debug_frame_dump_config.output_dir = "rlvm-frame-dumps";
-
-    std::error_code ec;
-    fs::create_directories(debug_frame_dump_config.output_dir, ec);
-    if (ec) {
-      std::cerr << "ERROR: Could not create frame dump directory '"
-                << debug_frame_dump_config.output_dir.string()
-                << "': " << ec.message() << std::endl;
-      return -1;
-    }
   }
 
   // This is where we need platform implementor to pop up platform-specific
@@ -277,7 +236,6 @@ int main(int argc, char* argv[]) {
   if (engine == "reallive" || engine == "Reallive") {
     RLVMInstance instance;
     instance.SetPlatformImplementor(platform_impl);
-    instance.SetDebugFrameDumpConfig(debug_frame_dump_config);
     instance.SetFastForward(vm.count("fast-forward"));
 
     if (vm.count("font"))
@@ -290,7 +248,6 @@ int main(int argc, char* argv[]) {
   } else if (engine == "siglus" || engine == "Siglus") {
     SgvmInstance instance;
     instance.platform_implementor_ = platform_impl;
-    instance.debug_frame_dump_config_ = debug_frame_dump_config;
     instance.fast_forward_ = vm.count("fast-forward");
     if (vm.count("font"))
       instance.font_ = vm["font"].as<std::string>();

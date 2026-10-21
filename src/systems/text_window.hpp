@@ -36,7 +36,6 @@
 #include <utility>
 #include <vector>
 
-class GraphicsSystem;
 class Point;
 class RLMachine;
 class SDLSurface;

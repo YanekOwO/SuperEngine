@@ -27,7 +27,6 @@
 #include "machine/rlmachine.hpp"
 
 class GraphicsObject;
-class GraphicsSystem;
 class System;
 class TextSystem;
 
@@ -71,7 +70,6 @@ class WaitForGanToFinish final : public LongOperation {
  private:
   GraphicsObject& GetObject();
   RLMachine& machine_;
-  GraphicsSystem& graphics_;
   RLMachine::DCScreenUpdateMode mode_;
   int layer_;
   int parent_;

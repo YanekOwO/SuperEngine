@@ -27,7 +27,6 @@
 #include "long_operations/pause_long_operation.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/system_error.hpp"
 #include "systems/text_page.hpp"
@@ -160,7 +159,7 @@ bool TextoutLongOperation::DisplayName(RLMachine& machine) {
 
   TextSystem& text = machine.GetSystem().text();
   TextPage& page = text.GetCurrentPage();
-  name = text.InterpretName(name);
+  name = machine.name_mapping().Map(name);
   page.Name(name, current_char_);
 
   // Stop if this was the end of input

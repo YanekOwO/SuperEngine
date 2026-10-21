@@ -41,8 +41,6 @@ class LongOperation : public EventListener {
  public:
   ~LongOperation() override = default;
   virtual Task<int> Run(WaitContext& waits) = 0;
-  // Draw content only; the engine owns frame setup and presentation.
-  virtual FrameRenderer GetFrameRenderer() { return {}; }
 };
 
 }  // namespace lop

@@ -25,13 +25,13 @@
 #include "core/object.hpp"
 
 #include "core/frame_action.hpp"
+#include "core/image_resources.hpp"
 #include "core/object_internal/animator.hpp"
 #include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
 #include "log/core.hpp"
 #include "log/domain_logger.hpp"
-#include "systems/graphics_system.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -201,10 +201,13 @@ void GraphicsObject::ResetChildren(std::size_t count) {
   child_.resize(count);
 }
 
-void GraphicsObject::ReplaceFileDrawer(GraphicsSystem& graphics,
-                                       std::string filename) {
+void GraphicsObject::ReplaceFileDrawer(
+    const std::shared_ptr<ImageResources>& images,
+    std::string filename) {
   if (filename.empty())
     throw std::runtime_error("Object filename is empty");
+  if (!images)
+    throw std::invalid_argument("Object requires image resources");
   ObjectParameter params = Param();
 
   const std::size_t pos = filename.find('?');
@@ -225,14 +228,14 @@ void GraphicsObject::ReplaceFileDrawer(GraphicsSystem& graphics,
   if (IsCompositeObjectName(filename)) {
     std::vector<CompositeGraphicsObjectLayer> layers;
     for (const CompositeObjectPart& part : ParseCompositeObjectName(filename)) {
-      layers.push_back({.surface = graphics.GetSurfaceNamed(part.file_name),
+      layers.push_back({.surface = images->GetSurfaceNamed(part.file_name),
                         .offset = Point(part.x, part.y),
                         .cut_no = part.cut_no,
                         .blend_type = part.blend_type});
     }
     drawer = std::make_unique<CompositeGraphicsObject>(std::move(layers));
   } else {
-    auto surface = graphics.GetSurfaceNamed(filename);
+    auto surface = images->GetSurfaceNamed(filename);
     drawer = std::make_unique<GraphicsObjectOfFile>(surface);
   }
 

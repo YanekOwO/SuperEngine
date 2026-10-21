@@ -36,9 +36,7 @@
 #include "modules/jump.hpp"
 #include "modules/module_sys.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/event_backend.hpp"
-#include "systems/sdl/graphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sdl/sound_implementor.hpp"
 #include "systems/sdl/text_implementor.hpp"
@@ -94,22 +92,6 @@ System::System(Gameexe& gameexe,
                LocalConfig& local_config,
                GlobalConfig& global_config,
                std::shared_ptr<AssetScanner> scanner,
-               SystemOptions options)
-    : System(gameexe,
-             stage,
-             local_config,
-             global_config,
-             std::move(scanner),
-             options.engine == SystemOptions::Engine::Siglus
-                 ? MwndConfig::ParseSiglus(gameexe)
-                 : MwndConfig::ParseReallive(gameexe),
-             options) {}
-
-System::System(Gameexe& gameexe,
-               Stage& stage,
-               LocalConfig& local_config,
-               GlobalConfig& global_config,
-               std::shared_ptr<AssetScanner> scanner,
                MwndConfig mwnd_config,
                SystemOptions options)
     : gameexe_(gameexe),
@@ -120,19 +102,12 @@ System::System(Gameexe& gameexe,
       assets_(scanner),
       local_config_(local_config),
       global_config_(global_config) {
-  const Size screen_size = options.engine == SystemOptions::Engine::Siglus
-                               ? GetSiglusScreenSize(gameexe)
-                               : GetRealliveScreenSize(gameexe);
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::ostringstream ss;
     ss << "Video initialization failed: " << SDL_GetError();
     throw libreallive::Error(ss.str());
   }
   InstallShutdownSignalHandlers();
-
-  auto graphics_backend = std::make_shared<SDLGraphicsBackend>();
-  graphics_system_ = std::make_shared<GraphicsSystem>(
-      *this, gameexe, graphics_backend, screen_size);
 
   std::unique_ptr<IEventBackend> event_impl =
       std::make_unique<SDLEventBackend>();
@@ -146,12 +121,11 @@ System::System(Gameexe& gameexe,
 
   auto text_impl = std::make_unique<SDLTextImpl>();
   text_system_ = std::make_shared<TextSystem>(
-      *this, stage, gameexe, std::move(text_impl), std::move(mwnd_config));
+      *this, stage, std::move(text_impl), std::move(mwnd_config));
 
   auto sound_impl = std::make_unique<SDLSoundImpl>();
   sound_system_ = std::make_shared<SoundSystem>(*this, std::move(sound_impl));
 
-  event_system_->AddListener(graphics_system_);
   event_system_->AddListener(text_system_);
 
   event_system_->AddListener(19, rlevent_handler_);
@@ -159,7 +133,6 @@ System::System(Gameexe& gameexe,
 
 System::~System() {
   sound_system_.reset();
-  graphics_system_.reset();
   event_system_.reset();
   text_system_.reset();
 
@@ -176,16 +149,14 @@ void System::RestoreSelectionSnapshot(RLMachine& machine) {
   // System::reset() to get the black screen.
   std::shared_ptr<std::stringstream> s = previous_selection_;
   if (s) {
-    std::shared_ptr<SDLSurface> before =
-        machine.GetSystem().graphics().RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
     Size screen_size = before->GetSize();
     std::shared_ptr<SDLSurface> black_screen =
         std::make_shared<SDLSurface>(screen_size);
     black_screen->Fill(RGBAColour::Black());
 
     Serialization::loadGameFrom(*s, machine);
-    std::shared_ptr<SDLSurface> after =
-        machine.GetSystem().graphics().RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
     constexpr int duration = 250;
     machine.PushLongOperation(std::make_shared<lop::FadeEffect>(
@@ -328,7 +299,7 @@ void System::InvokeSyscom(RLMachine& machine, int syscom) {
       machine.Halt();
       break;
     case SYSCOM_SHOW_BACKGROUND:
-      graphics().ToggleInterfaceHidden();
+      machine.ToggleInterfaceHidden();
       break;
     case SYSCOM_HIDE_MENU:
       // Do nothing. The menu will be hidden on its own.
@@ -347,12 +318,10 @@ void System::Reset() {
   previous_selection_.reset();
 
   sound().Reset();
-  graphics().Reset();
   text().Reset();
 }
 
 void System::ApplyConfiguration() {
-  graphics().ApplyConfiguration();
   text().ApplyConfiguration();
   sound().ApplyConfiguration();
 }

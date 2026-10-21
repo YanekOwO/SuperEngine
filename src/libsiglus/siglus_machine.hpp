@@ -30,13 +30,16 @@
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
+#include "core/image_resources.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
 #include "core/quake.hpp"
 #include "core/selection.hpp"
 #include "core/stage.hpp"
+#include "core/window_title.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "srbind/srbind.hpp"
+#include "systems/frame_presenter.hpp"
 #include "systems/system.hpp"
 #include "vm/value.hpp"
 
@@ -94,6 +97,15 @@ struct SiglusMachine {
 
   std::unique_ptr<Stage> stage;
   std::unique_ptr<System> system;
+  std::unique_ptr<FramePresenter> presenter;
+  std::shared_ptr<WindowTitle> window_title;
+  std::shared_ptr<ImageResources> images;
+  void BindGraphics();
+  void ResetGraphics();
+  bool is_interface_hidden() const { return interface_hidden_; }
+  void ToggleInterfaceHidden() { interface_hidden_ = !interface_hidden_; }
+  std::shared_ptr<SDLSurface> RenderToSurface();
+
   std::unique_ptr<InteractionManager> interaction_manager;
 
   // ------------------------------------------------------------------------------
@@ -128,7 +140,7 @@ struct SiglusMachine {
   std::shared_ptr<SiglusSceneRenderer> renderer;
   std::weak_ptr<lop::MovieFrame> movie_frame;
   std::function<void()> GetFrameRenderer() const;
-  void RenderFrame(bool display = true);
+  void RenderFrame();
 
   // ------------------------------------------------------------------------------
   std::shared_ptr<CaptureManager> captures;
@@ -185,6 +197,7 @@ struct SiglusMachine {
 
  private:
   std::vector<std::weak_ptr<Counter>> counters_;
+  bool interface_hidden_ = false;
 };
 
 }  // namespace libsiglus

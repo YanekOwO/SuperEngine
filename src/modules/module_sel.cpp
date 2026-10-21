@@ -46,7 +46,6 @@
 #include "machine/rloperation.hpp"
 #include "machine/rloperation/rlop_store.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -141,7 +140,9 @@ void StartSelection(RLMachine& machine,
 
   std::shared_ptr<Selection> s;
   try {
-    s = BuildSelection(machine.GetSystem(), std::move(request), config, window);
+    s = BuildSelection(machine.GetSystem(), std::move(request), config,
+                       machine.image_resources(),
+                       machine.presenter().screen_size(), window);
   } catch (...) {
     if (restore_window) {
       text.HideAllTextWindows();
@@ -189,7 +190,7 @@ void StartSelection(RLMachine& machine,
       text.HideAllTextWindows();
       text.set_active_window(*restore_window);
     }
-    machine.GetSystem().graphics().ForceRefresh();
+    machine.ForceRefresh();
   };
   const auto input = [&machine, state, s](std::shared_ptr<Event> event) {
     if (!event || !s->Visible())
@@ -217,7 +218,7 @@ void StartSelection(RLMachine& machine,
         sound.PlaySe(1);
       machine.GetSystem().TakeSelectionSnapshot(machine);
     }
-    machine.GetSystem().graphics().ForceRefresh();
+    machine.ForceRefresh();
   };
   machine.PushLongOperation(std::make_shared<lop::WaitForSelection>(
       state, s,
@@ -226,7 +227,7 @@ void StartSelection(RLMachine& machine,
         cleanup(std::move(selection));
       },
       cleanup, input));
-  machine.GetSystem().graphics().ForceRefresh();
+  machine.ForceRefresh();
 }
 
 struct Sel_select : public RLOp_SpecialCase {

@@ -44,9 +44,10 @@ class ZoomLongOperation : public LongOperation {
                     const Rect& drect_,
                     const int time);
   Task<int> Run(WaitContext& waits) override;
-  FrameRenderer GetFrameRenderer() override;
 
  private:
+  void DrawFrame();
+
   RLMachine& machine_;
 
   std::shared_ptr<SDLSurface> orig_surface_;

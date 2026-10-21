@@ -30,7 +30,6 @@
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "vm/object.hpp"
 #include "vm/value.hpp"
@@ -70,8 +69,7 @@ void BindMask(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   EventSystem* event = runtime.system ? &runtime.system->event() : nullptr;
-  GraphicsSystem* graphics =
-      runtime.system ? &runtime.system->graphics() : nullptr;
+  auto images = runtime.images;
 
   // ------------------------------------------------------------------------------
   // MaskEvent
@@ -153,12 +151,11 @@ void BindMask(SiglusMachine& runtime) {
   mask_class.def("init", [](MaskHandle* mask) { mask->Get().Reset(); });
   mask_class.def(
       "create",
-      [graphics](MaskHandle* mask, std::string filename) {
-        if (!graphics)
+      [images](MaskHandle* mask, std::string filename) {
+        if (!images)
           throw std::runtime_error("mask.create requires a graphics system");
         mask->Get().Reset();
-        std::shared_ptr<SDLSurface> surface =
-            graphics->GetSurfaceNamed(filename);
+        std::shared_ptr<SDLSurface> surface = images->GetSurfaceNamed(filename);
         mask->Get().Create(std::move(filename), std::move(surface));
       },
       sb::arg("filename"));

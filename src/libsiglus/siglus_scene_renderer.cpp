@@ -30,7 +30,6 @@
 #include "core/object_internal/object_mask.hpp"
 #include "core/selection.hpp"
 #include "core/stage.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/screen_canvas.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -108,8 +107,12 @@ SiglusSceneRenderer::SiglusSceneRenderer(
     System& system,
     std::shared_ptr<MaskList> mask_list,
     std::shared_ptr<QuakeList> screen_quakes,
-    LocalConfig& local_config)
-    : stage_(stage),
+    LocalConfig& local_config,
+    Size screen_size,
+    std::function<bool()> interface_hidden)
+    : screen_size_(screen_size),
+      interface_hidden_(std::move(interface_hidden)),
+      stage_(stage),
       system_(system),
       mask_list_(std::move(mask_list)),
       screen_quakes_(std::move(screen_quakes)),
@@ -220,7 +223,8 @@ void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
     std::visit(overload(
                    [&](Selection* sel) {
                      if (sel)
-                       SelState::Render(*sel, system_);
+                       SelState::Render(*sel, system_, screen_size_,
+                                        interface_hidden_());
                    },
                    [&](TextWindow* mwnd) {
                      if (mwnd)

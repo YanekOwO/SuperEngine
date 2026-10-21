@@ -24,8 +24,8 @@
 #include "core/selection.hpp"
 
 #include "core/gameexe.hpp"
+#include "core/image_resources.hpp"
 #include "core/input.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "systems/text_page.hpp"
@@ -130,16 +130,18 @@ static RGBColour Color(Gameexe& gexe, int index, RGBColour fallback) {
   return v && v->size() >= 3 ? RGBColour((*v)[0], (*v)[1], (*v)[2]) : fallback;
 }
 
-std::shared_ptr<Selection> BuildSelection(System& system,
-                                          SelectionRequest request,
-                                          BtnSelTemplate config,
-                                          std::shared_ptr<TextWindow> window) {
+std::shared_ptr<Selection> BuildSelection(
+    System& system,
+    SelectionRequest request,
+    BtnSelTemplate config,
+    const std::shared_ptr<ImageResources>& images,
+    Size screen_size,
+    std::shared_ptr<TextWindow> window) {
   const bool buttons = request.kind == SelectionRequest::Kind::Buttons;
   auto s = std::make_shared<Selection>(std::move(request), config);
   s->window = std::move(window);
   Gameexe& gexe = system.gameexe();
   TextSystem& text = system.text();
-  GraphicsSystem& graphics = system.graphics();
   if (!buttons && !s->window)
     throw std::invalid_argument("Window selection requires a target window");
   const bool reallive = config.format == BtnSelTemplate::Format::Reallive;
@@ -165,10 +167,12 @@ std::shared_ptr<Selection> BuildSelection(System& system,
     }
     config.hit_color = config.color;
   } else {
+    if ((!config.base_file.empty() || !config.filter_file.empty()) && !images)
+      throw std::invalid_argument("Button selection requires image resources");
     if (!config.base_file.empty())
-      s->base = graphics.GetSurfaceNamed(config.base_file);
+      s->base = images->GetSurfaceNamed(config.base_file);
     if (!config.filter_file.empty())
-      s->filter = graphics.GetSurfaceNamed(config.filter_file);
+      s->filter = images->GetSurfaceNamed(config.filter_file);
     const auto& actions = text.mwnd_config().button_actions();
     if (config.action >= 0 &&
         static_cast<std::size_t>(config.action) < actions.GetCount())
@@ -193,9 +197,7 @@ std::shared_ptr<Selection> BuildSelection(System& system,
                              : Color(gexe, config.hit_color, normal_color);
   Size button_size(0, 0);
   for (std::size_t i = 0; i < s->items.size(); ++i) {
-    auto& option = s->request.options[i];
-    if (!reallive)
-      option.text = text.InterpretName(option.text);
+    const auto& option = s->request.options[i];
     auto& item = s->items[i];
     if (option.type == 0)
       continue;
@@ -228,7 +230,7 @@ std::shared_ptr<Selection> BuildSelection(System& system,
               .rect.size();
     if (reallive && s->filter)
       button_size = s->filter->GetSize();
-    s->LayoutButtons(button_size, graphics.screen_size());
+    s->LayoutButtons(button_size, screen_size);
   } else {
     const auto& waku = text.mwnd_config().GetWaku(s->window->waku_set());
     const bool variable = waku.style != MwndConfig::WakuStyle::Fixed;
@@ -493,10 +495,12 @@ SelState::SelState()
     : pending_(std::make_unique<lop::PendingCoroutineTasks>()) {}
 SelState::~SelState() = default;
 
-void SelState::Render(const Selection& s, System& sys) {
+void SelState::Render(const Selection& s,
+                      System& sys,
+                      Size screen_size,
+                      bool interface_hidden) {
   TextSystem& text = sys.text();
-  GraphicsSystem& graphics = sys.graphics();
-  if (!s.Visible() || !text.system_visible() || graphics.is_interface_hidden())
+  if (!s.Visible() || !text.system_visible() || interface_hidden)
     return;
   if (s.window && !s.window->IsVisible())
     return;
@@ -507,7 +511,7 @@ void SelState::Render(const Selection& s, System& sys) {
     if (option.type != 1 && option.type != 2)
       continue;
     const auto& item = s.items[i];
-    auto animation = s.GetPresentation(i, graphics.screen_size());
+    auto animation = s.GetPresentation(i, screen_size);
     const auto state =
         option.type == 2 ? ButtonState::Disable
         : s.pressed == static_cast<int>(i) || s.result == static_cast<int>(i)

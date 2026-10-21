@@ -231,14 +231,14 @@ void SDLSurface::BlitToSurface(SDLSurface& dest_surface,
                                           ? SDL_BLENDMODE_BLEND
                                           : SDL_BLENDMODE_NONE);
     if (pygame_AlphaBlit(surface_, &src_rect, src_image, NULL))
-      ThrowSDLError("pygame_AlphaBlit", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("pygame_AlphaBlit", "SDLSurface::BlitToSurface()");
 
     SDL_Surface* tmp = buildNewSurface(dst.size());
     pygame_stretch(src_image, tmp);
 
     set_blit_mode(tmp, use_src_alpha, alpha);
     if (!SDL_BlitSurface(tmp, NULL, dest_surface.RawSurface(), &dest_rect))
-      ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("SDL_BlitSurface", "SDLSurface::BlitToSurface()");
 
     SDL_DestroySurface(tmp);
     SDL_DestroySurface(src_image);
@@ -246,7 +246,7 @@ void SDLSurface::BlitToSurface(SDLSurface& dest_surface,
     set_blit_mode(surface_, use_src_alpha, alpha);
     if (!SDL_BlitSurface(surface_, &src_rect, dest_surface.RawSurface(),
                          &dest_rect))
-      ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("SDL_BlitSurface", "SDLSurface::BlitToSurface()");
   }
   dest_surface.markWrittenTo(dst);
 }
@@ -264,10 +264,10 @@ void SDLSurface::blitFROMSurface(SDL_Surface* src_surface,
 
   if (use_src_alpha) {
     if (pygame_AlphaBlit(src_surface, &src_rect, surface_, &dest_rect))
-      ThrowSDLError("pygame_AlphaBlit", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("pygame_AlphaBlit", "SDLSurface::BlitToSurface()");
   } else {
     if (!SDL_BlitSurface(src_surface, &src_rect, surface_, &dest_rect))
-      ThrowSDLError("SDL_BlitSurface", "GraphicsSystem::blitSurfaceToDC()");
+      ThrowSDLError("SDL_BlitSurface", "SDLSurface::BlitToSurface()");
   }
 
   markWrittenTo(dst);
@@ -458,7 +458,7 @@ void SDLSurface::Fill(const RGBAColour& colour, const Rect& area) {
 
   SDL_Rect rect = ToSDLRect(area);
   if (!SDL_FillSurfaceRect(surface_, &rect, sdl_colour))
-    ThrowSDLError("SDL_FillSurfaceRect", "GraphicsSystem::wipe()");
+    ThrowSDLError("SDL_FillSurfaceRect", "SDLSurface::Fill()");
 
   // If we are the main screen, then we want to update the screen
   markWrittenTo(area);
@@ -683,7 +683,7 @@ std::shared_ptr<SDLSurface> SDLSurface::ClipAsColorMask(const Rect& clip_rect,
                                                         int r,
                                                         int g,
                                                         int b) const {
-  const char* function_name = "GraphicsSystem::ClipAsColorMask()";
+  const char* function_name = "SDLSurface::ClipAsColorMask()";
 
   // TODO(erg): This needs to be made exception safe and so does the rest
   // of this file.

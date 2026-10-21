@@ -28,7 +28,6 @@
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "modules/module_obj.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 
@@ -61,7 +60,6 @@ WaitForGanToFinish::WaitForGanToFinish(RLMachine& machine,
                                        int parent,
                                        int object)
     : machine_(machine),
-      graphics_(machine.GetSystem().graphics()),
       mode_(machine.screen_update_mode()),
       layer_(layer),
       parent_(parent),
@@ -84,7 +82,7 @@ Task<int> WaitForGanToFinish::Run(WaitContext& waits) {
 GraphicsObject& WaitForGanToFinish::GetObject() {
   if (parent_ != -1) {
     GraphicsObject& parent = machine_.stage().GetObject(layer_, parent_);
-    EnsureIsParentObject(parent, graphics_.GetObjectLayerSize());
+    EnsureIsParentObject(parent, machine_.GetObjectSettings().objects_in_a_layer);
     return parent.TouchChild(object_);
   }
   return machine_.stage().GetObject(layer_, object_);

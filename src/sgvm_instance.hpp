@@ -29,8 +29,6 @@
 #include <optional>
 #include <string>
 
-#include "systems/igraphics_backend.hpp"
-
 class IPlatformImplementor;
 
 class SgvmInstance {
@@ -38,7 +36,6 @@ class SgvmInstance {
   std::optional<int> start_scene_;
   bool debug_ = false;
   bool fast_forward_ = false;
-  DebugFrameDumpConfig debug_frame_dump_config_;
   std::string font_;
   std::optional<std::filesystem::path> hook_path_;
   std::shared_ptr<IPlatformImplementor> platform_implementor_;

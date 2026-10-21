@@ -48,7 +48,7 @@ StrConstant_T::type StrConstant_T::getData(
     unsigned int& position) {
   // When I was trying to get P_BRIDE running in rlvm, I noticed that when
   // loading a game, I would often crash with invalid iterators in the LRUCache
-  // library, in GraphicsSystem where we cached recently used images. After
+  // library, in ImageResources where we cached recently used images. After
   // adding some verification methods to it, it was obvious that it's internal
   // state was entirely screwed up. There were duplicates in the std::list<>
   // (it's a precondition that its elements are unique), there were entries in

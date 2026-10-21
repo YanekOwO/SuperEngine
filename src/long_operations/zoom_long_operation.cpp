@@ -55,6 +55,8 @@ ZoomLongOperation::ZoomLongOperation(
       start_time_(machine.GetSystem().event().GetTicks()) {}
 
 Task<int> ZoomLongOperation::Run(WaitContext& waits) {
+  auto renderer = std::make_shared<DrawCallback>([this] { DrawFrame(); });
+  machine_.SetFrameRenderer(renderer);
   while (machine_.GetSystem().event().GetTicks() - start_time_ < duration_ &&
          !machine_.GetSystem().ShouldFastForward()) {
     co_await waits.Schedule();
@@ -62,20 +64,18 @@ Task<int> ZoomLongOperation::Run(WaitContext& waits) {
   co_return 0;
 }
 
-FrameRenderer ZoomLongOperation::GetFrameRenderer() {
-  return [this] {
-    orig_surface_->RenderToScreen(orig_surface_->GetRect(),
-                                  orig_surface_->GetRect(), 255);
-    const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
-    const float ratio =
-        duration_ == 0 || machine_.GetSystem().ShouldFastForward()
-            ? 1.0f
-            : std::min(elapsed, duration_) / float(duration_);
-    const Point origin =
-        frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
-    const Size size = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
-    src_surface_->RenderToScreen(Rect(origin, size), drect_, 255);
-  };
+void ZoomLongOperation::DrawFrame() {
+  orig_surface_->RenderToScreen(orig_surface_->GetRect(),
+                                orig_surface_->GetRect(), 255);
+  const auto elapsed = machine_.GetSystem().event().GetTicks() - start_time_;
+  const float ratio =
+      duration_ == 0 || machine_.GetSystem().ShouldFastForward()
+          ? 1.0f
+          : std::min(elapsed, duration_) / float(duration_);
+  const Point origin =
+      frect_.origin() + ((trect_.origin() - frect_.origin()) * ratio);
+  const Size size = frect_.size() + ((trect_.size() - frect_.size()) * ratio);
+  src_surface_->RenderToScreen(Rect(origin, size), drect_, 255);
 }
 
 }  // namespace lop

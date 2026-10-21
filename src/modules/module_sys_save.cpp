@@ -53,7 +53,6 @@
 #include "machine/save_game_header.hpp"
 #include "machine/serialization.hpp"
 #include "modules/config_operations.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
 #include "utf8.h"
@@ -311,13 +310,11 @@ struct save : public RLOpcode<IntConstant_T> {
 // from a save game slot.
 struct Sys_load : public RLOpcode<IntConstant_T> {
   virtual void operator()(RLMachine& machine, int slot) override {
-    std::shared_ptr<SDLSurface> before =
-        machine.GetSystem().graphics().RenderToSurface();
+    std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
     auto screen_size = before->GetSize();
 
     Serialization::loadGameForSlot(machine, slot);
-    std::shared_ptr<SDLSurface> after =
-        machine.GetSystem().graphics().RenderToSurface();
+    std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
     std::shared_ptr<SDLSurface> black_screen =
         std::make_shared<SDLSurface>(screen_size);

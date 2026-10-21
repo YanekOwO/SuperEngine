@@ -22,11 +22,11 @@
 // -----------------------------------------------------------------------
 
 #include "long_operations/siglus_movie.hpp"
+#include "systems/igraphics_backend.hpp"
 
 #include "core/avdec/ffmpeg.hpp"
 #include "core/queue.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
@@ -43,18 +43,20 @@ namespace sr = serilang;
 namespace fs = std::filesystem;
 namespace chr = std::chrono;
 
-SiglusMovieOperation::SiglusMovieOperation(System* sys,
-                                           fs::path pth,
-                                           MovieRect rect,
-                                           int volume,
-                                           bool wait_key)
+SiglusMovieOperation::SiglusMovieOperation(
+    System* sys,
+    std::shared_ptr<IGraphicsBackend> backend,
+    fs::path pth,
+    MovieRect rect,
+    int volume,
+    bool wait_key)
     : path_(std::move(pth)),
       rect_(rect),
       wait_key_(wait_key),
       volume_(volume),
       clock_(sys->event().GetClock()),
       sound_(sys->sound()),
-      graphics_(sys->graphics_ptr()) {}
+      backend_(std::move(backend)) {}
 
 SiglusMovieOperation::~SiglusMovieOperation() { Stop(); }
 
@@ -71,7 +73,8 @@ Task<int> SiglusMovieOperation::Run(WaitContext& waits) {
   const std::size_t frame_size =
       static_cast<std::size_t>(dec.width()) * dec.height() * 4;
   current_frame.data.assign(frame_size, 0);
-  surface_ = graphics_->CreateSurfaceBGRA(dec.info().size, current_frame.data);
+  surface_ =
+      backend_->CreateSurfaceBGRA(dec.info().size, current_frame.data, false);
 
   start_ = clock_->GetTime();
   // Stop and join the worker before destroying the frame locals it

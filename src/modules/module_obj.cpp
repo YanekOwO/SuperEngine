@@ -32,7 +32,6 @@
 #include "libreallive/parser.hpp"
 #include "machine/properties.hpp"
 #include "machine/rlmachine.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "utilities/exception.hpp"
 
@@ -50,7 +49,6 @@ void EnsureIsParentObject(GraphicsObject& parent, int size) {
 GraphicsObject& GetGraphicsObject(RLMachine& machine,
                                   RLOperation* op,
                                   int obj) {
-  GraphicsSystem& graphics = machine.GetSystem().graphics();
   Stage& stage = machine.stage();
 
   int fgbg;
@@ -60,7 +58,7 @@ GraphicsObject& GetGraphicsObject(RLMachine& machine,
   int parentobj;
   if (op->GetProperty(P_PARENTOBJ, parentobj)) {
     GraphicsObject& parent = stage.GetObject(fgbg, parentobj);
-    EnsureIsParentObject(parent, graphics.GetObjectLayerSize());
+    EnsureIsParentObject(parent, machine.GetObjectSettings().objects_in_a_layer);
     return parent.TouchChild(obj);
   } else {
     return stage.GetObject(fgbg, obj);

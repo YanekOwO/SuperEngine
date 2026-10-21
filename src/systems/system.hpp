@@ -36,7 +36,6 @@
 #include <sstream>
 #include <string>
 
-class GraphicsSystem;
 class EventSystem;
 class TextSystem;
 class Stage;
@@ -53,10 +52,7 @@ class MenuReseter;
 }
 
 struct SystemOptions {
-  enum class Engine { Reallive, Siglus };
-
   bool fast_forward = false;
-  Engine engine = Engine::Reallive;
 };
 
 // Syscom Constants
@@ -102,15 +98,9 @@ struct SystemOptions {
 [[maybe_unused]] constexpr int SYSCOM_SHOW_BACKGROUND = 31;
 
 // The system class provides the SDL-backed components that make up a local
-// runtime system, i.e., sound, graphics, filesystem etc.
+// runtime system, including sound, text, events, and filesystem access.
 class System {
  public:
-  System(Gameexe& gameexe,
-         Stage& stage,
-         LocalConfig& local_config,
-         GlobalConfig& global_config,
-         std::shared_ptr<AssetScanner> scanner = nullptr,
-         SystemOptions options = {});
   System(Gameexe& gameexe,
          Stage& stage,
          LocalConfig& local_config,
@@ -231,14 +221,10 @@ class System {
 
   inline RLEventListener& rlEvent() { return *rlevent_handler_; }
   inline std::shared_ptr<AssetScanner> GetAssetScanner() { return assets_; }
-  inline GraphicsSystem& graphics() { return *graphics_system_; }
   inline EventSystem& event() { return *event_system_; }
   inline Gameexe& gameexe() { return gameexe_; }
   inline TextSystem& text() { return *text_system_; }
   SoundSystem& sound();
-  inline std::shared_ptr<GraphicsSystem> graphics_ptr() {
-    return graphics_system_;
-  }
   inline std::shared_ptr<EventSystem> event_ptr() { return event_system_; }
 
   RLMachine* machine_ = nullptr;
@@ -259,7 +245,6 @@ class System {
   void CheckSyscomIndex(int index, const char* function);
 
   Gameexe& gameexe_;
-  std::shared_ptr<GraphicsSystem> graphics_system_;
   std::shared_ptr<EventSystem> event_system_;
   std::shared_ptr<TextSystem> text_system_;
   std::shared_ptr<SoundSystem> sound_system_;

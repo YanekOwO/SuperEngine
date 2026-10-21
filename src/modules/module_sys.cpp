@@ -63,7 +63,6 @@
 #include "modules/module_sys_timer.hpp"
 #include "modules/module_sys_timetable2.hpp"
 #include "modules/module_sys_wait.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
@@ -77,14 +76,17 @@ namespace {
 
 struct title : public RLOpcode<StrConstant_T> {
   void operator()(RLMachine& machine, std::string subtitle) {
-    machine.GetSystem().graphics().SetWindowSubtitle(subtitle,
-                                                     machine.GetTextEncoding());
+    auto window_title = machine.window_title();
+    window_title->subtitle_ = cp932toUTF8(subtitle, machine.GetTextEncoding());
+    window_title->subtitle_visible_ =
+        machine.GetGlobalConfig().reallive.display_subtitle;
+    window_title->Apply();
   }
 };
 
 struct GetTitle : public RLOpcode<StrReference_T> {
   void operator()(RLMachine& machine, StringReferenceIterator dest) {
-    *dest = machine.GetSystem().graphics().window_subtitle();
+    *dest = machine.window_title()->subtitle_;
   }
 };
 
@@ -424,16 +426,14 @@ struct FlushClick : public RLOpcode<> {
 
 // Implementation isn't in anonymous namespace since it is used elsewhere.
 void Sys_MenuReturn::operator()(RLMachine& machine) {
-  GraphicsSystem& graphics = machine.GetSystem().graphics();
-
   // Render the screen as is.
   (void)machine.haikei().GetDC(0);
-  std::shared_ptr<SDLSurface> before = graphics.RenderToSurface();
+  std::shared_ptr<SDLSurface> before = machine.RenderToSurface();
 
   // Clear everything
   machine.LocalReset();
 
-  std::shared_ptr<SDLSurface> after = graphics.RenderToSurface();
+  std::shared_ptr<SDLSurface> after = machine.RenderToSurface();
 
   // First, we jump the instruction pointer to the new location.
   int scenario = machine.GetSystem().gameexe()("SEEN_MENU").ToInt();
@@ -476,7 +476,7 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(207, 0, "MouseCursor",
             new ConfigIntSetter([](RLMachine& machine, int value) {
               machine.GetLocalConfig().cursor_no = value;
-              machine.GetSystem().graphics().ApplyConfiguration();
+              machine.ApplyGraphicsConfiguration();
             }));
 
   AddUnsupportedOpcode(330, 0, "EnableSkipMode");
@@ -837,7 +837,7 @@ SysModule::SysModule() : RLModule("Sys", 1, 004) {
   AddOpcode(2275, 0, "SetScreenMode",
             new ConfigIntSetter([](RLMachine& machine, int value) {
               machine.GetGlobalConfig().screen_size_mode = value == 0 ? 1 : 0;
-              machine.GetSystem().graphics().ApplyConfiguration();
+              machine.ApplyGraphicsConfiguration();
             }));
   AddOpcode(2375, 0, "ScreenMode", new ConfigIntGetter([](RLMachine& machine) {
               return machine.GetGlobalConfig().screen_size_mode == 1 ? 0 : 1;

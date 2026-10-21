@@ -31,7 +31,6 @@
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "systems/event_system.hpp"
-#include "systems/graphics_system.hpp"
 #include "systems/system.hpp"
 #include "vm/exception.hpp"
 #include "vm/future.hpp"
@@ -57,9 +56,6 @@ namespace chr = std::chrono;
 
 namespace {
 
-const std::set<std::string> kMovieExtensions{"wmv", "asf", "avi", "mpg",
-                                             "mpeg"};
-
 class SiglusMovie {
  public:
   explicit SiglusMovie(SiglusMachine& runtime)
@@ -71,7 +67,7 @@ class SiglusMovie {
   lop::MovieRect DefaultRect() const {
     lop::MovieRect rect;
     if (system_) {
-      Size size = system_->graphics().screen_size();
+      Size size = runtime_.presenter->screen_size();
       rect.width = size.width();
       rect.height = size.height();
     }
@@ -88,16 +84,13 @@ class SiglusMovie {
     if (!vm_ || !system_ || !asset_scanner_)
       return;
 
-    fs::path path = FindMovie(file_name);
-
-    if (system_->ShouldFastForward()) {
-      FfmpegVideoDecoder validate(path);
+    if (system_->ShouldFastForward())
       return;
-    }
 
-    std::unique_ptr<lop::SiglusMovieOperation> player =
-        std::make_unique<lop::SiglusMovieOperation>(system_, std::move(path),
-                                                    rect, 255, key_skip);
+    fs::path path = FindMovie(file_name);
+    auto player = std::make_unique<lop::SiglusMovieOperation>(
+        system_, runtime_.presenter->backend(), std::move(path), rect, 255,
+        key_skip);
     player_ = player.get();
     runtime_.movie_frame = player->frame();
     pending_ = lop::FutureBackedCoroutineTask(*vm_, std::move(player),
@@ -131,7 +124,10 @@ class SiglusMovie {
     if (!asset_scanner_)
       throw std::runtime_error("mov.play requires an asset scanner");
 
+    static const std::set<std::string> kMovieExtensions{"wmv", "asf", "avi",
+                                                        "mpg", "mpeg"};
     auto path = asset_scanner_->FindFile(file_name, kMovieExtensions);
+
     if (!path) {
       throw std::runtime_error("mov.play could not find " + file_name + ": " +
                                path.error().what());
