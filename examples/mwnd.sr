@@ -1,23 +1,206 @@
 
-mw = Mwnd(0);
+mwnd = Mwnd(2);
+mwnd_bg = Object(0, 0);
 
-print("mwnd init ok");
-
-fn Textout(text, pause_ms = 140){
-  len = text.len();
-  for(i=0; i<len; i+=1){
-    should_pause = i != len-1;
-    mw.disp(text[i], text.suffix(len-i));
-    if(should_pause)
-      await async.Sleep(pause_ms);
-  }
+fn mwnd_clear(title) {
+  // clear marks a page ready; msg_block starts the next page and clears it.
+  mwnd.clear();
+  mwnd.msg_block();
+  mwnd.size_default();
+  mwnd.clear_indent();
+  mwnd.rep_pos_default();
+  mwnd.print(title);
+  mwnd.nl();
 }
 
-// WAKU.BTN.CNT reserves the slots; empty FILE slots can be populated by scripts.
-// button returns the selected window's fixed list of ordinary Object handles.
-buttons = mw.button;
-if (buttons.size() > 0) {
-  button = buttons[0];
-  button.x = 4; // Additional offset from the template's WAKU.BTN.POS anchor.
-  button.set_button_state_normal();
+fn mwnd_card(title, expression = "calm", waku = 2) {
+  mwnd_clear(title);
+  mwnd.set_waku(waku);
+  mwnd.button[0].disp = 0;
+  mwnd.open();
+  if (expression != "")
+    mwnd.set_face(0, "mwnd_attendant_" + expression);
 }
+
+fn mwnd_prompt(label) {
+  mwnd.nl();
+  mwnd.size(16);
+  mwnd.print("Press Enter to continue.");
+  mwnd.size_default();
+  print("[mwnd] WAIT", label);
+  // pp pauses without preparing a clear; the next card clears explicitly.
+  await mwnd.pp();
+}
+
+
+
+Mwnd(0).close();
+Mwnd(1).close();
+mwnd_bg.create("bg", 1, 0, 0);
+mwnd_bg.order = 0;
+
+print("[mwnd] BEGIN");
+
+
+mwnd_card(" Open, print, and clear");
+mwnd.print("Welcome to the station. This is Mwnd(2).");
+mwnd.nl();
+mwnd.print("print adds text; nl starts an unindented line.");
+print("[mwnd] check_open:", mwnd.check_open()); // 1
+mwnd_prompt("open");
+mwnd.close();
+print("[mwnd] check_open after close:", mwnd.check_open()); // 0
+// Indexed stage handles refer to the same configured window.
+stage.front.mwnd[2].open();
+
+
+mwnd_card(" Indentation and automatic wrapping");
+mwnd.print("Note: ");
+mwnd.indent();
+mwnd.print("this longer sentence wraps into a second line, keeping the indentation instead of returning to the left edge.");
+mwnd.clear_indent();
+mwnd_prompt("indent");
+
+mwnd_card(" Font size and glyph offsets");
+mwnd.size(30);
+mwnd.print("A larger arrival.");
+mwnd.size_default();
+mwnd.nl();
+mwnd.rep_pos(6, -2);
+mwnd.print("These glyphs have a small drawing offset.");
+// Drawing offsets do not move the logical insertion point.
+mwnd.rep_pos_default();
+mwnd_prompt("size_offset");
+
+mwnd_card(" Ruby annotations");
+mwnd.print("Our ");
+mwnd.ruby_start("railway");
+mwnd.print("station");
+mwnd.ruby_end();
+mwnd.print(" has a small annotation above it.");
+mwnd.nl();
+mwnd.print("ruby_start and ruby_end surround the base text.");
+mwnd_prompt("ruby");
+
+
+mwnd_card(" Portrait slots: calm");
+mwnd.print("set_face(0, file) fills the first portrait slot.");
+mwnd.nl();
+mwnd.print("mwnd.face[0] is also an ordinary Object handle.");
+print("[mwnd] face slots:", mwnd.face.size());
+mwnd_prompt("face_calm");
+
+mwnd_card(" Portrait slots: smiling", "smile");
+// Face x/y are additional offsets from WAKU.FACE.000.POS.
+mwnd.face[0].x = 2;
+mwnd.print("The same portrait slot now shows a smiling expression.");
+mwnd.nl();
+mwnd.print("The face handle adds a two-pixel horizontal offset.");
+mwnd_prompt("face_smile");
+
+mwnd.clear_face();
+mwnd_clear(" Clear every portrait slot");
+mwnd.print("clear_face removes the portrait, leaving the waku.");
+mwnd.nl();
+mwnd.print("The next card can load a fresh expression.");
+mwnd_prompt("face_clear");
+
+
+
+mwnd_card(" Select a waku template", "smile", 3);
+mwnd.print("set_waku(3) selects the teal waku template.");
+mwnd.nl();
+mwnd.print("Templates also define portrait and control anchors.");
+print("[mwnd] configured waku:", mwnd.get_waku_file());
+mwnd_prompt("waku_template");
+
+mwnd_clear(" Override just the waku image");
+mwnd.set_waku_file("mwnd_waku_navy");
+mwnd.print("set_waku_file replaces the image, keeping its template.");
+mwnd.nl();
+mwnd.print("Press Enter to restore the configured teal image.");
+print("[mwnd] overridden waku:", mwnd.get_waku_file());
+mwnd_prompt("waku_override");
+mwnd.init_waku_file();
+print("[mwnd] restored waku:", mwnd.get_waku_file());
+mwnd_clear(" Restore the configured waku image");
+mwnd.print("init_waku_file restores this template's teal waku.");
+mwnd.nl();
+mwnd.print("get_waku_file reports the current filename.");
+mwnd_prompt("waku_restore");
+
+
+
+mwnd_card(" Window decorations and buttons", "smile");
+// Ordinary window objects use coordinates relative to the outer waku.
+mwnd.object[0].create("mwnd_badge", 1, 1032, 20);
+mwnd_button = mwnd.button[0];
+mwnd_button.disp = 1;
+mwnd_button.set_button_state_normal();
+mwnd.print("The clock badge is mwnd.object[0].");
+mwnd.nl();
+mwnd.print("Hover or click the arrow; move away before Enter.");
+print("[mwnd] object/button slots:", mwnd.object.size(), mwnd.button.size());
+mwnd_prompt("button_normal");
+
+mwnd_clear(" Selected and disabled button states");
+mwnd_button.set_button_state_select();
+mwnd.print("Selected: a persistent highlight, independent of hover.");
+mwnd.nl();
+mwnd.print("Press Enter to see the disabled state.");
+print("[mwnd] selected state:", mwnd_button.get_button_state());
+mwnd_prompt("button_selected");
+
+mwnd_clear(" A disabled control");
+mwnd_button.set_button_state_disable();
+mwnd.print("Disabled: the control is gray and ignores pointer input.");
+mwnd.nl();
+mwnd.print("The page still accepts Enter outside the control.");
+print("[mwnd] disabled state:", mwnd_button.get_button_state());
+mwnd_prompt("button_disabled");
+mwnd_button.set_button_state_normal();
+mwnd_button.disp = 0;
+mwnd.object[0].free();
+
+
+
+mwnd_card(" Two independently revealing messages", "smile");
+script.set_message_speed(35);
+// In multi-message mode, print queues glyphs instead of drawing immediately.
+mwnd.enable_multi_msg();
+mwnd.print("Attendant: The last train is on its way.");
+mwnd.nl();
+// next_msg starts a stream at the laid-out cursor; it adds no newline.
+mwnd.next_msg();
+mwnd.print("Traveler: Then we still have time.");
+print("[mwnd] REVEAL multi");
+// Wait for both streams without asking for a key.
+await mwnd.msg_wait();
+mwnd.nl();
+mwnd.size(16);
+mwnd.print("Press Enter once this line has appeared.");
+mwnd.size_default();
+print("[mwnd] WAIT multi");
+// r waits, marks the message ready to clear, and ends multi-message mode.
+await mwnd.r();
+
+mwnd_clear(" Back to ordinary text");
+mwnd.print("Both lines finished before the shared pause.");
+mwnd.nl();
+mwnd.print("This ordinary print appears immediately again.");
+mwnd.nl();
+mwnd.size(16);
+mwnd.print("Press Enter to finish and return to the REPL.");
+mwnd.size_default();
+print("[mwnd] WAIT finish");
+// page explicitly prepares a fresh page after acknowledgement.
+await mwnd.page();
+
+
+mwnd.clear();
+mwnd.msg_block();
+mwnd.clear_face();
+mwnd.close();
+mwnd_bg.free();
+print("[mwnd] COMPLETE");
+await async.Sleep(1000);

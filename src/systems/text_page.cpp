@@ -27,6 +27,8 @@
 #include "core/gameexe.hpp"
 #include "systems/text_window.hpp"
 
+#include <utf8.h>
+
 #include <string>
 #include <utility>
 
@@ -84,6 +86,20 @@ bool TextPage::Character(const std::string& current, const std::string& rest) {
   return rendered;
 }
 
+std::size_t TextPage::Text(std::string_view text) {
+  if (text.empty())
+    return 0;
+  auto current = text.begin();
+  while (current != text.end()) {
+    auto next = current;
+    utf8::next(next, text.end());
+    if (!Character(std::string(current, next), std::string(next, text.end())))
+      break;
+    current = next;
+  }
+  return static_cast<std::size_t>(current - text.begin());
+}
+
 void TextPage::Name(const std::string& name, const std::string& next_char) {
   AddAction([name, next_char](TextPage& page, bool) {
     page.text_window_->SetName(name, next_char);
@@ -101,6 +117,10 @@ void TextPage::KoeMarker(int id) {
 void TextPage::HardBrake() {
   AddAction(
       [](TextPage& page, bool) { page.text_window_->Layout().HardBreak(); });
+}
+
+void TextPage::NextMessage() {
+  AddAction([](TextPage& page, bool) { page.text_window_->NextMessage(); });
 }
 
 void TextPage::SetIndentation() {

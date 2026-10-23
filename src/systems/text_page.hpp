@@ -24,9 +24,11 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class TextWindow;
@@ -71,6 +73,10 @@ class TextPage {
   // spacing rules.
   bool Character(const std::string& current, const std::string& rest);
 
+  // Submit UTF-8 text up to the first character that does not fit. Returns
+  // the number of accepted bytes, so callers can resume on the next page.
+  std::size_t Text(std::string_view text);
+
   // Displays a name. This function will be called by the
   // TextoutLongOperation.
   void Name(const std::string& name, const std::string& next_char);
@@ -81,6 +87,9 @@ class TextPage {
 
   // Forces a hard line brake.
   void HardBrake();
+
+  // Preserve stream layout/style boundaries when replaying the page.
+  void NextMessage();
 
   // Sets the indentation to the x part of the current insertion point.
   void SetIndentation();

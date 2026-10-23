@@ -419,7 +419,7 @@ struct LocalConfig {
   bool async_msg_mode = false;
   // Enable asynchronous output for the next message only.
   bool async_msg_mode_once = false;
-  // Enable simultaneous output to multiple message windows.
+  // Enable independently revealing message streams within a message window.
   bool multi_msg_mode = false;
   // Request the start of message skipping.
   bool skip_trigger = false;

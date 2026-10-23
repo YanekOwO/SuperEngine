@@ -148,6 +148,8 @@ void SiglusMachine::Update(std::chrono::milliseconds real_delta,
     UpdateSelection(game_delta.count());
 
   const bool time_stopped = local_config.time_stop;
+  if (system)
+    system->text().AdvanceMessageText(time_stopped ? ms::zero() : game_delta);
   if (!time_stopped && !local_config.counter_time_stop && counter_list)
     counter_list->Advance(game_delta, real_delta);
 

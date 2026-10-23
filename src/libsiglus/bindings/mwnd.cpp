@@ -44,8 +44,6 @@
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
-#include <utf8.h>
-
 #include <exception>
 #include <functional>
 #include <memory>
@@ -141,7 +139,7 @@ void BindMwnd(SiglusMachine& runtime) {
   if (!sys || !runtime.stage)
     throw std::runtime_error("Mwnd bindings require a system and stage");
 
-  auto get = [sys](const MwndHandle* h) {
+  auto get = [sys](const MwndHandle* h) -> std::shared_ptr<TextWindow> {
     return h->mwnd ? h->mwnd : sys->text().GetCurrentMwnd();
   };
   auto page = [sys, get](const MwndHandle* h) -> TextPage& {
@@ -378,8 +376,15 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("msg_pp_block", [state, page](MwndHandle* h) {
     state(h)->auto_mode_base_chars = page(h).number_of_chars_on_page();
   });
-  mwnd.def("msg_wait", [](MwndHandle*, sr::VM& vm) {
-    return lop::MakeResolvedFuture(*vm.gc_);
+  mwnd.def("enable_multi_msg",
+           [get](MwndHandle* h) { get(h)->BeginMultiMessage(); });
+  mwnd.def("next_msg", [get, page, cfg = &runtime.local_config](MwndHandle* h) {
+    if (cfg->multi_msg_mode)
+      get(h)->BeginMultiMessage();
+    page(h).NextMessage();
+  });
+  mwnd.def("msg_wait", [wait](MwndHandle* h, sr::VM& vm) {
+    return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::MessageOnly);
   });
   mwnd.def("pp", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::None);
@@ -437,21 +442,22 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::vararg);
   mwnd.def(
       "print",
-      [page](MwndHandle* h, std::vector<sr::Value> args) {
+      [get, sys](MwndHandle* h, std::vector<sr::Value> args) {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         if (packet.args.empty())
           return;
         const std::string text = AsString(packet.args.front());
         if (text.empty())
           return;
-        TextPage& target = page(h);
-        for (auto cur = text.cbegin(), next = cur; cur != text.cend();
-             cur = next) {
-          next = cur;
-          utf8::next(next, text.cend());
-          target.Character(std::string(cur, next),
-                           std::string(next, text.cend()));
-        }
+
+        std::shared_ptr<TextWindow> window = get(h);
+        const bool multi_message = sys->local_config().multi_msg_mode;
+        if (multi_message)
+          window->BeginMultiMessage();
+        window->PrepareMessageText(
+            [&text](TextPage& target) { target.Text(text); });
+        if (!multi_message)
+          window->FlushMessageText();
       },
       sb::vararg);
   mwnd.def("ruby_start", [page, state](MwndHandle* h, std::string ruby) {

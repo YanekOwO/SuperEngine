@@ -24,6 +24,7 @@
 
 #include "systems/text_window.hpp"
 
+#include "core/message_stream.hpp"
 #include "machine/rlmachine.hpp"
 #include "systems/itext_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -138,6 +139,7 @@ void MwndMessageState::ClearKoe() {
 }
 
 void MwndMessageState::MarkNovelClear(TextPage& page) {
+  page.window()->EndMultiMessage();
   block_started = false;
   auto_mode_base_chars = page.number_of_chars_on_page();
   ClearKoe();
@@ -160,9 +162,10 @@ void TextWindow::NewPage() {
 
 void TextWindow::ClearMouseCapture() {
   ++capture_generation_;
-  for (auto* waku : {textbox_waku_.get(), namebox_waku_.get()})
-    if (waku)
-      waku->ClearMouseCapture();
+  if (textbox_waku_)
+    textbox_waku_->ClearMouseCapture();
+  if (namebox_waku_)
+    namebox_waku_->ClearMouseCapture();
 }
 
 std::shared_ptr<TextWindow> TextWindow::Clone() const {
@@ -215,6 +218,9 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->koe_replay_button_ = koe_replay_button_;
 
   result->text_surface_ = text_surface_ ? text_surface_->Clone() : nullptr;
+  if (message_stream_)
+    result->message_stream_ =
+        std::make_unique<MessageStreamState>(*message_stream_);
   result->name_surface_ = name_surface_ ? name_surface_->Clone() : nullptr;
   result->textbox_waku_ = textbox_waku_ ? textbox_waku_->Clone() : nullptr;
   result->namebox_waku_ = namebox_waku_ ? namebox_waku_->Clone() : nullptr;
@@ -673,6 +679,7 @@ void TextWindow::RenderKoeReplayButtons() {
 }
 
 void TextWindow::ClearWin() {
+  message_stream_.reset();
   layout_.Reset();
   font_colour_ = default_colour_;
   koe_replay_button_.clear();
@@ -685,6 +692,108 @@ void TextWindow::ClearWin() {
 
   name_surface_ = nullptr;
   current_name_.clear();
+}
+
+MessageStreamState& TextWindow::EnsureMessageStream() {
+  if (!message_stream_)
+    message_stream_ = std::make_unique<MessageStreamState>();
+  return *message_stream_;
+}
+
+void TextWindow::PrepareMessageText(
+    const std::function<void(TextPage&)>& prepare) {
+  auto& state = EnsureMessageStream();
+  const bool was_deferring = std::exchange(state.deferring, true);
+  try {
+    prepare(GetPage());
+  } catch (...) {
+    state.deferring = was_deferring;
+    throw;
+  }
+
+  state.deferring = was_deferring;
+  AdvanceMessageText(std::chrono::milliseconds::zero());
+}
+
+void TextWindow::BeginMultiMessage() {
+  system_.local_config().multi_msg_mode = true;
+  EnsureMessageStream().deferring = true;
+}
+
+void TextWindow::EndMultiMessage() {
+  system_.local_config().multi_msg_mode = false;
+  if (message_stream_) {
+    message_stream_->deferring = false;
+    message_stream_->first_stream_chars.reset();
+    if (message_stream_->stream.Empty())
+      message_stream_.reset();
+  }
+}
+
+void TextWindow::NextMessage() {
+  // Legacy next_msg creates a default-styled stream at the previous stream's
+  // final layout position. It does not insert a line break of its own.
+  const Point position = layout_.GetInsertionPoint();
+  layout_ = system_.text().mwnd_config().GetWindow(window_num_).layout;
+  layout_.insertion_x = position.x();
+  layout_.insertion_y = position.y();
+  font_colour_ = default_colour_;
+  glyph_render_offset_ = Point(0, 0);
+  next_char_italic_ = false;
+  last_token_was_name_ = false;
+  if (message_stream_ && message_stream_->deferring) {
+    if (!message_stream_->first_stream_chars)
+      message_stream_->first_stream_chars =
+          std::max(GetPage().number_of_chars_on_page() -
+                       message_state_->auto_mode_base_chars,
+                   0);
+    message_stream_->stream.NextStream();
+  }
+}
+
+bool TextWindow::HasPendingMessageText() const {
+  return message_stream_ && !message_stream_->stream.Empty();
+}
+
+int TextWindow::MessageAutoModeCharCount() {
+  // Legacy auto-mode timing counts the first stream, even when additional
+  // simultaneous streams contain more text.
+  if (message_stream_ && message_stream_->first_stream_chars)
+    return *message_stream_->first_stream_chars;
+  return std::max(GetPage().number_of_chars_on_page() -
+                      message_state_->auto_mode_base_chars,
+                  0);
+}
+
+void TextWindow::AdvanceMessageText(std::chrono::milliseconds delta) {
+  if (!message_stream_)
+    return;
+  const bool flush =
+      system_.ShouldFastForward() ||
+      EffectiveMessageNowait(system_.local_config(), system_.global_config());
+  const auto delay = std::chrono::milliseconds(
+      flush ? 0
+            : EffectiveMessageSpeed(system_.local_config(),
+                                    system_.global_config()));
+  if (message_stream_->stream.Advance(delta, delay, [this](const auto& draw) {
+        MessageStreamState::Draw(*text_impl_, text_surface_, draw);
+      }))
+    system_.text().RequestRefresh();
+  if (!message_stream_->deferring && message_stream_->stream.Empty())
+    message_stream_.reset();
+}
+
+void TextWindow::FlushMessageText() {
+  if (HasPendingMessageText()) {
+    message_stream_->stream.Advance(
+        std::chrono::milliseconds::zero(), std::chrono::milliseconds::zero(),
+        [this](const auto& draw) {
+          MessageStreamState::Draw(*text_impl_, text_surface_, draw);
+        });
+    system_.text().RequestRefresh();
+    if (!message_stream_->deferring)
+      message_stream_.reset();
+  }
 }
 
 bool TextWindow::DisplayCharacter(const std::string& current,
@@ -748,10 +857,13 @@ bool TextWindow::DisplayCharacter(const std::string& current,
     if (has_shadow)
       shadow = RGBAColour::Black().rgb();
 
-    text_impl_->RenderGlyphOnto(current, font_face, font_colour_, shadow,
-                                *insertion_point + glyph_render_offset_ +
-                                    Point(0, layout_.GetRubyTopPadding()),
-                                text_surface_);
+    MessageStream::Glyph glyph{current, font_face, font_colour_, shadow,
+                               *insertion_point + glyph_render_offset_ +
+                                   Point(0, layout_.GetRubyTopPadding())};
+    auto& state = EnsureMessageStream();
+    state.stream.Enqueue(std::move(glyph));
+    if (!state.deferring)
+      FlushMessageText();
 
     if (indent_after_spacing)
       SetIndentation();
@@ -790,17 +902,14 @@ void TextWindow::DisplayRubyText(const std::string& utf8str) {
         (ruby_area->size().width() - ruby_surface->GetSize().width()) / 2;
     origin += Point(delta_x, 0);
 
-    text_surface_->blitFROMSurface(*ruby_surface, ruby_surface->GetRect(),
-                                   Rect(origin, ruby_area->size()));
+    MessageStream::Ruby ruby{ruby_surface, Rect(origin, ruby_area->size())};
+    auto& state = EnsureMessageStream();
+    state.stream.Enqueue(std::move(ruby));
+    if (!state.deferring)
+      FlushMessageText();
   }
 
   last_token_was_name_ = false;
-}
-
-void TextWindow::SetRGBAF(const std::vector<int>& attr) {
-  ASSERTX_GE(attr.size(), 5);
-  SetColour(RGBAColour(attr.at(0), attr.at(1), attr.at(2), attr.at(3)));
-  SetFilter(attr.at(4));
 }
 
 void TextWindow::SetMousePosition(const Point& pos, bool update_waku) {

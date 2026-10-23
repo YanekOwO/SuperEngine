@@ -28,24 +28,17 @@
 #include <string>
 
 class System;
-struct LocalConfig;
 
 namespace lop {
 
 class SiglusTextoutOperation final : public LongOperation {
  public:
-  SiglusTextoutOperation(System* system,
-                         LocalConfig& local_config,
-                         std::string text);
+  SiglusTextoutOperation(System* system, std::string text);
   Task<int> Run(WaitContext& waits) override;
 
  private:
-  bool ShouldFlushText() const;
-
   System* system_;
-  LocalConfig& local_config_;
   std::string text_;
-  bool flush_ = false;
 };
 
 }  // namespace lop

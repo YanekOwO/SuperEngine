@@ -89,6 +89,22 @@ SiglusMwndWaitOperation::SiglusMwndWaitOperation(
       after_wait_(after_wait) {}
 
 Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
+  while (system_ && window_->HasPendingMessageText()) {
+    if (MessageNowait(system_)) {
+      window_->FlushMessageText();
+      break;
+    }
+    if ((co_await waits.WaitFor(std::chrono::milliseconds(5), true)) ==
+        WaitOutcome::InterruptedByInput) {
+      window_->FlushMessageText();
+      // Finish the current input dispatch before listening for the pause's
+      // advance input; one click must not both reveal and dismiss the text.
+      co_await waits.WaitFor(std::chrono::milliseconds::zero());
+    }
+  }
+  if (after_wait_ == AfterWait::MessageOnly)
+    co_return 0;
+
   if (!system_ || MessageNowait(system_)) {
     FinishWait();
     co_return 0;
@@ -134,6 +150,7 @@ void SiglusMwndWaitOperation::FinishWait() {
   if (!system_ || !message_state_)
     return;
   switch (after_wait_) {
+    case AfterWait::MessageOnly:
     case AfterWait::None:
       return;
     case AfterWait::Paragraph: {
@@ -157,7 +174,7 @@ int SiglusMwndWaitOperation::AutoModeCharCount() {
   const int current_count = Page().number_of_chars_on_page();
   if (!message_state_)
     return current_count;
-  return std::max(current_count - message_state_->auto_mode_base_chars, 0);
+  return window_->MessageAutoModeCharCount();
 }
 
 TextPage& SiglusMwndWaitOperation::Page() {

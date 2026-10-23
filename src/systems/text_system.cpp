@@ -145,6 +145,13 @@ TextSystem::~TextSystem() {
   text_impl_->QuitSystem();
 }
 
+void TextSystem::AdvanceMessageText(std::chrono::milliseconds delta) {
+  for (const auto& layer : stage_.mwnd.storage)
+    for (const auto& window : layer)
+      if (window)
+        window->AdvanceMessageText(delta);
+}
+
 void TextSystem::ExecuteTextSystem() {
   if (auto_skip_mode_ && !auto_skip_suspended_ && !local_config_.disable_skip &&
       (kidoku_read_ || local_config_.skip_unread_message ||
@@ -597,14 +604,13 @@ int TextSystem::GetCursorNumber() const {
 }
 
 void TextSystem::UpdateWindowsForChangeToWindowAttr() {
-  const auto& colour = global_config_.filter_color;
-  const std::vector<int> attr = {colour.r(), colour.g(), colour.b(), colour.a(),
-                                 global_config_.reallive.window_filter};
   // Check each text window to see if it needs updating
   for (const auto& layer : stage_.mwnd.storage)
     for (const auto& window : layer)
-      if (window && !window->GetAttrMod())
-        window->SetRGBAF(attr);
+      if (window && !window->GetAttrMod()) {
+        window->SetColour(global_config_.filter_color);
+        window->SetFilter(global_config_.reallive.window_filter);
+      }
 }
 
 bool TextSystem::ShowWindow(int win_num) const {
@@ -944,6 +950,7 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
 }
 
 void TextSystem::Reset() {
+  local_config_.multi_msg_mode = false;
   is_reading_backlog_ = false;
 
   current_pageset_.clear();
@@ -951,6 +958,12 @@ void TextSystem::Reset() {
   previous_page_it_ = previous_page_sets_.end();
 
   window_visual_override_.clear();
+  // Wait operations may still retain windows after the stage releases them.
+  // Discard their deferred drawing records as part of the reset as well.
+  for (const auto& layer : stage_.mwnd.storage)
+    for (const auto& window : layer)
+      if (window && window->HasPendingMessageText())
+        window->ClearWin();
   stage_.mwnd.Clear();
 
   system_visible_ = true;

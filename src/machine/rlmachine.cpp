@@ -99,6 +99,7 @@ RLMachine::RLMachine(std::shared_ptr<Gameexe> gameexe,
         "RLMachine requires game configuration, system, and stage");
 
   name_mapping_ = NameMapping(GetGameexe());
+  last_text_update_ = system_->event().GetClock()->GetTicks();
   system_->machine_ = this;
   InitializeGraphics();
   auto backend = presenter_->backend();
@@ -130,6 +131,13 @@ RLMachine::~RLMachine() {
 }
 
 void RLMachine::Update() {
+  const auto now = system_->event().GetClock()->GetTicks();
+  const auto text_delta =
+      std::max(now - last_text_update_, std::chrono::milliseconds::zero());
+  last_text_update_ = now;
+  system_->text().AdvanceMessageText(local_config_->time_stop
+                                         ? std::chrono::milliseconds::zero()
+                                         : text_delta);
   system_->event().ExecuteEventSystem();
   system_->text().ExecuteTextSystem();
   system_->sound().ExecuteSoundSystem();
@@ -324,6 +332,7 @@ void RLMachine::PushLongOperation(
 }
 
 void RLMachine::Reset() {
+  last_text_update_ = system_->event().GetClock()->GetTicks();
   call_stack_.Clear();
   savepoint_call_stack_.Clear();
   stage().Reset();
@@ -336,6 +345,7 @@ void RLMachine::Reset() {
 }
 
 void RLMachine::LocalReset() {
+  last_text_update_ = system_->event().GetClock()->GetTicks();
   savepoint_call_stack_.Clear();
   memory_->PartialReset(LocalMemory());
   *local_config_ = MakeRealliveLocalConfig(GetGameexe());

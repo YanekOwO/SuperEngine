@@ -33,6 +33,7 @@
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/vector.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <list>
@@ -116,6 +117,7 @@ class TextSystem final : public EventListener {
   void set_system_visible(bool in) { system_visible_ = in; }
 
   void ExecuteTextSystem();
+  void AdvanceMessageText(std::chrono::milliseconds delta);
 
   void Render();
   void RenderWindow(TextWindow& window);

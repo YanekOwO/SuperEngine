@@ -29,6 +29,7 @@
 #include "core/rect.hpp"
 #include "core/text_layout.hpp"
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -45,6 +46,7 @@ class ITextSystem;
 class TextWaku;
 class TextWindowButton;
 class TextPage;
+struct MessageStreamState;
 
 struct MwndMessageState {
   bool block_started = false;
@@ -193,8 +195,6 @@ class TextWindow {
   // #WINDOW.index.ATTR_MOD, and #WINDOW.index.ATTR
   int GetAttrMod() const { return window_attr_mod_; }
 
-  void SetRGBAF(const std::vector<int>& rgba_values);
-
   [[nodiscard]] RGBAColour GetColour() const { return colour_; }
   void SetColour(RGBAColour col) { colour_ = col; }
   [[nodiscard]] bool GetIsFilter() const { return is_filter_; }
@@ -240,6 +240,20 @@ class TextWindow {
   // point.
   void ClearWin();
 
+  // Queue a batch for window-driven reveal;
+  // ordinary page operations outside preparation still flush immediately.
+  void PrepareMessageText(const std::function<void(TextPage&)>& prepare);
+
+  // Multi-message submissions keep queuing between preparation batches and
+  // reveal independently for each stream.
+  void BeginMultiMessage();
+  void EndMultiMessage();
+  void NextMessage();
+  bool HasPendingMessageText() const;
+  int MessageAutoModeCharCount();
+  void AdvanceMessageText(std::chrono::milliseconds delta);
+  void FlushMessageText();
+
   // Displays one character, and performs line breaking logic based on the next
   // character. Returns true if the character fits on the screen. False if it
   // does not and was not displayed.
@@ -263,10 +277,11 @@ class TextWindow {
   void MarkRubyBegin();
   void DisplayRubyText(const std::string& utf8str);
 
-
  private:
   std::pair<int, int> sorter_;
   std::unique_ptr<TextPage> page_;
+  std::unique_ptr<MessageStreamState> message_stream_;
+  MessageStreamState& EnsureMessageStream();
   std::shared_ptr<MwndMessageState> message_state_ =
       std::make_shared<MwndMessageState>();
   std::optional<Size> selection_size_;

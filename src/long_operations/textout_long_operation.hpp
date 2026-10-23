@@ -29,6 +29,7 @@
 #include "long_operations/long_operation.hpp"
 
 class RLMachine;
+class TextPage;
 
 namespace lop {
 
@@ -51,27 +52,16 @@ class TextoutLongOperation : public LongOperation {
   bool OnMouseButtonStateChanged(MouseButton mouseButton, bool pressed);
   bool OnKeyStateChanged(KeyCode keyCode, bool pressed);
 
-  bool DisplayAsMuchAsWeCanThenPause(RLMachine& machine);
-
-  // Extract a name and send it to the text system as an automic
-  // operation.
-  bool DisplayName(RLMachine& machine);
-  bool DisplayOneMoreCharacter(RLMachine& machine, bool& paused);
+  // Prepare until the source ends or a character needs a new page.
+  bool PrepareNextPage(TextPage& page);
 
   std::string utf8_string_;
 
-  int current_codepoint_;
-  std::string current_char_;
-  std::string::iterator current_position_;
+  std::size_t position_ = 0;
 
   // Sets whether we should display as much text as we can immediately.
   bool no_wait_;
-
-  // How long it's been since the last time we've added time to |total_time_|.
-  static unsigned int time_at_last_pass_;
-
-  // A countdown in milliseconds until we display the next character.
-  static int next_character_countdown_;
+  bool flush_input_ = false;
 };
 
 }  // namespace lop

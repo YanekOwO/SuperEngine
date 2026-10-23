@@ -40,7 +40,7 @@ namespace lop {
 
 class SiglusMwndWaitOperation final : public LongOperation {
  public:
-  enum class AfterWait { None, Paragraph, Clear };
+  enum class AfterWait { MessageOnly, None, Paragraph, Clear };
 
   SiglusMwndWaitOperation(libsiglus::SiglusMachine& runtime,
                           std::shared_ptr<TextWindow> window,

@@ -43,6 +43,7 @@
 
 #include <boost/serialization/split_member.hpp>
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -315,6 +316,7 @@ class RLMachine {
   std::unique_ptr<GlobalConfig> global_config_;
   std::unique_ptr<Stage> stage_;
   std::unique_ptr<System> system_;
+  std::chrono::milliseconds last_text_update_{};
   LocalConfig savepoint_local_config_;
 
   // States whether the RLMachine is in the halted state (and thus won't
