@@ -24,7 +24,6 @@
 #include "libsiglus/element_parser.hpp"
 
 #include "libsiglus/element.hpp"
-#include "utilities/flat_map.hpp"
 #include "utilities/string_utilities.hpp"
 
 #include <algorithm>
@@ -35,1486 +34,6 @@
 #include <variant>
 
 namespace libsiglus::elm {
-
-// ==============================================================================
-// Helpers
-class Builder {
- public:
-  struct Ctx {
-    ElementCode& elm;
-    std::span<const Value>& elmcode;
-    AccessChain& chain;
-    std::function<void(std::string)> Warn;
-  };
-
-  Builder(std::function<void(Ctx&)> a) : action_(std::move(a)) {}
-  void Build(Ctx& ctx) const { std::invoke(action_, ctx); }
-
- private:
-  std::function<void(Ctx&)> action_;
-};
-
-// -----------------------------------------------------------------------
-inline static auto b(Type type, Node::var_t node) {
-  return Builder([t = type, n = std::move(node)](Builder::Ctx& ctx) {
-    ctx.chain.nodes.emplace_back(t, n);
-    ctx.elmcode = ctx.elmcode.subspan(1);
-  });
-}
-
-static Builder b_prop(std::string_view member,
-                      Type type,
-                      bool writable = false) {
-  return Builder([member, type, writable](Builder::Ctx& ctx) {
-    // A bind on a longer chain belongs to its final command, not this member.
-    if (ctx.elmcode.size() == 1 && ctx.elm.force_bind) {
-      const auto& bind = ctx.elm.bind_ctx;
-      if (!bind.named_arg.empty())
-        throw std::runtime_error(std::format(
-            "property '{}' does not accept tagged arguments", member));
-      if (bind.overload_id == 0) {
-        if (!bind.arg.empty())
-          throw std::runtime_error(
-              std::format("property '{}' getter expects no arguments", member));
-      } else if (bind.overload_id == 1 && writable) {
-        if (bind.arg.size() != 1)
-          throw std::runtime_error(
-              std::format("property '{}' setter expects one argument", member));
-        ctx.chain.nodes.emplace_back(Type::None,
-                                     SetMember{member, bind.arg.front()});
-        ctx.elm.force_bind = false;
-        ctx.elmcode = ctx.elmcode.subspan(1);
-        return;
-      } else {
-        throw std::runtime_error(std::format("property '{}' has no overload {}",
-                                             member, bind.overload_id));
-      }
-      ctx.elm.force_bind = false;
-    }
-    ctx.chain.nodes.emplace_back(type, Member{member});
-    ctx.elmcode = ctx.elmcode.subspan(1);
-  });
-}
-
-struct CallableTarget {
-  std::optional<int> overload_id;
-  std::string_view name;
-  Type return_type = Type::None;
-  CallFlags flags = {};
-};
-
-inline static Builder b_callable(std::string_view mem,
-                                 Type return_type = Type::None,
-                                 CallFlags flags = {}) {
-  return b(Type::Callable,
-           Member{mem, return_type, !flags.is_explicit, !flags.is_nonsimple,
-                  flags.await_result, flags.context});
-}
-static Builder b_callable(std::initializer_list<CallableTarget> targets) {
-  return Builder([targets =
-                      std::vector<CallableTarget>(targets)](Builder::Ctx& ctx) {
-    const int overload_id = ctx.elm.bind_ctx.overload_id;
-    auto member_from_target = [](const CallableTarget& target) {
-      return Member{target.name,
-                    target.return_type,
-                    !target.flags.is_explicit,
-                    !target.flags.is_nonsimple,
-                    target.flags.await_result,
-                    target.flags.context};
-    };
-
-    const CallableTarget* fallback = nullptr;
-    for (const auto& target : targets) {
-      if (target.overload_id && *target.overload_id == overload_id) {
-        ctx.chain.nodes.emplace_back(Type::Callable,
-                                     member_from_target(target));
-        ctx.elmcode = ctx.elmcode.subspan(1);
-        return;
-      }
-      if (!target.overload_id && !fallback)
-        fallback = &target;
-    }
-
-    if (fallback) {
-      ctx.chain.nodes.emplace_back(Type::Callable,
-                                   member_from_target(*fallback));
-      ctx.elmcode = ctx.elmcode.subspan(1);
-      return;
-    }
-
-    ctx.Warn(std::format("[Callable] overload {} not found while parsing {}",
-                         overload_id, ctx.chain.ToDebugString()));
-    ctx.chain.nodes.emplace_back(Type::Callable,
-                                 member_from_target(targets.front()));
-    ctx.elmcode = ctx.elmcode.subspan(1);
-  });
-}
-inline static Builder b_index_array(Type value_type) {
-  return Builder([t = value_type](Builder::Ctx& ctx) {
-    Subscript subscript{Integer(-1)};
-    if (ctx.elmcode.size() < 2) {
-      ctx.Warn("[IndexArray] expected index");
-      ctx.chain.nodes.emplace_back(t, std::move(subscript));
-      ctx.elmcode = ctx.elmcode.subspan(ctx.elmcode.size());
-      return;
-    }
-
-    subscript.idx = ctx.elmcode[1];
-    ctx.chain.nodes.emplace_back(t, std::move(subscript));
-    ctx.elmcode = ctx.elmcode.subspan(2);
-  });
-}
-inline static Builder b_intlist_bit_access(std::string_view mem) {
-  return Builder([mem](Builder::Ctx& ctx) {
-    ctx.chain.nodes.emplace_back(Type::IntList, Member{mem});
-    auto emit_error = [&](std::string message, std::size_t consume) {
-      ctx.Warn(std::move(message));
-      ctx.chain.nodes.emplace_back(Type::Int, Subscript{Integer(-1)});
-      ctx.elmcode = ctx.elmcode.subspan(std::min(consume, ctx.elmcode.size()));
-    };
-
-    if (ctx.elmcode.size() < 3) {
-      emit_error(std::format("[IntListBit] {} expected immediate index", mem),
-                 ctx.elmcode.size());
-      return;
-    }
-
-    auto* marker = std::get_if<Integer>(&ctx.elmcode[1]);
-    if (!marker || marker->val_ != -1) {
-      emit_error(std::format("[IntListBit] {} expected immediate index", mem),
-                 1);
-      return;
-    }
-
-    ctx.chain.nodes.emplace_back(Type::Int, Subscript{ctx.elmcode[2]});
-    ctx.elmcode = ctx.elmcode.subspan(3);
-  });
-}
-
-static Builder obj_getter(std::string_view mem, Type rettype = Type::Int) {
-  return b_callable(mem, rettype);
-}
-
-// ==============================================================================
-// Method map
-static flat_map<Builder> const* GetMethodMap(Type type) {
-  switch (type) {
-    case Type::IntList: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[-1] | b_index_array(Type::Int),
-           id[3] | b_intlist_bit_access("b1"),
-           id[4] | b_intlist_bit_access("b2"),
-           id[5] | b_intlist_bit_access("b4"),
-           id[7] | b_intlist_bit_access("b8"),
-           id[6] | b_intlist_bit_access("b16"), id[10] | b_callable("init"),
-           id[2] | b_callable("resize"), id[9] | b_callable("size", Type::Int),
-           id[8] | b_callable("fill"), id[1] | b_callable("Set")});
-      return &mp;
-    }
-
-    case Type::IntEventList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::IntEvent),
-                                 id[1] | b_callable("resize")});
-      return &mp;
-    }
-    case Type::IntEvent: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b(Type::Callable, Member("set")),
-           id[7] | b(Type::Callable, Member("set_real")),
-           id[1] | b(Type::Callable, Member("loop")),
-           id[8] | b(Type::Callable, Member("loop_real")),
-           id[2] | b(Type::Callable, Member("turn")),
-           id[9] | b(Type::Callable, Member("turn_real")),
-           id[3] | b_callable("end"),
-           id[4] | b_callable("wait", Type::None, AWAIT),
-           id[10] | b_callable("wait_key", Type::None, AWAIT),
-           id[5] | b_callable("check", Type::Int)});
-
-      return &mp;
-    }
-
-    case Type::StrList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::String),
-                                 id[3] | b_callable("init", Type::None),
-                                 id[2] | b(Type::Callable, Member("resize")),
-                                 id[4] | b_callable("size", Type::Int)});
-      return &mp;
-    }
-    case Type::String: {
-      static const auto mp =
-          make_flatmap<Builder>({id[0] | b_callable("upper", Type::String),
-                                 id[1] | b_callable("lower", Type::String),
-                                 id[6] | b_callable("cnt", Type::Int),
-                                 id[5] | b_callable("len", Type::Int),
-                                 id[2] | b_callable("left", Type::String),
-                                 id[7] | b_callable("left_len", Type::String),
-                                 id[4] | b_callable("right", Type::String),
-                                 id[9] | b_callable("right_len", Type::String),
-                                 id[3] | b_callable("mid", Type::String),
-                                 id[8] | b_callable("mid_len", Type::String),
-                                 id[10] | b_callable("find", Type::Int),
-                                 id[11] | b_callable("rfind", Type::Int),
-                                 id[13] | b_callable("charat", Type::Int),
-                                 id[12] | b_callable("tonum", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Math: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[3] | b_callable("max", Type::Int),
-           id[4] | b_callable("min", Type::Int),
-           id[10] | b_callable("limit", Type::Int),
-           id[5] | b_callable("abs", Type::Int),
-           id[0] | b_callable("rand", Type::Int),
-           id[14] | b_callable("sqrt", Type::Int),
-           id[19] | b_callable("log", Type::Int),
-           id[20] | b_callable("log2", Type::Int),
-           id[21] | b_callable("log10", Type::Int),
-           id[6] | b_callable("sin", Type::Int),
-           id[7] | b_callable("cos", Type::Int),
-           id[8] | b_callable("tan", Type::Int),
-           id[16] | b_callable("asin", Type::Int),
-           id[17] | b_callable("acos", Type::Int),
-           id[18] | b_callable("atan", Type::Int),
-           id[15] | b_callable("distance", Type::Int),
-           id[22] | b_callable("angle", Type::Int),
-           id[9] | b_callable("linear", Type::Int),
-           id[2] | b_callable("timetable", Type::Int),
-           id[1] | b_callable("tostr", Type::String),
-           id[11] | b_callable("tostr_zero", Type::String),
-           id[12] | b_callable("tostr_zen", Type::String),
-           id[13] | b_callable("tostr_zen_zero", Type::String),
-           id[23] | b_callable("tostr_code", Type::String)});
-      return &mp;
-    }
-
-    case Type::System: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[14] | b_callable("calendar", Type::None),
-           id[15] | b_callable("time", Type::Int),
-           id[0] | b_callable("window_active", Type::Int),
-           id[13] | b_callable("is_debug", Type::Int),
-           id[1] | b_callable("shell_openfile"),
-           id[5] | b_callable("openurl"),
-           id[6] | b_callable("check_file_exist"),
-           id[12] | b_callable("check_save_file_exist"),
-           id[2] | b_callable("check_dummy"),
-           id[21] | b_callable("clear_dummy", Type::None),
-           id[17] | b_callable("msgbox_ok"),
-           id[18] | b_callable("msgbox_okcancel"),
-           id[19] | b_callable("msgbox_yn"),
-           id[20] | b_callable("msgbox_yncancel"),
-           id[7] | b_callable("debug_msgbox_ok"),
-           id[8] | b_callable("debug_msgbox_okcancel"),
-           id[9] | b_callable("debug_msgbox_yn"),
-           id[10] | b_callable("debug_msgbox_yncancel"),
-           id[11] | b_callable("debug_write_log"),
-           id[4] | b_callable("get_chihayabench", Type::String),
-           id[3] | b_callable("open_chihayabench"),
-           id[16] | b_callable("get_lang", Type::String)});
-      return &mp;
-    }
-
-    case Type::Script: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[38] | b_callable("set_auto_savepoint_off"),
-           id[39] | b_callable("set_auto_savepoint_on"),
-           id[2] | b_callable("set_skip_disable"),
-           id[5] | b_callable("set_skip_enable"),
-           id[85] | b_callable("set_skip_disable_flag"),
-           id[83] | b_callable("get_skip_disable_flag", Type::Int),
-           id[6] | b_callable("set_ctrl_skip_disable"),
-           id[7] | b_callable("set_ctrl_skip_enable"),
-           id[86] | b_callable("set_ctrl_skip_disable_flag"),
-           id[84] | b_callable("get_ctrl_skip_disable_flag", Type::Int),
-           id[18] | b_callable("check_skip"),
-           id[30] | b_callable("set_stop_skip_by_key_disable"),
-           id[31] | b_callable("set_stop_skip_by_key_enable"),
-           id[54] | b_callable("set_end_msg_by_key_disable"),
-           id[55] | b_callable("set_end_msg_by_key_enable"),
-           id[74] | b_callable("set_skip_unread_message_flag"),
-           id[75] | b_callable("get_skip_unread_message_flag", Type::Int),
-           id[0] | b_callable("start_auto_mode"),
-           id[1] | b_callable("end_auto_mode"),
-           id[60] | b_callable("set_auto_mode_moji_wait"),
-           id[62] | b_callable("set_auto_mode_moji_wait_default"),
-           id[64] | b_callable("get_auto_mode_moji_wait", Type::Int),
-           id[61] | b_callable("set_auto_mode_min_wait"),
-           id[63] | b_callable("set_auto_mode_min_wait_default"),
-           id[65] | b_callable("get_auto_mode_min_wait", Type::Int),
-           id[76] | b_callable("set_auto_mode_moji_cnt"),
-           id[77] | b_callable("set_mouse_cursor_hide_onoff"),
-           id[82] | b_callable("set_mouse_cursor_hide_onoff_default"),
-           id[78] | b_callable("get_mouse_cursor_hide_onoff", Type::Int),
-           id[79] | b_callable("set_mouse_cursor_hide_time"),
-           id[80] | b_callable("set_mouse_cursor_hide_time_default"),
-           id[81] | b_callable("get_mouse_cursor_hide_time", Type::Int),
-           id[25] | b_callable("set_message_speed"),
-           id[27] | b_callable("set_message_speed_default"),
-           id[26] | b_callable("get_message_speed", Type::Int),
-           id[28] | b_callable("set_message_nowait_flag"),
-           id[29] | b_callable("get_message_nowait_flag", Type::Int),
-           id[21] | b_callable("set_msg_async_mode_on"),
-           id[51] | b_callable("set_msg_async_mode_on_once"),
-           id[22] | b_callable("set_msg_async_mode_off"),
-           id[46] | b_callable("set_hide_mwnd_disable"),
-           id[47] | b_callable("set_hide_mwnd_enable"),
-           id[12] | b_callable("set_msg_back_disable"),
-           id[13] | b_callable("set_msg_back_enable"),
-           id[34] | b_callable("set_msg_back_off"),
-           id[35] | b_callable("set_msg_back_on"),
-           id[56] | b_callable("set_msg_back_disp_off"),
-           id[57] | b_callable("set_msg_back_disp_on"),
-           id[14] | b_callable("set_mouse_disp_off"),
-           id[15] | b_callable("set_mouse_disp_on"),
-           id[19] | b_callable("set_mouse_move_by_key_disable"),
-           id[20] | b_callable("set_mouse_move_by_key_enable"),
-           id[40] | b_callable("set_key_disable"),
-           id[41] | b_callable("set_key_enable"),
-           id[3] | b_callable("set_mwnd_anime_off_flag"),
-           id[9] | b_callable("get_mwnd_anime_off_flag", Type::Int),
-           id[4] | b_callable("set_mwnd_anime_on_flag"),
-           id[16] | b_callable("get_mwnd_anime_on_flag", Type::Int),
-           id[8] | b_callable("set_mwnd_disp_off_flag"),
-           id[17] | b_callable("get_mwnd_disp_off_flag", Type::Int),
-           id[42] | b_callable("set_koe_dont_stop_on_flag"),
-           id[43] | b_callable("get_koe_dont_stop_on_flag", Type::Int),
-           id[44] | b_callable("set_koe_dont_stop_off_flag"),
-           id[45] | b_callable("get_koe_dont_stop_off_flag", Type::Int),
-           id[33] | b_callable("set_shortcut_enable"),
-           id[32] | b_callable("set_shortcut_disable"),
-           id[11] | b_callable("set_quake_stop_flag"),
-           id[23] | b_callable("get_quake_stop_flag", Type::Int),
-           id[96] | b_callable("set_emote_mouth_stop_flag"),
-           id[97] | b_callable("get_emote_mouth_stop_flag", Type::Int),
-           id[36] | b_callable("start_bgmfade"),
-           id[37] | b_callable("end_bgmfade"),
-           id[10] | b_callable("set_vsync_wait_off_flag"),
-           id[24] | b_callable("get_vsync_wait_off_flag", Type::Int),
-           id[48] | b_callable("set_skip_trigger"),
-           id[49] | b_callable("ignore_r_on"),
-           id[50] | b_callable("ignore_r_off"),
-           id[52] | b_callable("set_cursor_no"),
-           id[53] | b_callable("get_cursor_no", Type::Int),
-           id[66] | b_callable("set_time_stop_flag"),
-           id[67] | b_callable("get_time_stop_flag", Type::Int),
-           id[68] | b_callable("set_counter_time_stop_flag"),
-           id[73] | b_callable("get_counter_time_stop_flag", Type::Int),
-           id[69] | b_callable("set_frame_action_time_stop_flag"),
-           id[72] | b_callable("get_frame_action_time_stop_flag", Type::Int),
-           id[70] | b_callable("set_stage_time_stop_flag"),
-           id[71] | b_callable("get_stage_time_stop_flag", Type::Int)});
-      return &mp;
-    }
-
-    case Type::ScriptExcall: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[87] | b_callable("set_font_name"),
-           id[89] | b_callable("set_font_name_default"),
-           id[88] | b_callable("get_font_name", Type::String),
-           id[90] | b_callable("set_font_bold"),
-           id[91] | b_callable("set_font_bold_default"),
-           id[92] | b_callable("get_font_bold", Type::Int),
-           id[93] | b_callable("set_font_shadow"),
-           id[94] | b_callable("set_font_shadow_default"),
-           id[95] | b_callable("get_font_shadow", Type::Int)});
-      return &mp;
-    }
-
-    case Type::FrameActionList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::FrameAction),
-                                 id[2] | b_callable("size", Type::Int),
-                                 id[1] | b_callable("resize")});
-      return &mp;
-    }
-
-    case Type::FrameAction: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[1] | b_callable("start"), id[3] | b_callable("start_real"),
-           id[2] | b_callable("end", Type::None),
-           id[0] | b_prop("counter", Type::Counter),
-           id[4] | b_callable("is_end_action", Type::Int)});
-      return &mp;
-    }
-
-    case Type::CounterList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Counter),
-                                 id[1] | b_callable("size", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Counter: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("set"), id[1] | b_callable("get", Type::Int),
-           id[2] | b_callable("reset"), id[3] | b_callable("start"),
-           id[9] | b_callable("start_real"), id[10] | b_callable("start_frame"),
-           id[11] | b_callable("start_frame_real"),
-           id[12] | b_callable("start_frame_loop"),
-           id[13] | b_callable("start_frame_loop_real"),
-           id[4] | b_callable("stop"), id[5] | b_callable("resume"),
-           id[6] | b_callable("wait", Type::None, AWAIT),
-           id[8] | b_callable("wait_key", Type::Int, AWAIT),
-           id[7] | b_callable("check_value", Type::Int),
-           id[14] | b_callable("check_active", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Syscom: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b(Type::None, Member("menu")),
-           id[6] | b(Type::Callable, Member("menu_enable")),
-           id[7] | b(Type::Callable, Member("menu_disable")),
-           id[11] | b_callable({{0, "btn_enable_all"}, {1, "btn_enable"}}),
-           id[12] | b_callable({{0, "btn_disable_all"}, {1, "btn_disable"}}),
-           id[133] | b(Type::None, Member("touch_enable")),
-           id[134] | b(Type::None, Member("touch_disable")),
-           id[5] | b(Type::None, Member("init_flags")),
-           // readskip
-           id[200] | b(Type::Callable, Member("set_readskip")),
-           id[201] | b(Type::Int, Member("get_readskip")),
-           id[202] | b(Type::Callable, Member("set_enable_readskip")),
-           id[203] | b(Type::Int, Member("get_enable_readskip")),
-           id[204] | b(Type::Callable, Member("set_exist_readskip")),
-           id[205] | b(Type::Int, Member("get_exist_readskip")),
-           id[206] | b(Type::Int, Member("is_readskip_enable")),
-           // autoskip
-           id[207] | b(Type::Callable, Member("set_autoskip")),
-           id[208] | b_callable("get_autoskip", Type::Int),
-           id[209] | b(Type::Callable, Member("set_enable_autoskip")),
-           id[210] | b(Type::Int, Member("get_enable_autoskip")),
-           id[211] | b(Type::Callable, Member("set_exist_autoskip")),
-           id[212] | b(Type::Int, Member("get_exist_autoskip")),
-           id[213] | b(Type::Int, Member("is_autoskip_enable")),
-           // automode
-           id[214] | b(Type::Callable, Member("set_automode")),
-           id[215] | b(Type::Int, Member("get_automode")),
-           id[216] | b(Type::Callable, Member("set_enable_automode")),
-           id[217] | b(Type::Int, Member("get_enable_automode")),
-           id[218] | b(Type::Callable, Member("set_exist_automode")),
-           id[219] | b(Type::Int, Member("get_exist_automode")),
-           id[220] | b(Type::Int, Member("is_automode_enable")),
-           // hide mwnd
-           id[221] | b(Type::Callable, Member("set_hidemwnd")),
-           id[222] | b(Type::Int, Member("get_hidemwnd")),
-           id[223] | b(Type::Callable, Member("set_enable_hidemwnd")),
-           id[224] | b(Type::Int, Member("get_enable_hidemwnd")),
-           id[225] | b(Type::Callable, Member("set_exist_hidemwnd")),
-           id[226] | b(Type::Int, Member("get_exist_hidemwnd")),
-           id[227] | b(Type::Int, Member("is_hidemwnd_enable")),
-           // extra local switch
-           id[300] | b(Type::Callable, Member("set_extraswitch")),
-           id[301] | b(Type::Callable, Member("get_extraswitch")),
-           id[302] | b(Type::Callable, Member("set_enable_extraswitch")),
-           id[303] | b(Type::Callable, Member("get_enable_extraswitch")),
-           id[304] | b(Type::Callable, Member("set_exist_extraswitch")),
-           id[305] | b(Type::Callable, Member("get_exist_extraswitch")),
-           id[306] | b(Type::Callable, Member("is_extraswitch_enable")),
-           // local mode
-           id[23] | b(Type::Callable, Member("set_localmode")),
-           id[57] | b(Type::Int, Member("get_localmode")),
-           id[58] | b(Type::Callable, Member("set_enable_localmode")),
-           id[59] | b(Type::Int, Member("get_enable_localmode")),
-           id[62] | b(Type::Callable, Member("set_exist_localmode")),
-           id[63] | b(Type::Int, Member("get_exist_localmode")),
-           id[64] | b(Type::Int, Member("is_localmode_enable")),
-           // msgback
-           id[192] | b(Type::None, Member("open_msgback")),
-           id[193] | b(Type::None, Member("close_msgback")),
-           id[194] | b(Type::Callable, Member("set_enable_msgback")),
-           id[195] | b(Type::Int, Member("get_enable_msgback")),
-           id[196] | b(Type::Callable, Member("set_exist_msgback")),
-           id[197] | b(Type::Int, Member("get_exist_msgback")),
-           id[198] | b(Type::Int, Member("is_msgback_enable")),
-           id[329] | b(Type::Int, Member("is_msgback_open")),
-           // return to sel
-           id[228] | b(Type::Callable, Member("return_to_sel")),
-           id[230] | b(Type::Callable, Member("set_enable_retsel")),
-           id[231] | b(Type::Int, Member("get_enable_retsel")),
-           id[232] | b(Type::Callable, Member("set_exist_retsel")),
-           id[233] | b(Type::Int, Member("get_exist_retsel")),
-           id[234] | b(Type::Int, Member("is_retsel_enable")),
-           // return to menu
-           id[235] | b(Type::Callable, Member("return_to_menu")),
-           id[237] | b(Type::Callable, Member("set_enable_retmenu")),
-           id[238] | b(Type::Int, Member("get_enable_retmenu")),
-           id[239] | b(Type::Callable, Member("set_exist_retmenu")),
-           id[240] | b(Type::Int, Member("get_exist_retmenu")),
-           id[241] | b(Type::Int, Member("is_retmenu_enable")),
-           // end game
-           id[242] | b(Type::Callable, Member("end_game")),
-           id[244] | b(Type::Callable, Member("set_enable_endgame")),
-           id[245] | b(Type::Int, Member("get_enable_endgame")),
-           id[246] | b(Type::Callable, Member("set_exist_endgame")),
-           id[247] | b(Type::Int, Member("get_exist_endgame")),
-           id[248] | b(Type::Int, Member("is_endgame_enable")),
-           // replay koe
-           id[288] | b(Type::None, Member("replay_koe")),
-           id[292] | b(Type::Int, Member("check_koe")),
-           id[289] | b(Type::Int, Member("get_cur_koe")),
-           id[291] | b(Type::Int, Member("get_cur_chr")),
-           id[293] | b(Type::None, Member("clear_koe_chr")),
-           id[294] | b(Type::String, Member("get_scene_title")),
-           id[295] | b(Type::String, Member("get_save_message")),
-
-           id[199] | b(Type::None, Member("get_total_playtime(fixme)")),
-           id[229] | b(Type::Callable, Member("set_total_playtime")),
-
-           // save
-           id[1] | b(Type::None, Member("open_save")),
-           id[251] | b(Type::Callable, Member("set_enable_save")),
-           id[252] | b(Type::Int, Member("get_enable_save")),
-           id[253] | b(Type::Callable, Member("set_exist_save")),
-           id[254] | b(Type::Int, Member("get_exist_save")),
-           id[255] | b(Type::Int, Member("is_save_enable")),
-           // load
-           id[2] | b(Type::None, Member("open_load")),
-           id[258] | b(Type::Callable, Member("set_enable_load")),
-           id[259] | b(Type::Int, Member("get_enable_load")),
-           id[260] | b(Type::Callable, Member("set_exist_load")),
-           id[261] | b(Type::Int, Member("get_exist_load")),
-           id[262] | b(Type::Int, Member("is_load_enable")),
-
-           // save / load
-           id[249] | b(Type::Callable, Member("save")),
-           id[256] | b(Type::Callable, Member("load")),
-           id[18] | b(Type::Callable, Member("qsave")),
-           id[20] | b(Type::Callable, Member("qload")),
-           id[271] | b(Type::Callable, Member("endsave")),
-           id[269] | b(Type::Callable, Member("endload")),
-           // inner save / load
-           id[272] | b(Type::Callable, Member("inner_save")),
-           id[273] | b(Type::Callable, Member("inner_load")),
-           id[276] | b(Type::Callable, Member("clear_inner_save")),
-           id[274] | b(Type::Callable, Member("check_inner_save")),
-           // message back save / load
-           id[310] | b(Type::Callable, Member("msgbk_load")),
-           // save data
-           id[68] | b(Type::Int, Member("get_save_count")),
-           id[168] | b(Type::Int, Member("get_qsave_count")),
-           id[79] | b(Type::Callable, Member("get_new_save_no")),
-           id[170] | b(Type::Callable, Member("get_new_qsave_no")),
-           id[69] | b(Type::Callable, Member("is_save_exist")),
-           id[70] | b(Type::Callable, Member("get_save_year")),
-           id[71] | b(Type::Callable, Member("get_save_month")),
-           id[72] | b(Type::Callable, Member("get_save_day")),
-           id[73] | b(Type::Callable, Member("get_save_weekday")),
-           id[74] | b(Type::Callable, Member("get_save_hour")),
-           id[75] | b(Type::Callable, Member("get_save_minute")),
-           id[76] | b(Type::Callable, Member("get_save_second")),
-           id[77] | b(Type::Callable, Member("get_save_millisecond")),
-           id[78] | b(Type::Callable, Member("get_save_title")),
-           id[129] | b(Type::Callable, Member("get_save_message")),
-           id[324] | b(Type::Callable, Member("get_save_full_message")),
-           id[131] | b(Type::Callable, Member("get_save_comment")),
-           id[180] | b(Type::Callable, Member("set_save_comment")),
-           id[183] | b_callable("get_save_value", Type::Int),
-           id[182] | b_callable("set_save_value"),
-           id[320] | b(Type::Callable, Member("get_save_append_dir")),
-           id[321] | b(Type::Callable, Member("get_save_append_name")),
-           id[169] | b(Type::Callable, Member("is_qsave_exist")),
-           id[171] | b(Type::Callable, Member("get_qsave_year")),
-           id[172] | b(Type::Callable, Member("get_qsave_month")),
-           id[173] | b(Type::Callable, Member("get_qsave_day")),
-           id[174] | b(Type::Callable, Member("get_qsave_weekday")),
-           id[175] | b(Type::Callable, Member("get_qsave_hour")),
-           id[176] | b(Type::Callable, Member("get_qsave_minute")),
-           id[177] | b(Type::Callable, Member("get_qsave_second")),
-           id[178] | b(Type::Callable, Member("get_qsave_millisecond")),
-           id[179] | b(Type::Callable, Member("get_qsave_title")),
-           id[130] | b(Type::Callable, Member("get_qsave_message")),
-           id[325] | b(Type::Callable, Member("get_qsave_full_message")),
-           id[132] | b(Type::Callable, Member("get_qsave_comment")),
-           id[181] | b(Type::Callable, Member("set_qsave_comment")),
-           id[184] | b_callable("get_qsave_value", Type::Int),
-           id[185] | b_callable("set_qsave_value"),
-           id[322] | b(Type::Callable, Member("get_qsave_append_dir")),
-           id[323] | b(Type::Callable, Member("get_qsave_append_name")),
-           id[270] | b(Type::Callable, Member("is_endsave_exist")),
-           id[67] | b(Type::Callable, Member("copy_save")),
-           id[22] | b(Type::Callable, Member("change_save")),
-           id[19] | b(Type::Callable, Member("delete_save")),
-           id[128] | b(Type::Callable, Member("copy_qsave")),
-           id[66] | b(Type::Callable, Member("change_qsave")),
-           id[65] | b(Type::Callable, Member("delete_qsave")),
-
-           // environment settings
-           id[3] | b(Type::None, Member("open_config_menu")),
-           id[138] | b(Type::None, Member("open_config_windowmode_menu")),
-           id[139] | b(Type::None, Member("open_config_volume_menu")),
-           id[137] | b(Type::None, Member("open_config_bgm_fade_menu")),
-           id[147] | b(Type::None, Member("open_config_koemode_menu")),
-           id[146] | b(Type::None, Member("open_config_charakoe_menu")),
-           id[151] | b(Type::None, Member("open_config_jitan_menu")),
-           id[135] | b(Type::None, Member("open_config_message_speed_menu")),
-           id[136] | b(Type::None, Member("open_config_filter_color_menu")),
-           id[140] | b(Type::None, Member("open_config_auto_mode_menu")),
-           id[142] | b(Type::None, Member("open_config_font_menu")),
-           id[141] | b(Type::None, Member("open_config_system_menu")),
-           id[167] | b(Type::None, Member("open_config_movie_menu")),
-           // window mode
-           id[4] | b(Type::Callable, Member("set_window_mode")),
-           id[99] | b(Type::None, Member("set_window_mode_default")),
-           id[9] | b(Type::Int, Member("get_window_mode")),
-           id[13] | b(Type::Callable, Member("set_window_mode_size")),
-           id[100] | b(Type::None, Member("set_window_mode_default")),
-           id[16] | b(Type::Int, Member("get_window_mode_size")),
-           id[309] | b(Type::Callable, Member("check_window_mode_size_enable")),
-
-           // volume
-           id[39] | b(Type::Callable, Member("set_all_volume")),
-           id[21] | b(Type::Callable, Member("set_bgm_volume")),
-           id[26] | b(Type::Callable, Member("set_koe_volume")),
-           id[29] | b(Type::Callable, Member("set_pcm_volume")),
-           id[32] | b(Type::Callable, Member("set_se_volume")),
-           id[263] | b(Type::Callable, Member("set_mov_volume")),
-           id[277] | b(Type::Callable, Member("set_sound_volume")),
-           id[60] | b(Type::Callable, Member("set_all_onoff")),
-           id[35] | b(Type::Callable, Member("set_bgm_onoff")),
-           id[36] | b(Type::Callable, Member("set_koe_onoff")),
-           id[37] | b(Type::Callable, Member("set_pcm_onoff")),
-           id[38] | b(Type::Callable, Member("set_se_onoff")),
-           id[266] | b(Type::Callable, Member("set_mov_onoff")),
-           id[280] | b(Type::Callable, Member("set_sound_onoff")),
-           id[40] | b(Type::None, Member("set_all_volume_default")),
-           id[24] | b(Type::None, Member("set_bgm_volume_default")),
-           id[27] | b(Type::None, Member("set_koe_volume_default")),
-           id[30] | b(Type::None, Member("set_pcm_volume_default")),
-           id[33] | b(Type::None, Member("set_se_volume_default")),
-           id[264] | b(Type::None, Member("set_mov_volume_default")),
-           id[278] | b(Type::Callable, Member("set_sound_volume_default")),
-           id[101] | b(Type::None, Member("set_all_onoff_default")),
-           id[102] | b(Type::None, Member("set_bgm_onoff_default")),
-           id[103] | b(Type::None, Member("set_koe_onoff_default")),
-           id[104] | b(Type::None, Member("set_pcm_onoff_default")),
-           id[105] | b(Type::None, Member("set_se_onoff_default")),
-           id[267] | b(Type::None, Member("set_mov_onoff_default")),
-           id[281] | b(Type::Callable, Member("set_sound_onoff_default")),
-           id[41] | b(Type::Int, Member("get_all_volume")),
-           id[25] | b(Type::Int, Member("get_bgm_volume")),
-           id[28] | b(Type::Int, Member("get_koe_volume")),
-           id[31] | b(Type::Int, Member("get_pcm_volume")),
-           id[34] | b(Type::Int, Member("get_se_volume")),
-           id[265] | b(Type::Int, Member("get_mov_volume")),
-           id[279] | b(Type::Callable, Member("get_sound_volume")),
-           id[61] | b(Type::Int, Member("get_all_onoff")),
-           id[42] | b(Type::Int, Member("get_bgm_onoff")),
-           id[43] | b(Type::Int, Member("get_koe_onoff")),
-           id[44] | b(Type::Int, Member("get_pcm_onoff")),
-           id[45] | b(Type::Int, Member("get_se_onoff")),
-           id[268] | b(Type::Int, Member("get_mov_onoff")),
-           id[282] | b(Type::Callable, Member("get_sound_onoff")),
-           // bgm fade
-           id[94] | b(Type::Callable, Member("set_bgmfade_volume")),
-           id[97] | b(Type::Callable, Member("set_bgmfade_onoff")),
-           id[95] | b(Type::None, Member("set_bgmfade_volume_default")),
-           id[106] | b(Type::None, Member("set_bgmfade_onoff_default")),
-           id[96] | b(Type::Int, Member("get_bgmfade_volume")),
-           id[98] | b(Type::Int, Member("get_bgmfade_onoff")),
-           // koemode
-           id[148] | b(Type::Callable, Member("set_koemode")),
-           id[149] | b(Type::None, Member("set_koemode_default")),
-           id[150] | b(Type::Int, Member("get_koemode")),
-           // character koe
-           id[143] | b(Type::Callable, Member("set_charakoe_onoff")),
-           id[144] | b(Type::Callable, Member("set_charakoe_onoff_default")),
-           id[145] | b(Type::Callable, Member("get_charakoe_onoff")),
-           id[186] | b(Type::Callable, Member("set_charakoe_volume")),
-           id[187] | b(Type::Callable, Member("set_charakoe_volume_default")),
-           id[188] | b(Type::Callable, Member("get_charakoe_volume")),
-           // jitan
-           id[153] | b(Type::Callable, Member("set_jitan_normal_onoff")),
-           id[154] | b(Type::None, Member("set_jitan_normal_onoff_default")),
-           id[155] | b_callable("get_jitan_normal_onoff", Type::Int),
-           id[156] | b(Type::Callable, Member("set_jitan_auto_mode_onoff")),
-           id[157] | b(Type::None, Member("set_jitan_auto_mode_onoff_default")),
-           id[158] | b(Type::Int, Member("get_jitan_auto_mode_onoff")),
-           id[159] | b(Type::Callable, Member("set_jitan_koe_replay_onoff")),
-           id[160] |
-               b(Type::None, Member("set_jitan_koe_replay_onoff_default")),
-           id[161] | b(Type::Int, Member("get_jitan_koe_replay_onoff")),
-           id[152] | b(Type::Callable, Member("set_jitan_speed")),
-           id[162] | b(Type::None, Member("set_jitan_speed_default")),
-           id[163] | b(Type::Int, Member("get_jitan_speed")),
-           // message speed
-           id[46] | b(Type::Callable, Member("set_message_speed")),
-           id[47] | b(Type::None, Member("set_message_speed_default")),
-           id[48] | b(Type::Int, Member("get_message_speed")),
-           id[49] | b(Type::Callable, Member("set_message_nowait")),
-           id[107] | b(Type::None, Member("set_message_nowait_default")),
-           id[50] | b(Type::Int, Member("get_message_nowait")),
-           // auto mode
-           id[51] | b(Type::Callable, Member("set_auto_mode_moji_wait")),
-           id[52] | b(Type::None, Member("set_auto_mode_moji_wait_default")),
-           id[53] | b(Type::Int, Member("get_auto_mode_moji_wait")),
-           id[54] | b(Type::Callable, Member("set_auto_mode_min_wait")),
-           id[55] | b(Type::None, Member("set_auto_mode_min_wait_default")),
-           id[56] | b(Type::Int, Member("get_auto_mode_min_wait")),
-           // auto hide mouse cursor
-           id[311] | b(Type::Callable, Member("set_mouse_cursor_hide_onoff")),
-           id[312] |
-               b(Type::None, Member("set_mouse_cursor_hide_onoff_default")),
-           id[313] | b(Type::Int, Member("get_mouse_cursor_hide_onoff")),
-           id[317] | b(Type::Callable, Member("set_mouse_cursor_hide_time")),
-           id[318] |
-               b(Type::None, Member("set_mouse_cursor_hide_time_default")),
-           id[319] | b(Type::Int, Member("get_mouse_cursor_hide_time")),
-           // window background color
-           id[82] | b(Type::Callable, Member("set_filter_color_r")),
-           id[85] | b(Type::Callable, Member("set_filter_color_g")),
-           id[86] | b(Type::Callable, Member("set_filter_color_b")),
-           id[87] | b(Type::Callable, Member("set_filter_color_a")),
-           id[83] | b(Type::None, Member("set_filter_color_r_default")),
-           id[88] | b(Type::None, Member("set_filter_color_g_default")),
-           id[89] | b(Type::None, Member("set_filter_color_b_default")),
-           id[90] | b(Type::None, Member("set_filter_color_a_default")),
-           id[84] | b(Type::Int, Member("get_filter_color_r")),
-           id[91] | b(Type::Int, Member("get_filter_color_g")),
-           id[92] | b(Type::Int, Member("get_filter_color_b")),
-           id[93] | b(Type::Int, Member("get_filter_color_a")),
-           // display object
-           id[189] | b(Type::Callable, Member("set_obj_disp_onoff")),
-           id[190] | b(Type::Callable, Member("set_obj_disp_onoff_default")),
-           id[191] | b(Type::Callable, Member("get_obj_disp_onoff")),
-           // global extra switch
-           id[14] | b(Type::Callable, Member("set_global_extraswitch_onoff")),
-           id[15] | b(Type::Callable,
-                      Member("set_global_extraswitch_onoff_default")),
-           id[17] | b(Type::Callable, Member("get_global_extraswitch_onoff")),
-           // global extra mode
-           id[164] | b(Type::Callable, Member("set_global_extramode")),
-           id[165] | b(Type::Callable, Member("set_global_extramode_default")),
-           id[166] | b(Type::Callable, Member("get_global_extramode_default")),
-
-           // system settings
-           id[80] | b(Type::Callable, Member("set_saveload_alert_onoff")),
-           id[108] | b(Type::None, Member("set_saveload_alert_onoff_default")),
-           id[10] | b(Type::Int, Member("get_saveload_alert_onoff")),
-           id[110] | b(Type::Callable, Member("set_sleep_onoff")),
-           id[111] | b(Type::None, Member("set_sleep_onoff_default")),
-           id[112] | b(Type::Int, Member("get_sleep_onoff")),
-           id[113] | b(Type::Callable, Member("set_no_wipe_anime_onoff")),
-           id[114] | b(Type::None, Member("set_no_wipe_anime_onoff_default")),
-           id[115] | b(Type::Callable, Member("get_no_wipe_anime_onoff")),
-           id[116] | b(Type::Callable, Member("set_skip_wipe_anime_onoff")),
-           id[117] | b(Type::None, Member("set_skip_wipe_anime_onoff_default")),
-           id[118] | b(Type::Int, Member("get_skip_wipe_anime_onoff")),
-           id[8] | b_callable("set_no_mwnd_anime_onoff"),
-           id[109] | b_callable("set_no_mwnd_anime_onoff_default"),
-           id[81] | b_callable("get_no_mwnd_anime_onoff", Type::Int),
-           id[119] | b(Type::Callable, Member("set_wheel_next_message_onoff")),
-           id[120] |
-               b(Type::None, Member("set_wheel_next_message_onoff_default")),
-           id[121] | b(Type::Int, Member("get_wheel_next_message_onoff")),
-           id[122] | b(Type::Callable, Member("set_koe_dont_stop_onoff")),
-           id[123] | b(Type::None, Member("set_koe_dont_stop_onoff_default")),
-           id[124] | b(Type::Int, Member("get_koe_dont_stop_onoff")),
-           id[125] | b(Type::Callable, Member("set_skip_unread_message_onoff")),
-           id[126] |
-               b(Type::None, Member("set_skip_unread_message_onoff_default")),
-           id[127] | b(Type::Int, Member("get_skip_unread_message_onoff")),
-           id[250] | b(Type::Callable, Member("set_play_silent_sound_onoff")),
-           id[247] |
-               b(Type::None, Member("set_play_silent_sound_onoff_default")),
-           id[243] | b(Type::Int, Member("get_play_silent_sound_onoff")),
-
-           // font
-           id[283] | b(Type::Callable, Member("set_font_name")),
-           id[326] | b(Type::None, Member("set_font_name_default")),
-           id[284] | b(Type::String, Member("get_font_name")),
-           id[285] | b(Type::Callable, Member("is_font_exist")),
-           id[296] | b(Type::Callable, Member("set_font_bold")),
-           id[298] | b(Type::None, Member("set_font_bold_default")),
-           id[307] | b(Type::Int, Member("get_font_bold")),
-           id[297] | b(Type::Callable, Member("set_font_decoration")),
-           id[299] | b(Type::None, Member("set_font_decoration_default")),
-           id[308] | b(Type::Int, Member("get_font_decoration")),
-
-           // capture
-           id[286] | b_callable("create_capture_buffer"),
-           id[287] | b_callable("destroy_capture_buffer"),
-           id[290] | b_callable("capture_to_capture_buffer", Type::None, AWAIT),
-           id[314] | b_callable("save_capture_buffer_to_file", Type::Int,
-                                NONSIMPLE | AWAIT),
-           id[315] | b_callable("load_flag_from_capture_file", Type::Int,
-                                NONSIMPLE | AWAIT),
-           id[316] | b_callable("capture_to_png", Type::None, AWAIT),
-           id[327] | b(Type::None, Member("twitter")),
-           id[328] | b(Type::Callable, Member("set_ret_scene_once")),
-           id[330] | b(Type::Callable, Member("get_sys_extra_int")),
-           id[331] | b(Type::Callable, Member("get_sys_extra_str"))});
-      return &mp;
-    }
-
-    case Type::Excall: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[-1] | b_index_array(Type::Excall),
-           id[4] | b(Type::None, Member("alloc")),
-           id[5] | b(Type::None, Member("free")),
-           id[12] | b(Type::Int, Member("is_excall")),
-           id[8] | b(Type::Int, Member("check_alloc")),
-           id[7] | b(Type::IntList, Member("F")),
-           id[6] | b(Type::CounterList, Member("counter")),
-           id[9] | b(Type::FrameAction, Member("frame_action")),
-           id[10] | b(Type::FrameActionList, Member("frame_action_ch")),
-           id[0] | b(Type::StageList, Member("stage")),
-           id[2] | b(Type::Stage, Member("back")),
-           id[1] | b(Type::Stage, Member("front")),
-           id[3] | b(Type::Stage, Member("next")),
-           id[13] | b(Type::ScriptExcall, Member("script"))});
-      return &mp;
-    }
-
-    case Type::StageList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Stage)});
-      return &mp;
-    }
-    case Type::Stage: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[2] | b(Type::ObjList, Member("object")),
-           id[3] | b(Type::MwndList, Member("mwnd")),
-           id[6] | b(Type::GroupList, Member("objgroup")),
-           id[5] | b(Type::BtnselItemList, Member("btnsel")),
-           id[8] | b(Type::WorldList, Member("world")),
-           id[4] | b(Type::EffectList, Member("effect")),
-           id[7] | b(Type::QuakeList, Member("quake")),
-           id[0] | b(Type::Callable, Member("create_obj")),
-           id[1] | b(Type::Callable, Member("create_mwnd"))});
-      return &mp;
-    }
-
-    case Type::GroupList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Group),
-                                 id[1] | b_callable("alloc", Type::None),
-                                 id[2] | b_callable("free", Type::None)});
-      return &mp;
-    }
-
-    case Type::Group: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("sel", Type::None),
-           id[1] | b_callable("sel_cancel", Type::None),
-           id[4] | b_callable("init", Type::None),
-           id[2] | b_callable("start", Type::None),
-           id[10] | b_callable("start_cancel", Type::None),
-           id[5] | b_callable("end", Type::None),
-           id[6] | b_callable("get_hit_no", Type::Int),
-           id[7] | b_callable("get_pushed_no", Type::Int),
-           id[3] | b_callable("get_decided_no", Type::Int),
-           id[15] | b_callable("get_result", Type::Int),
-           id[16] | b_callable("get_result_button_no", Type::Int),
-           id[8] | b_prop("order", Type::Int, true),
-           id[13] | b_prop("layer", Type::Int, true),
-           id[14] | b_prop("cancel_priority", Type::Int, true)});
-      return &mp;
-    }
-
-    case Type::Screen: {
-      static const auto mp =
-          make_flatmap<Builder>({id[31] | b(Type::EffectList, Member("effect")),
-                                 id[25] | b(Type::QuakeList, Member("quake"))});
-      return &mp;
-    }
-
-    case Type::EffectList: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[-1] | b_index_array(Type::Effect), id[1] | b_callable("resize"),
-           id[2] | b_callable("size", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Effect: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[30] | b_callable("init"),
-           id[31] | b_prop("wipe_copy", Type::Int, true),
-           id[32] | b_prop("wipe_erase", Type::Int, true),
-           id[0] | b_prop("x", Type::Int, true),
-           id[1] | b_prop("y", Type::Int, true),
-           id[2] | b_prop("z", Type::Int, true),
-           id[3] | b_prop("mono", Type::Int, true),
-           id[4] | b_prop("reverse", Type::Int, true),
-           id[5] | b_prop("bright", Type::Int, true),
-           id[6] | b_prop("dark", Type::Int, true),
-           id[7] | b_prop("color_r", Type::Int, true),
-           id[8] | b_prop("color_g", Type::Int, true),
-           id[9] | b_prop("color_b", Type::Int, true),
-           id[10] | b_prop("color_rate", Type::Int, true),
-           id[11] | b_prop("color_add_r", Type::Int, true),
-           id[12] | b_prop("color_add_g", Type::Int, true),
-           id[13] | b_prop("color_add_b", Type::Int, true),
-           id[14] | b(Type::IntEvent, Member("x_eve")),
-           id[15] | b(Type::IntEvent, Member("y_eve")),
-           id[16] | b(Type::IntEvent, Member("z_eve")),
-           id[17] | b(Type::IntEvent, Member("mono_eve")),
-           id[18] | b(Type::IntEvent, Member("reverse_eve")),
-           id[19] | b(Type::IntEvent, Member("bright_eve")),
-           id[20] | b(Type::IntEvent, Member("dark_eve")),
-           id[21] | b(Type::IntEvent, Member("color_r_eve")),
-           id[22] | b(Type::IntEvent, Member("color_g_eve")),
-           id[23] | b(Type::IntEvent, Member("color_b_eve")),
-           id[24] | b(Type::IntEvent, Member("color_rate_eve")),
-           id[25] | b(Type::IntEvent, Member("color_add_r_eve")),
-           id[26] | b(Type::IntEvent, Member("color_add_g_eve")),
-           id[27] | b(Type::IntEvent, Member("color_add_b_eve")),
-           id[28] | b_prop("begin_order", Type::Int, true),
-           id[29] | b_prop("end_order", Type::Int, true),
-           id[33] | b_prop("begin_layer", Type::Int, true),
-           id[34] | b_prop("end_layer", Type::Int, true)});
-      return &mp;
-    }
-
-    case Type::QuakeList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Quake)});
-      return &mp;
-    }
-
-    case Type::Quake: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("start", Type::None, NONSIMPLE),
-           id[1] | b_callable("start_wait", Type::None, NONSIMPLE | AWAIT),
-           id[2] | b_callable("start_wait_key", Type::None, NONSIMPLE | AWAIT),
-           id[3] | b_callable("start_nowait", Type::None, NONSIMPLE),
-           id[4] | b_callable("start_all", Type::None, NONSIMPLE),
-           id[5] | b_callable("start_all_wait", Type::None, NONSIMPLE | AWAIT),
-           id[6] |
-               b_callable("start_all_wait_key", Type::None, NONSIMPLE | AWAIT),
-           id[7] | b_callable("start_all_nowait", Type::None, NONSIMPLE),
-           id[8] | b_callable("end", Type::None, NONSIMPLE),
-           id[10] | b_callable("wait", Type::None, AWAIT),
-           id[11] | b_callable("wait_key", Type::None, AWAIT),
-           id[9] | b_callable("check", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Input: {
-      static const auto mp =
-          make_flatmap<Builder>({id[2] | b_callable("clear", Type::None),
-                                 id[3] | b_callable("next", Type::None),
-                                 id[0] | b(Type::Key, Member("decide")),
-                                 id[1] | b(Type::Key, Member("cancel"))});
-      return &mp;
-    }
-
-    case Type::KeyList: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[-1] | b_index_array(Type::Key),
-           id[0] | b_callable("wait", Type::None, AWAIT),
-           id[1] | b_callable("wait_force", Type::None, AWAIT),
-           id[3] | b_callable("clear", Type::None),
-           id[5] | b_callable("next", Type::None)});
-      return &mp;
-    }
-
-    case Type::Key: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[1] | b_callable("on_down", Type::Int),
-           id[4] | b_callable("on_up", Type::Int),
-           id[5] | b_callable("on_down_up", Type::Int),
-           id[6] | b_callable("is_down", Type::Int),
-           id[7] | b_callable("is_up", Type::Int),
-           id[10] | b_callable("on_flick", Type::Int),
-           id[0] | b_callable("get_flick_angle", Type::Int),
-           id[14] | b_callable("get_flick_pixel", Type::Int),
-           id[15] | b_callable("get_flick_mm", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Mouse: {
-      static const auto mp =
-          make_flatmap<Builder>({id[4] | b_callable("clear", Type::None),
-                                 id[8] | b_callable("next", Type::None),
-                                 id[0] | b_callable("pos_x", Type::Int),
-                                 id[1] | b_callable("pos_y", Type::Int),
-                                 id[2] | b_callable("get_pos_x", Type::Int),
-                                 id[3] | b_callable("get_pos_y", Type::Int),
-                                 id[9] | b_callable("get_pos", Type::None),
-                                 id[10] | b_callable("set_pos", Type::None),
-                                 id[5] | b_callable("wheel", Type::Int),
-                                 id[7] | b(Type::Key, Member("left")),
-                                 id[6] | b(Type::Key, Member("right"))});
-      return &mp;
-    }
-
-    case Type::ObjList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Object),
-                                 id[4] | b(Type::Callable, Member("resize")),
-                                 id[3] | b(Type::Callable, Member("size"))});
-      return &mp;
-    }
-    case Type::Object: {
-      auto obj_createmov = [](std::string_view mem, Type ret = Type::None,
-                              CallFlags flags = {}) -> Builder {
-        return b_callable(mem, ret, NONSIMPLE | flags);
-      };
-
-      static const auto mp = make_flatmap<Builder>({
-          id[56] | b_prop("wipe_copy", Type::Int, true),
-          id[92] | b_prop("wipe_erase", Type::Int, true),
-          id[139] | b_prop("click_disable", Type::Int, true),
-          id[0] | b_prop("disp", Type::Int, true),
-          id[1] | b_prop("patno", Type::Int, true),
-          id[44] | b_prop("world", Type::Int, true),
-          id[55] | b_prop("order", Type::Int, true),
-          id[2] | b_prop("layer", Type::Int, true),
-          id[3] | b_prop("x", Type::Int, true),
-          id[4] | b_prop("y", Type::Int, true),
-          id[5] | b_prop("z", Type::Int, true),
-          id[54] | b_prop("x_rep", Type::IntList),
-          id[63] | b_prop("y_rep", Type::IntList),
-          id[110] | b_prop("z_rep", Type::IntList),
-          id[48] | b(Type::Callable, Member("set_pos")),
-          id[6] | b_prop("center_x", Type::Int, true),
-          id[7] | b_prop("center_y", Type::Int, true),
-          id[8] | b_prop("center_z", Type::Int, true),
-          id[158] | b(Type::Callable, Member("set_center")),
-          id[9] | b_prop("center_rep_x", Type::Int, true),
-          id[10] | b_prop("center_rep_y", Type::Int, true),
-          id[11] | b_prop("center_rep_z", Type::Int, true),
-          id[159] | b(Type::Callable, Member("set_center_rep")),
-          id[12] | b_prop("scale_x", Type::Int, true),
-          id[13] | b_prop("scale_y", Type::Int, true),
-          id[14] | b_prop("scale_z", Type::Int, true),
-          id[49] | b(Type::Callable, Member("set_scale")),
-          id[15] | b_prop("rotate_x", Type::Int, true),
-          id[16] | b_prop("rotate_y", Type::Int, true),
-          id[17] | b_prop("rotate_z", Type::Int, true),
-          id[50] | b(Type::Callable, Member("set_rotate")),
-          id[18] | b_prop("clip_use", Type::Int, true),
-          id[19] | b_prop("clip_left", Type::Int, true),
-          id[20] | b_prop("clip_top", Type::Int, true),
-          id[21] | b_prop("clip_right", Type::Int, true),
-          id[22] | b_prop("clip_bottom", Type::Int, true),
-          id[160] | b(Type::Callable, Member("set_clip")),
-          id[149] | b_prop("src_clip_use", Type::Int, true),
-          id[150] | b_prop("src_clip_left", Type::Int, true),
-          id[151] | b_prop("src_clip_top", Type::Int, true),
-          id[152] | b_prop("src_clip_right", Type::Int, true),
-          id[153] | b_prop("src_clip_bottom", Type::Int, true),
-          id[161] | b(Type::Callable, Member("set_src_clip")),
-          id[27] | b_prop("tr", Type::Int, true),
-          id[141] | b_prop("tr_rep", Type::IntList),
-          id[28] | b_prop("mono", Type::Int, true),
-          id[29] | b_prop("reverse", Type::Int, true),
-          id[30] | b_prop("bright", Type::Int, true),
-          id[31] | b_prop("dark", Type::Int, true),
-          id[32] | b_prop("color_r", Type::Int, true),
-          id[33] | b_prop("color_g", Type::Int, true),
-          id[34] | b_prop("color_b", Type::Int, true),
-          id[23] | b_prop("color_rate", Type::Int, true),
-          id[57] | b_prop("color_add_r", Type::Int, true),
-          id[58] | b_prop("color_add_g", Type::Int, true),
-          id[59] | b_prop("color_add_b", Type::Int, true),
-          id[145] | b_prop("mask_no", Type::Int, true),
-          id[109] | b_prop("tonecurve_no", Type::Int, true),
-          id[146] | b_prop("culling", Type::Int, true),
-          id[147] | b_prop("alpha_test", Type::Int, true),
-          id[148] | b_prop("alpha_blend", Type::Int, true),
-          id[46] | b_prop("blend", Type::Int, true),
-          id[168] | b_prop("light_no", Type::Int, true),
-          id[144] | b_prop("fog_use", Type::Int, true),
-          id[90] | b_prop("patno_eve", Type::IntEvent),
-          id[51] | b_prop("x_eve", Type::IntEvent),
-          id[64] | b_prop("y_eve", Type::IntEvent),
-          id[65] | b_prop("z_eve", Type::IntEvent),
-          id[112] | b_prop("x_rep_eve", Type::IntEventList),
-          id[113] | b_prop("y_rep_eve", Type::IntEventList),
-          id[114] | b_prop("z_rep_eve", Type::IntEventList),
-          id[77] | b_prop("center_x_eve", Type::IntEvent),
-          id[78] | b_prop("center_y_eve", Type::IntEvent),
-          id[79] | b_prop("center_z_eve", Type::IntEvent),
-          id[80] | b_prop("center_rep_x_eve", Type::IntEvent),
-          id[81] | b_prop("center_rep_y_eve", Type::IntEvent),
-          id[82] | b_prop("center_rep_z_eve", Type::IntEvent),
-          id[67] | b_prop("scale_x_eve", Type::IntEvent),
-          id[68] | b_prop("scale_y_eve", Type::IntEvent),
-          id[66] | b_prop("scale_z_eve", Type::IntEvent),
-          id[69] | b_prop("rotate_x_eve", Type::IntEvent),
-          id[70] | b_prop("rotate_y_eve", Type::IntEvent),
-          id[71] | b_prop("rotate_z_eve", Type::IntEvent),
-          id[105] | b_prop("clip_left_eve", Type::IntEvent),
-          id[106] | b_prop("clip_top_eve", Type::IntEvent),
-          id[107] | b_prop("clip_right_eve", Type::IntEvent),
-          id[108] | b_prop("clip_bottom_eve", Type::IntEvent),
-          id[154] | b_prop("src_clip_left_eve", Type::IntEvent),
-          id[155] | b_prop("src_clip_top_eve", Type::IntEvent),
-          id[156] | b_prop("src_clip_right_eve", Type::IntEvent),
-          id[157] | b_prop("src_clip_bottom_eve", Type::IntEvent),
-          id[72] | b_prop("tr_eve", Type::IntEvent),
-          id[140] | b_prop("tr_rep_eve", Type::IntEventList),
-          id[73] | b_prop("mono_eve", Type::IntEvent),
-          id[74] | b_prop("reverse_eve", Type::IntEvent),
-          id[75] | b_prop("bright_eve", Type::IntEvent),
-          id[76] | b_prop("dark_eve", Type::IntEvent),
-          id[87] | b_prop("color_r_eve", Type::IntEvent),
-          id[88] | b_prop("color_g_eve", Type::IntEvent),
-          id[89] | b_prop("color_b_eve", Type::IntEvent),
-          id[83] | b_prop("color_rate_eve", Type::IntEvent),
-          id[84] | b_prop("color_add_r_eve", Type::IntEvent),
-          id[85] | b_prop("color_add_g_eve", Type::IntEvent),
-          id[86] | b_prop("color_add_b_eve", Type::IntEvent),
-          id[91] | Builder([](Builder::Ctx& ctx) {
-            const int peek = AsInt(ctx.elmcode[1]);
-            switch (peek) {
-              case 0:  // ALLEVENT_END
-                ctx.chain.nodes.emplace_back(
-                    Type::Callable, Member("alleve_end", Type::None, true));
-                ctx.elmcode = ctx.elmcode.subspan(2);
-                return;
-              case 1:
-                ctx.chain.nodes.emplace_back(
-                    Type::Callable,
-                    Member("alleve_wait", Type::None, true, true, true));
-                ctx.elmcode = ctx.elmcode.subspan(2);
-                return;
-              case 2:
-                ctx.chain.nodes.emplace_back(
-                    Type::Callable, Member("alleve_check", Type::Int, true));
-                ctx.elmcode = ctx.elmcode.subspan(2);
-                return;
-              default:
-                ctx.chain.nodes.emplace_back(Type::Invalid,
-                                             Member("alleve_???"));
-                ctx.elmcode = ctx.elmcode.subspan(2);
-                return;
-            }
-          }),
-          id[169] | b(Type::Int, Member("pat_cnt")),
-
-          id[24] | obj_getter("get_size_x"), id[25] | obj_getter("get_size_y"),
-          id[47] | obj_getter("get_size_z"),
-          id[100] | obj_getter("get_pixel_color_a"),
-          id[101] | obj_getter("get_pixel_color_r"),
-          id[102] | obj_getter("get_pixel_color_g"),
-          id[103] | obj_getter("get_pixel_color_b"),
-
-          id[62] | obj_getter("get_file_path", Type::String),
-          id[111] | b_prop("F", Type::IntList),
-
-          id[93] | b_prop("child", Type::ObjList),
-          id[35] | b_callable("init", Type::None),
-          id[36] | b_callable("free", Type::None),
-          id[37] | b_callable("init_param", Type::None),
-          id[38] | b(Type::Callable, Member("create")),
-          id[40] | b(Type::Callable, Member("create_rect")),
-          id[39] | b_callable("create_string"),
-          id[132] | b(Type::Callable, Member("create_number")),
-          id[129] | b(Type::Callable, Member("create_weather")),
-          id[43] | b(Type::Callable, Member("create_mesh")),
-          id[45] | b(Type::Callable, Member("create_billboard")),
-          id[116] | b(Type::Callable, Member("create_save_thumb")),
-          id[170] | b(Type::Callable, Member("create_capture_thumb")),
-
-          id[165] | b(Type::Callable, Member("create_capture")),
-          id[120] | obj_createmov("create_movie"),
-          id[121] | obj_createmov("create_movie_loop"),
-          id[122] | obj_createmov("create_movie_wait", Type::None, AWAIT),
-          id[143] | obj_createmov("create_movie_waitkey", Type::Int, AWAIT),
-          id[177] | b(Type::Callable, Member("create_emote")),
-          id[0x01000000] | b_callable("load_gan", Type::None),
-          id[0x01000001] | b_callable("start_gan", Type::None),
-
-          id[41] | b(Type::Callable, Member("copy_from")),
-          id[53] | b(Type::Callable, Member("change_file")),
-          id[174] | b_callable("exist_type", Type::Int),
-
-          // String
-          id[99] | b_callable("set_string"),
-          id[135] | obj_getter("get_string", Type::String),
-          id[104] | b_callable("set_string_param"),
-          id[133] | b(Type::Callable, Member("set_number")),
-          id[136] | b(Type::Int, Member("set_number")),
-          id[134] | b(Type::Callable, Member("set_number_param")),
-
-          // environment
-          id[130] | b(Type::Callable, Member("set_weather_param_type_a")),
-          id[131] | b(Type::Callable, Member("set_weather_param_type_a")),
-
-          // movie
-          id[125] | b_callable("pause_movie", Type::None),
-          id[126] | b_callable("resume_movie", Type::None),
-          id[137] | b(Type::Callable, Member("seek_movie")),
-          id[138] | b_callable("get_movie_seek_time", Type::Int),
-          id[127] | b_callable("check_movie", Type::Int),
-          id[128] | b_callable("wait_movie", Type::None, AWAIT),
-          id[142] | b_callable("wait_movie_key", Type::Int, AWAIT),
-          id[171] | b_callable("end_movie_loop", Type::None),
-          id[172] | b(Type::Callable, Member("set_movie_auto_free")),
-
-          // frame action
-          id[52] | b_prop("frame_action", Type::FrameAction),
-          id[115] | b_prop("frame_action_ch", Type::FrameActionList),
-
-          // button
-          id[61] | b_callable("clear_button", Type::None),
-          id[42] | b(Type::Callable, Member("set_button")),
-          id[164] | b(Type::Callable, Member("set_button_group")),
-          id[98] | b(Type::Callable, Member("set_button_pushkeep")),
-          id[119] | b(Type::Int, Member("get_button_pushkeep")),
-          id[175] | b(Type::Callable, Member("set_button_alpha_test")),
-          id[176] | b(Type::Int, Member("get_button_alpha_test")),
-
-          id[95] | b_callable("set_button_state_normal", Type::None),
-          id[96] | b_callable("set_button_state_select", Type::None),
-          id[97] | b_callable("set_button_state_disable", Type::None),
-          id[118] | b_callable("get_button_state", Type::Int),
-          id[123] | b_callable("get_button_hit_state", Type::Int),
-          id[124] | b_callable("get_button_real_state", Type::Int),
-          id[26] | b(Type::Callable, Member("set_button_call")),
-          id[60] | b_callable("clear_button_call", Type::None)
-
-          // GAN
-
-      });
-      return &mp;
-    }
-
-    case Type::MaskList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Mask),
-                                 id[1] | b_callable("size", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Mask: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[1] | b_callable("init"), id[0] | b_callable("create", Type::None),
-           id[4] | b_prop("x", Type::Int, true),
-           id[5] | b_prop("y", Type::Int, true),
-           id[2] | b_prop("x_eve", Type::IntEvent),
-           id[3] | b_prop("y_eve", Type::IntEvent)});
-      return &mp;
-    }
-
-    case Type::Movie: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("play", Type::None),
-           id[2] | b_callable("play_wait", Type::None, AWAIT),
-           id[3] | b_callable("play_waitkey", Type::Int, AWAIT),
-           id[1] | b_callable("stop", Type::None)});
-      return &mp;
-    }
-
-    case Type::BgmTable: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b(Type::Callable, Member("cnt")),
-           id[2] | b(Type::Callable, Member("set_listen")),
-           id[4] | b(Type::Callable, Member("set_listen_all")),
-           id[1] | b(Type::Callable, Member("get_listen"))});
-      return &mp;
-    }
-
-    case Type::Bgm: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("play"),
-           id[1] | b_callable("play_oneshot"),
-           id[2] | b_callable("play_wait", Type::None, AWAIT),
-           id[16] | b_callable("ready"),
-           id[17] | b_callable("ready_oneshot"),
-           id[4] | b_callable("stop"),
-           id[10] | b_callable("pause"),
-           id[11] | b_callable("resume"),
-           id[12] | b_callable("resume_wait", Type::None, AWAIT),
-           id[3] | b_callable("wait", Type::None, AWAIT),
-           id[14] | b_callable("wait_key", Type::Int, AWAIT),
-           id[5] | b_callable("wait_fade", Type::None, AWAIT),
-           id[15] | b_callable("wait_fade_key", Type::Int, AWAIT),
-           id[18] | b_callable("check", Type::Int),
-           id[6] | b_callable("set_volume"),
-           id[7] | b_callable("set_volume_max"),
-           id[8] | b_callable("set_volume_min"),
-           id[9] | b_callable("get_volume", Type::Int),
-           id[19] | b_callable("get_regist_name", Type::String),
-           id[13] | b_callable("get_play_pos", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Se: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("play"), id[5] | b_callable("play_by_file_name"),
-           id[6] | b_callable("play_by_koe_no"),
-           id[9] | b_callable("play_by_se_no"), id[7] | b_callable("stop"),
-           id[8] | b_callable("wait", Type::None, AWAIT),
-           id[10] | b_callable("wait_key", Type::Int, AWAIT),
-           id[11] | b_callable("check", Type::Int),
-           id[1] | b_callable("set_volume"),
-           id[2] | b_callable("set_volume_max"),
-           id[3] | b_callable("set_volume_min"),
-           id[4] | b_callable("get_volume", Type::Int)});
-      return &mp;
-    }
-
-    case Type::MwndList: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[-1] | b_index_array(Type::Mwnd),
-           id[1] | b_callable("close", Type::None),
-           id[2] | b_callable("close_wait", Type::None),
-           id[3] | b_callable("close_nowait", Type::None)});
-      return &mp;
-    }
-
-    case Type::Mwnd: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("set_waku"),
-           id[79] | b_callable("init_waku_file", Type::None),
-           id[78] | b_callable("set_waku_file"),
-           id[80] | b_callable("get_waku_file", Type::String),
-           id[82] | b_callable("init_filter_file", Type::None),
-           id[81] | b_callable("set_filter_file"),
-           id[83] | b_callable("get_filter_file", Type::String),
-           id[1] | b_callable("open", Type::None),
-           id[15] | b_callable("open_wait", Type::None),
-           id[16] | b_callable("open_nowait", Type::None),
-           id[65] | b_callable("check_open", Type::Int),
-           id[2] | b_callable("close", Type::None),
-           id[13] | b_callable("close_wait", Type::None),
-           id[14] | b_callable("close_nowait", Type::None),
-           id[64] | b_callable("end_close", Type::None),
-           id[49] | b_callable("msg_block", Type::None),
-           id[59] | b_callable("msg_pp_block", Type::None),
-           id[3] | b_callable("clear", Type::None),
-           id[55] | b_callable("novel_clear", Type::None),
-           id[4] | b_callable("print"),
-           id[57] | b_callable({{0, "overflow_print"}, {1, "print"}}),
-           id[63] | b_callable("overflow_name"),
-           id[12] | b_callable({{0, "ruby_end"}, {std::nullopt, "ruby_start"}}),
-           id[18] | b_callable("msg_wait", Type::None, AWAIT),
-           id[19] | b_callable("pp", Type::None, AWAIT),
-           id[20] | b_callable("r", Type::None, AWAIT),
-           id[54] | b_callable("page", Type::None, AWAIT),
-           id[6] | b_callable("nl", Type::None),
-           id[17] | b_callable("nil", Type::None),
-           id[56] | b_callable("indent", Type::None),
-           id[28] | b_callable("clear_indent", Type::None),
-           id[31] | b_callable("enable_multi_msg", Type::None),
-           id[29] | b_callable("next_msg", Type::None),
-           id[58] | b_callable("set_slide_msg"),
-           id[60] | b_callable("set_slide_msg", Type::None),
-           id[61] | b_callable("slide_msg", Type::None),
-
-           // SEL
-           id[5] | b_callable("sel", Type::Int, AWAIT | NONSIMPLE | CONTEXT),
-           id[51] | b_callable("sel_cancel", Type::Int,
-                               AWAIT | NONSIMPLE | CONTEXT),
-           id[50] |
-               b_callable("selmsg", Type::Int, AWAIT | NONSIMPLE | CONTEXT),
-           id[52] | b_callable("selmsg_cancel", Type::Int,
-                               AWAIT | NONSIMPLE | CONTEXT),
-           id[84] | b_callable({{0, "rep_pos_default"}, {1, "rep_pos"}}),
-           id[7] | b_callable({{0, "size_default"}, {1, "size"}}),
-           id[8] | b_callable({{0, "color_default"}, {1, "color"}}),
-           id[86] | b(Type::Callable, Member("msgbtn")),
-           id[85] | b(Type::Callable, Member("set_namae")),
-           id[9] | b_callable("koe", Type::None, NONSIMPLE),
-           id[26] | b_callable("koe_play_wait", Type::None, NONSIMPLE | AWAIT),
-           id[27] |
-               b_callable("koe_play_wait_key", Type::Int, NONSIMPLE | AWAIT),
-           id[22] | b_callable("clear_face", Type::None),
-           id[21] | b(Type::Callable, Member("set_face")),
-           id[10] | b_prop("layer", Type::Int, true),
-           id[11] | b_prop("world", Type::Int, true),
-           id[32] | b_prop("button", Type::ObjList),
-           id[53] | b_prop("face", Type::ObjList),
-           id[30] | b_prop("object", Type::ObjList),
-
-           // parameter
-           id[66] | b(Type::None, Member("init_window_pos")),
-           id[67] | b(Type::None, Member("init_window_size")),
-           id[74] | b(Type::None, Member("init_window_moji_cnt")),
-           id[68] | b(Type::Callable, Member("set_window_pos")),
-           id[69] | b(Type::Callable, Member("set_window_size")),
-           id[75] | b(Type::Callable, Member("set_window_moji_cnt")),
-           id[70] | b(Type::Int, Member("get_window_pos_x")),
-           id[71] | b(Type::Int, Member("get_window_pos_y")),
-           id[72] | b(Type::Int, Member("get_window_size_x")),
-           id[73] | b(Type::Int, Member("get_window_size_y")),
-           id[77] | b(Type::Int, Member("get_window_moji_cnt_x")),
-           id[76] | b(Type::Int, Member("get_window_moji_cnt_y")),
-           id[41] | b(Type::None, Member("init_open_anime_type")),
-           id[42] | b(Type::None, Member("init_open_anime_time")),
-           id[43] | b(Type::None, Member("init_close_anime_type")),
-           id[44] | b(Type::None, Member("init_close_anime_time")),
-           id[37] | b(Type::Callable, Member("set_open_anime_type")),
-           id[34] | b(Type::Callable, Member("set_open_anime_time")),
-           id[45] | b(Type::Callable, Member("set_close_anime_type")),
-           id[35] | b(Type::Callable, Member("set_close_anime_time")),
-           id[48] | b(Type::Int, Member("get_open_anime_type")),
-           id[47] | b(Type::Int, Member("get_open_anime_time")),
-           id[38] | b(Type::Int, Member("get_close_anime_type")),
-           id[46] | b(Type::Int, Member("get_close_anime_time")),
-           id[36] | b(Type::Int, Member("get_default_open_anime_type")),
-           id[33] | b(Type::Int, Member("get_default_open_anime_time")),
-           id[40] | b(Type::Int, Member("get_default_close_anime_type")),
-           id[39] | b(Type::Int, Member("get_default_close_anime_time"))});
-      return &mp;
-    }
-
-    case Type::Msgbk: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[1] | b_callable("insert_msg", Type::None),
-           id[4] | b_callable("add_koe", Type::None),
-           id[5] | b_callable("add_namae", Type::None),
-           id[3] | b_callable("add_msg", Type::None),
-           id[2] | b_callable("go_next_msg", Type::None)});
-      return &mp;
-    }
-
-    case Type::Pcm: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("play", Type::None),
-           id[1] | b_callable("stop", Type::None)});
-      return &mp;
-    }
-
-    case Type::PcmchList: {
-      static const auto mp =
-          make_flatmap<Builder>({id[-1] | b_index_array(Type::Pcmch)});
-      return &mp;
-    }
-
-    case Type::Pcmch: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[0] | b_callable("play"), id[2] | b_callable("play_loop"),
-           id[1] | b_callable("play_wait", Type::None, AWAIT),
-           id[11] | b_callable("ready"), id[16] | b_callable("ready_loop"),
-           id[5] | b_callable("stop"), id[10] | b_callable("pause"),
-           id[9] | b_callable("resume"),
-           id[17] | b_callable("resume_wait", Type::None, AWAIT),
-           id[3] | b_callable("wait", Type::None, AWAIT),
-           id[6] | b_callable("wait_key", Type::Int, AWAIT),
-           id[8] | b_callable("wait_fade", Type::None, AWAIT),
-           id[7] | b_callable("wait_fade_key", Type::Int, AWAIT),
-           id[4] | b_callable("check", Type::Int),
-           id[13] | b_callable("set_volume"),
-           id[14] | b_callable("set_vol_max"),
-           id[15] | b_callable("set_vol_min"),
-           id[12] | b_callable("get_volume", Type::Int)});
-      return &mp;
-    }
-
-    case Type::Wipe: {
-      static const auto mp = make_flatmap<Builder>(
-          {id[7] | b_callable("wipe", Type::None, AWAIT | NONSIMPLE),
-           id[23] | b_callable("wipe_all", Type::None, NONSIMPLE | AWAIT),
-           id[51] | b_callable("wipe_mask", Type::None, AWAIT | NONSIMPLE),
-           id[50] | b_callable("wipe_mask_all", Type::None, AWAIT | NONSIMPLE),
-           id[33] | b_callable("end", Type::None, NONSIMPLE),
-           id[103] | b_callable("wait", Type::Int, AWAIT),
-           id[109] | b_callable("check", Type::Int)});
-      return &mp;
-    }
-
-    [[unlikely]]
-    default:
-      return nullptr;
-  }
-}
 
 // ------------------------------------------------------------------------------
 // ==============================================================================
@@ -2134,22 +653,3504 @@ AccessChain ElementParser::make_chain(AccessChain result,
                                       std::span<const Value> elmcode) {
   result.nodes.reserve(elmcode.size());
 
-  flat_map<Builder> const* mp;
-  Builder::Ctx ctx{
-      .elm = elm,
-      .elmcode = elmcode,
-      .chain = result,
-      .Warn = [&](std::string msg) { this->warn_(std::move(msg)); }};
-  while ((mp = elm::GetMethodMap(result.GetType())) != nullptr) {
-    if (!mp || elmcode.empty())
-      break;
-    if (!std::holds_alternative<Integer>(elmcode.front()))
-      break;
-    const int key = AsInt(elmcode.front());
-    if (!mp->contains(key))
-      break;
+  auto append_node = [&](Type type, Node::var_t node) {
+    result.nodes.emplace_back(type, std::move(node));
+    elmcode = elmcode.subspan(1);
+  };
+  auto append_callable = [&](std::string_view member,
+                             Type return_type = Type::None,
+                             CallFlags flags = {}) {
+    append_node(Type::Callable,
+                Member{member, return_type, !flags.is_explicit,
+                       !flags.is_nonsimple, flags.await_result, flags.context});
+  };
+  auto parse_property = [&](std::string_view member, Type type,
+                            bool writable = false) {
+    // A bind on a longer chain belongs to its final command, not this member.
+    if (elmcode.size() == 1 && elm.force_bind) {
+      const auto& bind = elm.bind_ctx;
+      if (!bind.named_arg.empty())
+        throw std::runtime_error(std::format(
+            "property '{}' does not accept tagged arguments", member));
+      if (bind.overload_id == 0) {
+        if (!bind.arg.empty())
+          throw std::runtime_error(
+              std::format("property '{}' getter expects no arguments", member));
+      } else if (bind.overload_id == 1 && writable) {
+        if (bind.arg.size() != 1)
+          throw std::runtime_error(
+              std::format("property '{}' setter expects one argument", member));
+        result.nodes.emplace_back(Type::None,
+                                  SetMember{member, bind.arg.front()});
+        elm.force_bind = false;
+        elmcode = elmcode.subspan(1);
+        return;
+      } else {
+        throw std::runtime_error(std::format("property '{}' has no overload {}",
+                                             member, bind.overload_id));
+      }
+      elm.force_bind = false;
+    }
+    result.nodes.emplace_back(type, Member{member});
+    elmcode = elmcode.subspan(1);
+  };
+  auto parse_index = [&](Type t) {
+    Subscript subscript{Integer(-1)};
+    if (elmcode.size() < 2) {
+      warn_("[IndexArray] expected index");
+      result.nodes.emplace_back(t, std::move(subscript));
+      elmcode = elmcode.subspan(elmcode.size());
+      return;
+    }
 
-    mp->at(key).Build(ctx);
+    subscript.idx = elmcode[1];
+    result.nodes.emplace_back(t, std::move(subscript));
+    elmcode = elmcode.subspan(2);
+  };
+  auto parse_bit_index = [&](std::string_view mem) {
+    result.nodes.emplace_back(Type::IntList, Member{mem});
+    auto emit_error = [&](std::string message, std::size_t consume) {
+      warn_(std::move(message));
+      result.nodes.emplace_back(Type::Int, Subscript{Integer(-1)});
+      elmcode = elmcode.subspan(std::min(consume, elmcode.size()));
+    };
+
+    if (elmcode.size() < 3) {
+      emit_error(std::format("[IntListBit] {} expected immediate index", mem),
+                 elmcode.size());
+      return;
+    }
+
+    auto* marker = std::get_if<Integer>(&elmcode[1]);
+    if (!marker || marker->val_ != -1) {
+      emit_error(std::format("[IntListBit] {} expected immediate index", mem),
+                 1);
+      return;
+    }
+
+    result.nodes.emplace_back(Type::Int, Subscript{elmcode[2]});
+    elmcode = elmcode.subspan(3);
+  };
+
+  while (!elmcode.empty()) {
+    const auto* token = std::get_if<Integer>(&elmcode.front());
+    if (!token)
+      break;
+    const int key = token->val_;
+    switch (result.GetType()) {
+      case Type::IntList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Int);
+            continue;
+          case 3:
+            parse_bit_index("b1");
+            continue;
+          case 4:
+            parse_bit_index("b2");
+            continue;
+          case 5:
+            parse_bit_index("b4");
+            continue;
+          case 7:
+            parse_bit_index("b8");
+            continue;
+          case 6:
+            parse_bit_index("b16");
+            continue;
+          case 10:
+            append_callable("init");
+            continue;
+          case 2:
+            append_callable("resize");
+            continue;
+          case 9:
+            append_callable("size", Type::Int);
+            continue;
+          case 8:
+            append_callable("fill");
+            continue;
+          case 1:
+            append_callable("Set");
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::IntEventList:
+        switch (key) {
+          case -1:
+            parse_index(Type::IntEvent);
+            continue;
+          case 1:
+            append_callable("resize");
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::IntEvent:
+        switch (key) {
+          case 0:
+            append_node(Type::Callable, Member("set"));
+            continue;
+          case 7:
+            append_node(Type::Callable, Member("set_real"));
+            continue;
+          case 1:
+            append_node(Type::Callable, Member("loop"));
+            continue;
+          case 8:
+            append_node(Type::Callable, Member("loop_real"));
+            continue;
+          case 2:
+            append_node(Type::Callable, Member("turn"));
+            continue;
+          case 9:
+            append_node(Type::Callable, Member("turn_real"));
+            continue;
+          case 3:
+            append_callable("end");
+            continue;
+          case 4:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 10:
+            append_callable("wait_key", Type::None, AWAIT);
+            continue;
+          case 5:
+            append_callable("check", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::StrList:
+        switch (key) {
+          case -1:
+            parse_index(Type::String);
+            continue;
+          case 3:
+            append_callable("init", Type::None);
+            continue;
+          case 2:
+            append_node(Type::Callable, Member("resize"));
+            continue;
+          case 4:
+            append_callable("size", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::String:
+        switch (key) {
+          case 0:
+            append_callable("upper", Type::String);
+            continue;
+          case 1:
+            append_callable("lower", Type::String);
+            continue;
+          case 6:
+            append_callable("cnt", Type::Int);
+            continue;
+          case 5:
+            append_callable("len", Type::Int);
+            continue;
+          case 2:
+            append_callable("left", Type::String);
+            continue;
+          case 7:
+            append_callable("left_len", Type::String);
+            continue;
+          case 4:
+            append_callable("right", Type::String);
+            continue;
+          case 9:
+            append_callable("right_len", Type::String);
+            continue;
+          case 3:
+            append_callable("mid", Type::String);
+            continue;
+          case 8:
+            append_callable("mid_len", Type::String);
+            continue;
+          case 10:
+            append_callable("find", Type::Int);
+            continue;
+          case 11:
+            append_callable("rfind", Type::Int);
+            continue;
+          case 13:
+            append_callable("charat", Type::Int);
+            continue;
+          case 12:
+            append_callable("tonum", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Math:
+        switch (key) {
+          case 3:
+            append_callable("max", Type::Int);
+            continue;
+          case 4:
+            append_callable("min", Type::Int);
+            continue;
+          case 10:
+            append_callable("limit", Type::Int);
+            continue;
+          case 5:
+            append_callable("abs", Type::Int);
+            continue;
+          case 0:
+            append_callable("rand", Type::Int);
+            continue;
+          case 14:
+            append_callable("sqrt", Type::Int);
+            continue;
+          case 19:
+            append_callable("log", Type::Int);
+            continue;
+          case 20:
+            append_callable("log2", Type::Int);
+            continue;
+          case 21:
+            append_callable("log10", Type::Int);
+            continue;
+          case 6:
+            append_callable("sin", Type::Int);
+            continue;
+          case 7:
+            append_callable("cos", Type::Int);
+            continue;
+          case 8:
+            append_callable("tan", Type::Int);
+            continue;
+          case 16:
+            append_callable("asin", Type::Int);
+            continue;
+          case 17:
+            append_callable("acos", Type::Int);
+            continue;
+          case 18:
+            append_callable("atan", Type::Int);
+            continue;
+          case 15:
+            append_callable("distance", Type::Int);
+            continue;
+          case 22:
+            append_callable("angle", Type::Int);
+            continue;
+          case 9:
+            append_callable("linear", Type::Int);
+            continue;
+          case 2:
+            append_callable("timetable", Type::Int);
+            continue;
+          case 1:
+            append_callable("tostr", Type::String);
+            continue;
+          case 11:
+            append_callable("tostr_zero", Type::String);
+            continue;
+          case 12:
+            append_callable("tostr_zen", Type::String);
+            continue;
+          case 13:
+            append_callable("tostr_zen_zero", Type::String);
+            continue;
+          case 23:
+            append_callable("tostr_code", Type::String);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::System:
+        switch (key) {
+          case 14:
+            append_callable("calendar", Type::None);
+            continue;
+          case 15:
+            append_callable("time", Type::Int);
+            continue;
+          case 0:
+            append_callable("window_active", Type::Int);
+            continue;
+          case 13:
+            append_callable("is_debug", Type::Int);
+            continue;
+          case 1:
+            append_callable("shell_openfile");
+            continue;
+          case 5:
+            append_callable("openurl");
+            continue;
+          case 6:
+            append_callable("check_file_exist");
+            continue;
+          case 12:
+            append_callable("check_save_file_exist");
+            continue;
+          case 2:
+            append_callable("check_dummy");
+            continue;
+          case 21:
+            append_callable("clear_dummy", Type::None);
+            continue;
+          case 17:
+            append_callable("msgbox_ok");
+            continue;
+          case 18:
+            append_callable("msgbox_okcancel");
+            continue;
+          case 19:
+            append_callable("msgbox_yn");
+            continue;
+          case 20:
+            append_callable("msgbox_yncancel");
+            continue;
+          case 7:
+            append_callable("debug_msgbox_ok");
+            continue;
+          case 8:
+            append_callable("debug_msgbox_okcancel");
+            continue;
+          case 9:
+            append_callable("debug_msgbox_yn");
+            continue;
+          case 10:
+            append_callable("debug_msgbox_yncancel");
+            continue;
+          case 11:
+            append_callable("debug_write_log");
+            continue;
+          case 4:
+            append_callable("get_chihayabench", Type::String);
+            continue;
+          case 3:
+            append_callable("open_chihayabench");
+            continue;
+          case 16:
+            append_callable("get_lang", Type::String);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Script:
+        switch (key) {
+          case 38:
+            append_callable("set_auto_savepoint_off");
+            continue;
+          case 39:
+            append_callable("set_auto_savepoint_on");
+            continue;
+          case 2:
+            append_callable("set_skip_disable");
+            continue;
+          case 5:
+            append_callable("set_skip_enable");
+            continue;
+          case 85:
+            append_callable("set_skip_disable_flag");
+            continue;
+          case 83:
+            append_callable("get_skip_disable_flag", Type::Int);
+            continue;
+          case 6:
+            append_callable("set_ctrl_skip_disable");
+            continue;
+          case 7:
+            append_callable("set_ctrl_skip_enable");
+            continue;
+          case 86:
+            append_callable("set_ctrl_skip_disable_flag");
+            continue;
+          case 84:
+            append_callable("get_ctrl_skip_disable_flag", Type::Int);
+            continue;
+          case 18:
+            append_callable("check_skip");
+            continue;
+          case 30:
+            append_callable("set_stop_skip_by_key_disable");
+            continue;
+          case 31:
+            append_callable("set_stop_skip_by_key_enable");
+            continue;
+          case 54:
+            append_callable("set_end_msg_by_key_disable");
+            continue;
+          case 55:
+            append_callable("set_end_msg_by_key_enable");
+            continue;
+          case 74:
+            append_callable("set_skip_unread_message_flag");
+            continue;
+          case 75:
+            append_callable("get_skip_unread_message_flag", Type::Int);
+            continue;
+          case 0:
+            append_callable("start_auto_mode");
+            continue;
+          case 1:
+            append_callable("end_auto_mode");
+            continue;
+          case 60:
+            append_callable("set_auto_mode_moji_wait");
+            continue;
+          case 62:
+            append_callable("set_auto_mode_moji_wait_default");
+            continue;
+          case 64:
+            append_callable("get_auto_mode_moji_wait", Type::Int);
+            continue;
+          case 61:
+            append_callable("set_auto_mode_min_wait");
+            continue;
+          case 63:
+            append_callable("set_auto_mode_min_wait_default");
+            continue;
+          case 65:
+            append_callable("get_auto_mode_min_wait", Type::Int);
+            continue;
+          case 76:
+            append_callable("set_auto_mode_moji_cnt");
+            continue;
+          case 77:
+            append_callable("set_mouse_cursor_hide_onoff");
+            continue;
+          case 82:
+            append_callable("set_mouse_cursor_hide_onoff_default");
+            continue;
+          case 78:
+            append_callable("get_mouse_cursor_hide_onoff", Type::Int);
+            continue;
+          case 79:
+            append_callable("set_mouse_cursor_hide_time");
+            continue;
+          case 80:
+            append_callable("set_mouse_cursor_hide_time_default");
+            continue;
+          case 81:
+            append_callable("get_mouse_cursor_hide_time", Type::Int);
+            continue;
+          case 25:
+            append_callable("set_message_speed");
+            continue;
+          case 27:
+            append_callable("set_message_speed_default");
+            continue;
+          case 26:
+            append_callable("get_message_speed", Type::Int);
+            continue;
+          case 28:
+            append_callable("set_message_nowait_flag");
+            continue;
+          case 29:
+            append_callable("get_message_nowait_flag", Type::Int);
+            continue;
+          case 21:
+            append_callable("set_msg_async_mode_on");
+            continue;
+          case 51:
+            append_callable("set_msg_async_mode_on_once");
+            continue;
+          case 22:
+            append_callable("set_msg_async_mode_off");
+            continue;
+          case 46:
+            append_callable("set_hide_mwnd_disable");
+            continue;
+          case 47:
+            append_callable("set_hide_mwnd_enable");
+            continue;
+          case 12:
+            append_callable("set_msg_back_disable");
+            continue;
+          case 13:
+            append_callable("set_msg_back_enable");
+            continue;
+          case 34:
+            append_callable("set_msg_back_off");
+            continue;
+          case 35:
+            append_callable("set_msg_back_on");
+            continue;
+          case 56:
+            append_callable("set_msg_back_disp_off");
+            continue;
+          case 57:
+            append_callable("set_msg_back_disp_on");
+            continue;
+          case 14:
+            append_callable("set_mouse_disp_off");
+            continue;
+          case 15:
+            append_callable("set_mouse_disp_on");
+            continue;
+          case 19:
+            append_callable("set_mouse_move_by_key_disable");
+            continue;
+          case 20:
+            append_callable("set_mouse_move_by_key_enable");
+            continue;
+          case 40:
+            append_callable("set_key_disable");
+            continue;
+          case 41:
+            append_callable("set_key_enable");
+            continue;
+          case 3:
+            append_callable("set_mwnd_anime_off_flag");
+            continue;
+          case 9:
+            append_callable("get_mwnd_anime_off_flag", Type::Int);
+            continue;
+          case 4:
+            append_callable("set_mwnd_anime_on_flag");
+            continue;
+          case 16:
+            append_callable("get_mwnd_anime_on_flag", Type::Int);
+            continue;
+          case 8:
+            append_callable("set_mwnd_disp_off_flag");
+            continue;
+          case 17:
+            append_callable("get_mwnd_disp_off_flag", Type::Int);
+            continue;
+          case 42:
+            append_callable("set_koe_dont_stop_on_flag");
+            continue;
+          case 43:
+            append_callable("get_koe_dont_stop_on_flag", Type::Int);
+            continue;
+          case 44:
+            append_callable("set_koe_dont_stop_off_flag");
+            continue;
+          case 45:
+            append_callable("get_koe_dont_stop_off_flag", Type::Int);
+            continue;
+          case 33:
+            append_callable("set_shortcut_enable");
+            continue;
+          case 32:
+            append_callable("set_shortcut_disable");
+            continue;
+          case 11:
+            append_callable("set_quake_stop_flag");
+            continue;
+          case 23:
+            append_callable("get_quake_stop_flag", Type::Int);
+            continue;
+          case 96:
+            append_callable("set_emote_mouth_stop_flag");
+            continue;
+          case 97:
+            append_callable("get_emote_mouth_stop_flag", Type::Int);
+            continue;
+          case 36:
+            append_callable("start_bgmfade");
+            continue;
+          case 37:
+            append_callable("end_bgmfade");
+            continue;
+          case 10:
+            append_callable("set_vsync_wait_off_flag");
+            continue;
+          case 24:
+            append_callable("get_vsync_wait_off_flag", Type::Int);
+            continue;
+          case 48:
+            append_callable("set_skip_trigger");
+            continue;
+          case 49:
+            append_callable("ignore_r_on");
+            continue;
+          case 50:
+            append_callable("ignore_r_off");
+            continue;
+          case 52:
+            append_callable("set_cursor_no");
+            continue;
+          case 53:
+            append_callable("get_cursor_no", Type::Int);
+            continue;
+          case 66:
+            append_callable("set_time_stop_flag");
+            continue;
+          case 67:
+            append_callable("get_time_stop_flag", Type::Int);
+            continue;
+          case 68:
+            append_callable("set_counter_time_stop_flag");
+            continue;
+          case 73:
+            append_callable("get_counter_time_stop_flag", Type::Int);
+            continue;
+          case 69:
+            append_callable("set_frame_action_time_stop_flag");
+            continue;
+          case 72:
+            append_callable("get_frame_action_time_stop_flag", Type::Int);
+            continue;
+          case 70:
+            append_callable("set_stage_time_stop_flag");
+            continue;
+          case 71:
+            append_callable("get_stage_time_stop_flag", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::ScriptExcall:
+        switch (key) {
+          case 87:
+            append_callable("set_font_name");
+            continue;
+          case 89:
+            append_callable("set_font_name_default");
+            continue;
+          case 88:
+            append_callable("get_font_name", Type::String);
+            continue;
+          case 90:
+            append_callable("set_font_bold");
+            continue;
+          case 91:
+            append_callable("set_font_bold_default");
+            continue;
+          case 92:
+            append_callable("get_font_bold", Type::Int);
+            continue;
+          case 93:
+            append_callable("set_font_shadow");
+            continue;
+          case 94:
+            append_callable("set_font_shadow_default");
+            continue;
+          case 95:
+            append_callable("get_font_shadow", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::FrameActionList:
+        switch (key) {
+          case -1:
+            parse_index(Type::FrameAction);
+            continue;
+          case 2:
+            append_callable("size", Type::Int);
+            continue;
+          case 1:
+            append_callable("resize");
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::FrameAction:
+        switch (key) {
+          case 1:
+            append_callable("start");
+            continue;
+          case 3:
+            append_callable("start_real");
+            continue;
+          case 2:
+            append_callable("end", Type::None);
+            continue;
+          case 0:
+            parse_property("counter", Type::Counter);
+            continue;
+          case 4:
+            append_callable("is_end_action", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::CounterList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Counter);
+            continue;
+          case 1:
+            append_callable("size", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Counter:
+        switch (key) {
+          case 0:
+            append_callable("set");
+            continue;
+          case 1:
+            append_callable("get", Type::Int);
+            continue;
+          case 2:
+            append_callable("reset");
+            continue;
+          case 3:
+            append_callable("start");
+            continue;
+          case 9:
+            append_callable("start_real");
+            continue;
+          case 10:
+            append_callable("start_frame");
+            continue;
+          case 11:
+            append_callable("start_frame_real");
+            continue;
+          case 12:
+            append_callable("start_frame_loop");
+            continue;
+          case 13:
+            append_callable("start_frame_loop_real");
+            continue;
+          case 4:
+            append_callable("stop");
+            continue;
+          case 5:
+            append_callable("resume");
+            continue;
+          case 6:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 8:
+            append_callable("wait_key", Type::Int, AWAIT);
+            continue;
+          case 7:
+            append_callable("check_value", Type::Int);
+            continue;
+          case 14:
+            append_callable("check_active", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Syscom:
+        switch (key) {
+          case 0:
+            append_node(Type::None, Member("menu"));
+            continue;
+          case 6:
+            append_node(Type::Callable, Member("menu_enable"));
+            continue;
+          case 7:
+            append_node(Type::Callable, Member("menu_disable"));
+            continue;
+          case 11: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("btn_enable_all");
+                break;
+              case 1:
+                append_callable("btn_enable");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("btn_enable_all");
+                break;
+            }
+            continue;
+          }
+          case 12: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("btn_disable_all");
+                break;
+              case 1:
+                append_callable("btn_disable");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("btn_disable_all");
+                break;
+            }
+            continue;
+          }
+          case 133:
+            append_node(Type::None, Member("touch_enable"));
+            continue;
+          case 134:
+            append_node(Type::None, Member("touch_disable"));
+            continue;
+          case 5:
+            append_node(Type::None, Member("init_flags"));
+            continue;
+          case 200:
+            append_node(Type::Callable, Member("set_readskip"));
+            continue;
+          case 201:
+            append_node(Type::Int, Member("get_readskip"));
+            continue;
+          case 202:
+            append_node(Type::Callable, Member("set_enable_readskip"));
+            continue;
+          case 203:
+            append_node(Type::Int, Member("get_enable_readskip"));
+            continue;
+          case 204:
+            append_node(Type::Callable, Member("set_exist_readskip"));
+            continue;
+          case 205:
+            append_node(Type::Int, Member("get_exist_readskip"));
+            continue;
+          case 206:
+            append_node(Type::Int, Member("is_readskip_enable"));
+            continue;
+          case 207:
+            append_node(Type::Callable, Member("set_autoskip"));
+            continue;
+          case 208:
+            append_callable("get_autoskip", Type::Int);
+            continue;
+          case 209:
+            append_node(Type::Callable, Member("set_enable_autoskip"));
+            continue;
+          case 210:
+            append_node(Type::Int, Member("get_enable_autoskip"));
+            continue;
+          case 211:
+            append_node(Type::Callable, Member("set_exist_autoskip"));
+            continue;
+          case 212:
+            append_node(Type::Int, Member("get_exist_autoskip"));
+            continue;
+          case 213:
+            append_node(Type::Int, Member("is_autoskip_enable"));
+            continue;
+          case 214:
+            append_node(Type::Callable, Member("set_automode"));
+            continue;
+          case 215:
+            append_node(Type::Int, Member("get_automode"));
+            continue;
+          case 216:
+            append_node(Type::Callable, Member("set_enable_automode"));
+            continue;
+          case 217:
+            append_node(Type::Int, Member("get_enable_automode"));
+            continue;
+          case 218:
+            append_node(Type::Callable, Member("set_exist_automode"));
+            continue;
+          case 219:
+            append_node(Type::Int, Member("get_exist_automode"));
+            continue;
+          case 220:
+            append_node(Type::Int, Member("is_automode_enable"));
+            continue;
+          case 221:
+            append_node(Type::Callable, Member("set_hidemwnd"));
+            continue;
+          case 222:
+            append_node(Type::Int, Member("get_hidemwnd"));
+            continue;
+          case 223:
+            append_node(Type::Callable, Member("set_enable_hidemwnd"));
+            continue;
+          case 224:
+            append_node(Type::Int, Member("get_enable_hidemwnd"));
+            continue;
+          case 225:
+            append_node(Type::Callable, Member("set_exist_hidemwnd"));
+            continue;
+          case 226:
+            append_node(Type::Int, Member("get_exist_hidemwnd"));
+            continue;
+          case 227:
+            append_node(Type::Int, Member("is_hidemwnd_enable"));
+            continue;
+          case 300:
+            append_node(Type::Callable, Member("set_extraswitch"));
+            continue;
+          case 301:
+            append_node(Type::Callable, Member("get_extraswitch"));
+            continue;
+          case 302:
+            append_node(Type::Callable, Member("set_enable_extraswitch"));
+            continue;
+          case 303:
+            append_node(Type::Callable, Member("get_enable_extraswitch"));
+            continue;
+          case 304:
+            append_node(Type::Callable, Member("set_exist_extraswitch"));
+            continue;
+          case 305:
+            append_node(Type::Callable, Member("get_exist_extraswitch"));
+            continue;
+          case 306:
+            append_node(Type::Callable, Member("is_extraswitch_enable"));
+            continue;
+          case 23:
+            append_node(Type::Callable, Member("set_localmode"));
+            continue;
+          case 57:
+            append_node(Type::Int, Member("get_localmode"));
+            continue;
+          case 58:
+            append_node(Type::Callable, Member("set_enable_localmode"));
+            continue;
+          case 59:
+            append_node(Type::Int, Member("get_enable_localmode"));
+            continue;
+          case 62:
+            append_node(Type::Callable, Member("set_exist_localmode"));
+            continue;
+          case 63:
+            append_node(Type::Int, Member("get_exist_localmode"));
+            continue;
+          case 64:
+            append_node(Type::Int, Member("is_localmode_enable"));
+            continue;
+          case 192:
+            append_node(Type::None, Member("open_msgback"));
+            continue;
+          case 193:
+            append_node(Type::None, Member("close_msgback"));
+            continue;
+          case 194:
+            append_node(Type::Callable, Member("set_enable_msgback"));
+            continue;
+          case 195:
+            append_node(Type::Int, Member("get_enable_msgback"));
+            continue;
+          case 196:
+            append_node(Type::Callable, Member("set_exist_msgback"));
+            continue;
+          case 197:
+            append_node(Type::Int, Member("get_exist_msgback"));
+            continue;
+          case 198:
+            append_node(Type::Int, Member("is_msgback_enable"));
+            continue;
+          case 329:
+            append_node(Type::Int, Member("is_msgback_open"));
+            continue;
+          case 228:
+            append_node(Type::Callable, Member("return_to_sel"));
+            continue;
+          case 230:
+            append_node(Type::Callable, Member("set_enable_retsel"));
+            continue;
+          case 231:
+            append_node(Type::Int, Member("get_enable_retsel"));
+            continue;
+          case 232:
+            append_node(Type::Callable, Member("set_exist_retsel"));
+            continue;
+          case 233:
+            append_node(Type::Int, Member("get_exist_retsel"));
+            continue;
+          case 234:
+            append_node(Type::Int, Member("is_retsel_enable"));
+            continue;
+          case 235:
+            append_node(Type::Callable, Member("return_to_menu"));
+            continue;
+          case 237:
+            append_node(Type::Callable, Member("set_enable_retmenu"));
+            continue;
+          case 238:
+            append_node(Type::Int, Member("get_enable_retmenu"));
+            continue;
+          case 239:
+            append_node(Type::Callable, Member("set_exist_retmenu"));
+            continue;
+          case 240:
+            append_node(Type::Int, Member("get_exist_retmenu"));
+            continue;
+          case 241:
+            append_node(Type::Int, Member("is_retmenu_enable"));
+            continue;
+          case 242:
+            append_node(Type::Callable, Member("end_game"));
+            continue;
+          case 244:
+            append_node(Type::Callable, Member("set_enable_endgame"));
+            continue;
+          case 245:
+            append_node(Type::Int, Member("get_enable_endgame"));
+            continue;
+          case 246:
+            append_node(Type::Callable, Member("set_exist_endgame"));
+            continue;
+          case 247:
+            append_node(Type::None,
+                        Member("set_play_silent_sound_onoff_default"));
+            continue;
+          case 248:
+            append_node(Type::Int, Member("is_endgame_enable"));
+            continue;
+          case 288:
+            append_node(Type::None, Member("replay_koe"));
+            continue;
+          case 292:
+            append_node(Type::Int, Member("check_koe"));
+            continue;
+          case 289:
+            append_node(Type::Int, Member("get_cur_koe"));
+            continue;
+          case 291:
+            append_node(Type::Int, Member("get_cur_chr"));
+            continue;
+          case 293:
+            append_node(Type::None, Member("clear_koe_chr"));
+            continue;
+          case 294:
+            append_node(Type::String, Member("get_scene_title"));
+            continue;
+          case 295:
+            append_node(Type::String, Member("get_save_message"));
+            continue;
+          case 199:
+            append_node(Type::None, Member("get_total_playtime(fixme)"));
+            continue;
+          case 229:
+            append_node(Type::Callable, Member("set_total_playtime"));
+            continue;
+          case 1:
+            append_node(Type::None, Member("open_save"));
+            continue;
+          case 251:
+            append_node(Type::Callable, Member("set_enable_save"));
+            continue;
+          case 252:
+            append_node(Type::Int, Member("get_enable_save"));
+            continue;
+          case 253:
+            append_node(Type::Callable, Member("set_exist_save"));
+            continue;
+          case 254:
+            append_node(Type::Int, Member("get_exist_save"));
+            continue;
+          case 255:
+            append_node(Type::Int, Member("is_save_enable"));
+            continue;
+          case 2:
+            append_node(Type::None, Member("open_load"));
+            continue;
+          case 258:
+            append_node(Type::Callable, Member("set_enable_load"));
+            continue;
+          case 259:
+            append_node(Type::Int, Member("get_enable_load"));
+            continue;
+          case 260:
+            append_node(Type::Callable, Member("set_exist_load"));
+            continue;
+          case 261:
+            append_node(Type::Int, Member("get_exist_load"));
+            continue;
+          case 262:
+            append_node(Type::Int, Member("is_load_enable"));
+            continue;
+          case 249:
+            append_node(Type::Callable, Member("save"));
+            continue;
+          case 256:
+            append_node(Type::Callable, Member("load"));
+            continue;
+          case 18:
+            append_node(Type::Callable, Member("qsave"));
+            continue;
+          case 20:
+            append_node(Type::Callable, Member("qload"));
+            continue;
+          case 271:
+            append_node(Type::Callable, Member("endsave"));
+            continue;
+          case 269:
+            append_node(Type::Callable, Member("endload"));
+            continue;
+          case 272:
+            append_node(Type::Callable, Member("inner_save"));
+            continue;
+          case 273:
+            append_node(Type::Callable, Member("inner_load"));
+            continue;
+          case 276:
+            append_node(Type::Callable, Member("clear_inner_save"));
+            continue;
+          case 274:
+            append_node(Type::Callable, Member("check_inner_save"));
+            continue;
+          case 310:
+            append_node(Type::Callable, Member("msgbk_load"));
+            continue;
+          case 68:
+            append_node(Type::Int, Member("get_save_count"));
+            continue;
+          case 168:
+            append_node(Type::Int, Member("get_qsave_count"));
+            continue;
+          case 79:
+            append_node(Type::Callable, Member("get_new_save_no"));
+            continue;
+          case 170:
+            append_node(Type::Callable, Member("get_new_qsave_no"));
+            continue;
+          case 69:
+            append_node(Type::Callable, Member("is_save_exist"));
+            continue;
+          case 70:
+            append_node(Type::Callable, Member("get_save_year"));
+            continue;
+          case 71:
+            append_node(Type::Callable, Member("get_save_month"));
+            continue;
+          case 72:
+            append_node(Type::Callable, Member("get_save_day"));
+            continue;
+          case 73:
+            append_node(Type::Callable, Member("get_save_weekday"));
+            continue;
+          case 74:
+            append_node(Type::Callable, Member("get_save_hour"));
+            continue;
+          case 75:
+            append_node(Type::Callable, Member("get_save_minute"));
+            continue;
+          case 76:
+            append_node(Type::Callable, Member("get_save_second"));
+            continue;
+          case 77:
+            append_node(Type::Callable, Member("get_save_millisecond"));
+            continue;
+          case 78:
+            append_node(Type::Callable, Member("get_save_title"));
+            continue;
+          case 129:
+            append_node(Type::Callable, Member("get_save_message"));
+            continue;
+          case 324:
+            append_node(Type::Callable, Member("get_save_full_message"));
+            continue;
+          case 131:
+            append_node(Type::Callable, Member("get_save_comment"));
+            continue;
+          case 180:
+            append_node(Type::Callable, Member("set_save_comment"));
+            continue;
+          case 183:
+            append_callable("get_save_value", Type::Int);
+            continue;
+          case 182:
+            append_callable("set_save_value");
+            continue;
+          case 320:
+            append_node(Type::Callable, Member("get_save_append_dir"));
+            continue;
+          case 321:
+            append_node(Type::Callable, Member("get_save_append_name"));
+            continue;
+          case 169:
+            append_node(Type::Callable, Member("is_qsave_exist"));
+            continue;
+          case 171:
+            append_node(Type::Callable, Member("get_qsave_year"));
+            continue;
+          case 172:
+            append_node(Type::Callable, Member("get_qsave_month"));
+            continue;
+          case 173:
+            append_node(Type::Callable, Member("get_qsave_day"));
+            continue;
+          case 174:
+            append_node(Type::Callable, Member("get_qsave_weekday"));
+            continue;
+          case 175:
+            append_node(Type::Callable, Member("get_qsave_hour"));
+            continue;
+          case 176:
+            append_node(Type::Callable, Member("get_qsave_minute"));
+            continue;
+          case 177:
+            append_node(Type::Callable, Member("get_qsave_second"));
+            continue;
+          case 178:
+            append_node(Type::Callable, Member("get_qsave_millisecond"));
+            continue;
+          case 179:
+            append_node(Type::Callable, Member("get_qsave_title"));
+            continue;
+          case 130:
+            append_node(Type::Callable, Member("get_qsave_message"));
+            continue;
+          case 325:
+            append_node(Type::Callable, Member("get_qsave_full_message"));
+            continue;
+          case 132:
+            append_node(Type::Callable, Member("get_qsave_comment"));
+            continue;
+          case 181:
+            append_node(Type::Callable, Member("set_qsave_comment"));
+            continue;
+          case 184:
+            append_callable("get_qsave_value", Type::Int);
+            continue;
+          case 185:
+            append_callable("set_qsave_value");
+            continue;
+          case 322:
+            append_node(Type::Callable, Member("get_qsave_append_dir"));
+            continue;
+          case 323:
+            append_node(Type::Callable, Member("get_qsave_append_name"));
+            continue;
+          case 270:
+            append_node(Type::Callable, Member("is_endsave_exist"));
+            continue;
+          case 67:
+            append_node(Type::Callable, Member("copy_save"));
+            continue;
+          case 22:
+            append_node(Type::Callable, Member("change_save"));
+            continue;
+          case 19:
+            append_node(Type::Callable, Member("delete_save"));
+            continue;
+          case 128:
+            append_node(Type::Callable, Member("copy_qsave"));
+            continue;
+          case 66:
+            append_node(Type::Callable, Member("change_qsave"));
+            continue;
+          case 65:
+            append_node(Type::Callable, Member("delete_qsave"));
+            continue;
+          case 3:
+            append_node(Type::None, Member("open_config_menu"));
+            continue;
+          case 138:
+            append_node(Type::None, Member("open_config_windowmode_menu"));
+            continue;
+          case 139:
+            append_node(Type::None, Member("open_config_volume_menu"));
+            continue;
+          case 137:
+            append_node(Type::None, Member("open_config_bgm_fade_menu"));
+            continue;
+          case 147:
+            append_node(Type::None, Member("open_config_koemode_menu"));
+            continue;
+          case 146:
+            append_node(Type::None, Member("open_config_charakoe_menu"));
+            continue;
+          case 151:
+            append_node(Type::None, Member("open_config_jitan_menu"));
+            continue;
+          case 135:
+            append_node(Type::None, Member("open_config_message_speed_menu"));
+            continue;
+          case 136:
+            append_node(Type::None, Member("open_config_filter_color_menu"));
+            continue;
+          case 140:
+            append_node(Type::None, Member("open_config_auto_mode_menu"));
+            continue;
+          case 142:
+            append_node(Type::None, Member("open_config_font_menu"));
+            continue;
+          case 141:
+            append_node(Type::None, Member("open_config_system_menu"));
+            continue;
+          case 167:
+            append_node(Type::None, Member("open_config_movie_menu"));
+            continue;
+          case 4:
+            append_node(Type::Callable, Member("set_window_mode"));
+            continue;
+          case 99:
+            append_node(Type::None, Member("set_window_mode_default"));
+            continue;
+          case 9:
+            append_node(Type::Int, Member("get_window_mode"));
+            continue;
+          case 13:
+            append_node(Type::Callable, Member("set_window_mode_size"));
+            continue;
+          case 100:
+            append_node(Type::None, Member("set_window_mode_default"));
+            continue;
+          case 16:
+            append_node(Type::Int, Member("get_window_mode_size"));
+            continue;
+          case 309:
+            append_node(Type::Callable,
+                        Member("check_window_mode_size_enable"));
+            continue;
+          case 39:
+            append_node(Type::Callable, Member("set_all_volume"));
+            continue;
+          case 21:
+            append_node(Type::Callable, Member("set_bgm_volume"));
+            continue;
+          case 26:
+            append_node(Type::Callable, Member("set_koe_volume"));
+            continue;
+          case 29:
+            append_node(Type::Callable, Member("set_pcm_volume"));
+            continue;
+          case 32:
+            append_node(Type::Callable, Member("set_se_volume"));
+            continue;
+          case 263:
+            append_node(Type::Callable, Member("set_mov_volume"));
+            continue;
+          case 277:
+            append_node(Type::Callable, Member("set_sound_volume"));
+            continue;
+          case 60:
+            append_node(Type::Callable, Member("set_all_onoff"));
+            continue;
+          case 35:
+            append_node(Type::Callable, Member("set_bgm_onoff"));
+            continue;
+          case 36:
+            append_node(Type::Callable, Member("set_koe_onoff"));
+            continue;
+          case 37:
+            append_node(Type::Callable, Member("set_pcm_onoff"));
+            continue;
+          case 38:
+            append_node(Type::Callable, Member("set_se_onoff"));
+            continue;
+          case 266:
+            append_node(Type::Callable, Member("set_mov_onoff"));
+            continue;
+          case 280:
+            append_node(Type::Callable, Member("set_sound_onoff"));
+            continue;
+          case 40:
+            append_node(Type::None, Member("set_all_volume_default"));
+            continue;
+          case 24:
+            append_node(Type::None, Member("set_bgm_volume_default"));
+            continue;
+          case 27:
+            append_node(Type::None, Member("set_koe_volume_default"));
+            continue;
+          case 30:
+            append_node(Type::None, Member("set_pcm_volume_default"));
+            continue;
+          case 33:
+            append_node(Type::None, Member("set_se_volume_default"));
+            continue;
+          case 264:
+            append_node(Type::None, Member("set_mov_volume_default"));
+            continue;
+          case 278:
+            append_node(Type::Callable, Member("set_sound_volume_default"));
+            continue;
+          case 101:
+            append_node(Type::None, Member("set_all_onoff_default"));
+            continue;
+          case 102:
+            append_node(Type::None, Member("set_bgm_onoff_default"));
+            continue;
+          case 103:
+            append_node(Type::None, Member("set_koe_onoff_default"));
+            continue;
+          case 104:
+            append_node(Type::None, Member("set_pcm_onoff_default"));
+            continue;
+          case 105:
+            append_node(Type::None, Member("set_se_onoff_default"));
+            continue;
+          case 267:
+            append_node(Type::None, Member("set_mov_onoff_default"));
+            continue;
+          case 281:
+            append_node(Type::Callable, Member("set_sound_onoff_default"));
+            continue;
+          case 41:
+            append_node(Type::Int, Member("get_all_volume"));
+            continue;
+          case 25:
+            append_node(Type::Int, Member("get_bgm_volume"));
+            continue;
+          case 28:
+            append_node(Type::Int, Member("get_koe_volume"));
+            continue;
+          case 31:
+            append_node(Type::Int, Member("get_pcm_volume"));
+            continue;
+          case 34:
+            append_node(Type::Int, Member("get_se_volume"));
+            continue;
+          case 265:
+            append_node(Type::Int, Member("get_mov_volume"));
+            continue;
+          case 279:
+            append_node(Type::Callable, Member("get_sound_volume"));
+            continue;
+          case 61:
+            append_node(Type::Int, Member("get_all_onoff"));
+            continue;
+          case 42:
+            append_node(Type::Int, Member("get_bgm_onoff"));
+            continue;
+          case 43:
+            append_node(Type::Int, Member("get_koe_onoff"));
+            continue;
+          case 44:
+            append_node(Type::Int, Member("get_pcm_onoff"));
+            continue;
+          case 45:
+            append_node(Type::Int, Member("get_se_onoff"));
+            continue;
+          case 268:
+            append_node(Type::Int, Member("get_mov_onoff"));
+            continue;
+          case 282:
+            append_node(Type::Callable, Member("get_sound_onoff"));
+            continue;
+          case 94:
+            append_node(Type::Callable, Member("set_bgmfade_volume"));
+            continue;
+          case 97:
+            append_node(Type::Callable, Member("set_bgmfade_onoff"));
+            continue;
+          case 95:
+            append_node(Type::None, Member("set_bgmfade_volume_default"));
+            continue;
+          case 106:
+            append_node(Type::None, Member("set_bgmfade_onoff_default"));
+            continue;
+          case 96:
+            append_node(Type::Int, Member("get_bgmfade_volume"));
+            continue;
+          case 98:
+            append_node(Type::Int, Member("get_bgmfade_onoff"));
+            continue;
+          case 148:
+            append_node(Type::Callable, Member("set_koemode"));
+            continue;
+          case 149:
+            append_node(Type::None, Member("set_koemode_default"));
+            continue;
+          case 150:
+            append_node(Type::Int, Member("get_koemode"));
+            continue;
+          case 143:
+            append_node(Type::Callable, Member("set_charakoe_onoff"));
+            continue;
+          case 144:
+            append_node(Type::Callable, Member("set_charakoe_onoff_default"));
+            continue;
+          case 145:
+            append_node(Type::Callable, Member("get_charakoe_onoff"));
+            continue;
+          case 186:
+            append_node(Type::Callable, Member("set_charakoe_volume"));
+            continue;
+          case 187:
+            append_node(Type::Callable, Member("set_charakoe_volume_default"));
+            continue;
+          case 188:
+            append_node(Type::Callable, Member("get_charakoe_volume"));
+            continue;
+          case 153:
+            append_node(Type::Callable, Member("set_jitan_normal_onoff"));
+            continue;
+          case 154:
+            append_node(Type::None, Member("set_jitan_normal_onoff_default"));
+            continue;
+          case 155:
+            append_callable("get_jitan_normal_onoff", Type::Int);
+            continue;
+          case 156:
+            append_node(Type::Callable, Member("set_jitan_auto_mode_onoff"));
+            continue;
+          case 157:
+            append_node(Type::None,
+                        Member("set_jitan_auto_mode_onoff_default"));
+            continue;
+          case 158:
+            append_node(Type::Int, Member("get_jitan_auto_mode_onoff"));
+            continue;
+          case 159:
+            append_node(Type::Callable, Member("set_jitan_koe_replay_onoff"));
+            continue;
+          case 160:
+            append_node(Type::None,
+                        Member("set_jitan_koe_replay_onoff_default"));
+            continue;
+          case 161:
+            append_node(Type::Int, Member("get_jitan_koe_replay_onoff"));
+            continue;
+          case 152:
+            append_node(Type::Callable, Member("set_jitan_speed"));
+            continue;
+          case 162:
+            append_node(Type::None, Member("set_jitan_speed_default"));
+            continue;
+          case 163:
+            append_node(Type::Int, Member("get_jitan_speed"));
+            continue;
+          case 46:
+            append_node(Type::Callable, Member("set_message_speed"));
+            continue;
+          case 47:
+            append_node(Type::None, Member("set_message_speed_default"));
+            continue;
+          case 48:
+            append_node(Type::Int, Member("get_message_speed"));
+            continue;
+          case 49:
+            append_node(Type::Callable, Member("set_message_nowait"));
+            continue;
+          case 107:
+            append_node(Type::None, Member("set_message_nowait_default"));
+            continue;
+          case 50:
+            append_node(Type::Int, Member("get_message_nowait"));
+            continue;
+          case 51:
+            append_node(Type::Callable, Member("set_auto_mode_moji_wait"));
+            continue;
+          case 52:
+            append_node(Type::None, Member("set_auto_mode_moji_wait_default"));
+            continue;
+          case 53:
+            append_node(Type::Int, Member("get_auto_mode_moji_wait"));
+            continue;
+          case 54:
+            append_node(Type::Callable, Member("set_auto_mode_min_wait"));
+            continue;
+          case 55:
+            append_node(Type::None, Member("set_auto_mode_min_wait_default"));
+            continue;
+          case 56:
+            append_node(Type::Int, Member("get_auto_mode_min_wait"));
+            continue;
+          case 311:
+            append_node(Type::Callable, Member("set_mouse_cursor_hide_onoff"));
+            continue;
+          case 312:
+            append_node(Type::None,
+                        Member("set_mouse_cursor_hide_onoff_default"));
+            continue;
+          case 313:
+            append_node(Type::Int, Member("get_mouse_cursor_hide_onoff"));
+            continue;
+          case 317:
+            append_node(Type::Callable, Member("set_mouse_cursor_hide_time"));
+            continue;
+          case 318:
+            append_node(Type::None,
+                        Member("set_mouse_cursor_hide_time_default"));
+            continue;
+          case 319:
+            append_node(Type::Int, Member("get_mouse_cursor_hide_time"));
+            continue;
+          case 82:
+            append_node(Type::Callable, Member("set_filter_color_r"));
+            continue;
+          case 85:
+            append_node(Type::Callable, Member("set_filter_color_g"));
+            continue;
+          case 86:
+            append_node(Type::Callable, Member("set_filter_color_b"));
+            continue;
+          case 87:
+            append_node(Type::Callable, Member("set_filter_color_a"));
+            continue;
+          case 83:
+            append_node(Type::None, Member("set_filter_color_r_default"));
+            continue;
+          case 88:
+            append_node(Type::None, Member("set_filter_color_g_default"));
+            continue;
+          case 89:
+            append_node(Type::None, Member("set_filter_color_b_default"));
+            continue;
+          case 90:
+            append_node(Type::None, Member("set_filter_color_a_default"));
+            continue;
+          case 84:
+            append_node(Type::Int, Member("get_filter_color_r"));
+            continue;
+          case 91:
+            append_node(Type::Int, Member("get_filter_color_g"));
+            continue;
+          case 92:
+            append_node(Type::Int, Member("get_filter_color_b"));
+            continue;
+          case 93:
+            append_node(Type::Int, Member("get_filter_color_a"));
+            continue;
+          case 189:
+            append_node(Type::Callable, Member("set_obj_disp_onoff"));
+            continue;
+          case 190:
+            append_node(Type::Callable, Member("set_obj_disp_onoff_default"));
+            continue;
+          case 191:
+            append_node(Type::Callable, Member("get_obj_disp_onoff"));
+            continue;
+          case 14:
+            append_node(Type::Callable, Member("set_global_extraswitch_onoff"));
+            continue;
+          case 15:
+            append_node(Type::Callable,
+                        Member("set_global_extraswitch_onoff_default"));
+            continue;
+          case 17:
+            append_node(Type::Callable, Member("get_global_extraswitch_onoff"));
+            continue;
+          case 164:
+            append_node(Type::Callable, Member("set_global_extramode"));
+            continue;
+          case 165:
+            append_node(Type::Callable, Member("set_global_extramode_default"));
+            continue;
+          case 166:
+            append_node(Type::Callable, Member("get_global_extramode_default"));
+            continue;
+          case 80:
+            append_node(Type::Callable, Member("set_saveload_alert_onoff"));
+            continue;
+          case 108:
+            append_node(Type::None, Member("set_saveload_alert_onoff_default"));
+            continue;
+          case 10:
+            append_node(Type::Int, Member("get_saveload_alert_onoff"));
+            continue;
+          case 110:
+            append_node(Type::Callable, Member("set_sleep_onoff"));
+            continue;
+          case 111:
+            append_node(Type::None, Member("set_sleep_onoff_default"));
+            continue;
+          case 112:
+            append_node(Type::Int, Member("get_sleep_onoff"));
+            continue;
+          case 113:
+            append_node(Type::Callable, Member("set_no_wipe_anime_onoff"));
+            continue;
+          case 114:
+            append_node(Type::None, Member("set_no_wipe_anime_onoff_default"));
+            continue;
+          case 115:
+            append_node(Type::Callable, Member("get_no_wipe_anime_onoff"));
+            continue;
+          case 116:
+            append_node(Type::Callable, Member("set_skip_wipe_anime_onoff"));
+            continue;
+          case 117:
+            append_node(Type::None,
+                        Member("set_skip_wipe_anime_onoff_default"));
+            continue;
+          case 118:
+            append_node(Type::Int, Member("get_skip_wipe_anime_onoff"));
+            continue;
+          case 8:
+            append_callable("set_no_mwnd_anime_onoff");
+            continue;
+          case 109:
+            append_callable("set_no_mwnd_anime_onoff_default");
+            continue;
+          case 81:
+            append_callable("get_no_mwnd_anime_onoff", Type::Int);
+            continue;
+          case 119:
+            append_node(Type::Callable, Member("set_wheel_next_message_onoff"));
+            continue;
+          case 120:
+            append_node(Type::None,
+                        Member("set_wheel_next_message_onoff_default"));
+            continue;
+          case 121:
+            append_node(Type::Int, Member("get_wheel_next_message_onoff"));
+            continue;
+          case 122:
+            append_node(Type::Callable, Member("set_koe_dont_stop_onoff"));
+            continue;
+          case 123:
+            append_node(Type::None, Member("set_koe_dont_stop_onoff_default"));
+            continue;
+          case 124:
+            append_node(Type::Int, Member("get_koe_dont_stop_onoff"));
+            continue;
+          case 125:
+            append_node(Type::Callable,
+                        Member("set_skip_unread_message_onoff"));
+            continue;
+          case 126:
+            append_node(Type::None,
+                        Member("set_skip_unread_message_onoff_default"));
+            continue;
+          case 127:
+            append_node(Type::Int, Member("get_skip_unread_message_onoff"));
+            continue;
+          case 250:
+            append_node(Type::Callable, Member("set_play_silent_sound_onoff"));
+            continue;
+          case 243:
+            append_node(Type::Int, Member("get_play_silent_sound_onoff"));
+            continue;
+          case 283:
+            append_node(Type::Callable, Member("set_font_name"));
+            continue;
+          case 326:
+            append_node(Type::None, Member("set_font_name_default"));
+            continue;
+          case 284:
+            append_node(Type::String, Member("get_font_name"));
+            continue;
+          case 285:
+            append_node(Type::Callable, Member("is_font_exist"));
+            continue;
+          case 296:
+            append_node(Type::Callable, Member("set_font_bold"));
+            continue;
+          case 298:
+            append_node(Type::None, Member("set_font_bold_default"));
+            continue;
+          case 307:
+            append_node(Type::Int, Member("get_font_bold"));
+            continue;
+          case 297:
+            append_node(Type::Callable, Member("set_font_decoration"));
+            continue;
+          case 299:
+            append_node(Type::None, Member("set_font_decoration_default"));
+            continue;
+          case 308:
+            append_node(Type::Int, Member("get_font_decoration"));
+            continue;
+          case 286:
+            append_callable("create_capture_buffer");
+            continue;
+          case 287:
+            append_callable("destroy_capture_buffer");
+            continue;
+          case 290:
+            append_callable("capture_to_capture_buffer", Type::None, AWAIT);
+            continue;
+          case 314:
+            append_callable("save_capture_buffer_to_file", Type::Int,
+                            NONSIMPLE | AWAIT);
+            continue;
+          case 315:
+            append_callable("load_flag_from_capture_file", Type::Int,
+                            NONSIMPLE | AWAIT);
+            continue;
+          case 316:
+            append_callable("capture_to_png", Type::None, AWAIT);
+            continue;
+          case 327:
+            append_node(Type::None, Member("twitter"));
+            continue;
+          case 328:
+            append_node(Type::Callable, Member("set_ret_scene_once"));
+            continue;
+          case 330:
+            append_node(Type::Callable, Member("get_sys_extra_int"));
+            continue;
+          case 331:
+            append_node(Type::Callable, Member("get_sys_extra_str"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Excall:
+        switch (key) {
+          case -1:
+            parse_index(Type::Excall);
+            continue;
+          case 4:
+            append_node(Type::None, Member("alloc"));
+            continue;
+          case 5:
+            append_node(Type::None, Member("free"));
+            continue;
+          case 12:
+            append_node(Type::Int, Member("is_excall"));
+            continue;
+          case 8:
+            append_node(Type::Int, Member("check_alloc"));
+            continue;
+          case 7:
+            append_node(Type::IntList, Member("F"));
+            continue;
+          case 6:
+            append_node(Type::CounterList, Member("counter"));
+            continue;
+          case 9:
+            append_node(Type::FrameAction, Member("frame_action"));
+            continue;
+          case 10:
+            append_node(Type::FrameActionList, Member("frame_action_ch"));
+            continue;
+          case 0:
+            append_node(Type::StageList, Member("stage"));
+            continue;
+          case 2:
+            append_node(Type::Stage, Member("back"));
+            continue;
+          case 1:
+            append_node(Type::Stage, Member("front"));
+            continue;
+          case 3:
+            append_node(Type::Stage, Member("next"));
+            continue;
+          case 13:
+            append_node(Type::ScriptExcall, Member("script"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::StageList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Stage);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Stage:
+        switch (key) {
+          case 2:
+            append_node(Type::ObjList, Member("object"));
+            continue;
+          case 3:
+            append_node(Type::MwndList, Member("mwnd"));
+            continue;
+          case 6:
+            append_node(Type::GroupList, Member("objgroup"));
+            continue;
+          case 5:
+            append_node(Type::BtnselItemList, Member("btnsel"));
+            continue;
+          case 8:
+            append_node(Type::WorldList, Member("world"));
+            continue;
+          case 4:
+            append_node(Type::EffectList, Member("effect"));
+            continue;
+          case 7:
+            append_node(Type::QuakeList, Member("quake"));
+            continue;
+          case 0:
+            append_node(Type::Callable, Member("create_obj"));
+            continue;
+          case 1:
+            append_node(Type::Callable, Member("create_mwnd"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::GroupList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Group);
+            continue;
+          case 1:
+            append_callable("alloc", Type::None);
+            continue;
+          case 2:
+            append_callable("free", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Group:
+        switch (key) {
+          case 0:
+            append_callable("sel", Type::None);
+            continue;
+          case 1:
+            append_callable("sel_cancel", Type::None);
+            continue;
+          case 4:
+            append_callable("init", Type::None);
+            continue;
+          case 2:
+            append_callable("start", Type::None);
+            continue;
+          case 10:
+            append_callable("start_cancel", Type::None);
+            continue;
+          case 5:
+            append_callable("end", Type::None);
+            continue;
+          case 6:
+            append_callable("get_hit_no", Type::Int);
+            continue;
+          case 7:
+            append_callable("get_pushed_no", Type::Int);
+            continue;
+          case 3:
+            append_callable("get_decided_no", Type::Int);
+            continue;
+          case 15:
+            append_callable("get_result", Type::Int);
+            continue;
+          case 16:
+            append_callable("get_result_button_no", Type::Int);
+            continue;
+          case 8:
+            parse_property("order", Type::Int, true);
+            continue;
+          case 13:
+            parse_property("layer", Type::Int, true);
+            continue;
+          case 14:
+            parse_property("cancel_priority", Type::Int, true);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Screen:
+        switch (key) {
+          case 31:
+            append_node(Type::EffectList, Member("effect"));
+            continue;
+          case 25:
+            append_node(Type::QuakeList, Member("quake"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::EffectList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Effect);
+            continue;
+          case 1:
+            append_callable("resize");
+            continue;
+          case 2:
+            append_callable("size", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Effect:
+        switch (key) {
+          case 30:
+            append_callable("init");
+            continue;
+          case 31:
+            parse_property("wipe_copy", Type::Int, true);
+            continue;
+          case 32:
+            parse_property("wipe_erase", Type::Int, true);
+            continue;
+          case 0:
+            parse_property("x", Type::Int, true);
+            continue;
+          case 1:
+            parse_property("y", Type::Int, true);
+            continue;
+          case 2:
+            parse_property("z", Type::Int, true);
+            continue;
+          case 3:
+            parse_property("mono", Type::Int, true);
+            continue;
+          case 4:
+            parse_property("reverse", Type::Int, true);
+            continue;
+          case 5:
+            parse_property("bright", Type::Int, true);
+            continue;
+          case 6:
+            parse_property("dark", Type::Int, true);
+            continue;
+          case 7:
+            parse_property("color_r", Type::Int, true);
+            continue;
+          case 8:
+            parse_property("color_g", Type::Int, true);
+            continue;
+          case 9:
+            parse_property("color_b", Type::Int, true);
+            continue;
+          case 10:
+            parse_property("color_rate", Type::Int, true);
+            continue;
+          case 11:
+            parse_property("color_add_r", Type::Int, true);
+            continue;
+          case 12:
+            parse_property("color_add_g", Type::Int, true);
+            continue;
+          case 13:
+            parse_property("color_add_b", Type::Int, true);
+            continue;
+          case 14:
+            append_node(Type::IntEvent, Member("x_eve"));
+            continue;
+          case 15:
+            append_node(Type::IntEvent, Member("y_eve"));
+            continue;
+          case 16:
+            append_node(Type::IntEvent, Member("z_eve"));
+            continue;
+          case 17:
+            append_node(Type::IntEvent, Member("mono_eve"));
+            continue;
+          case 18:
+            append_node(Type::IntEvent, Member("reverse_eve"));
+            continue;
+          case 19:
+            append_node(Type::IntEvent, Member("bright_eve"));
+            continue;
+          case 20:
+            append_node(Type::IntEvent, Member("dark_eve"));
+            continue;
+          case 21:
+            append_node(Type::IntEvent, Member("color_r_eve"));
+            continue;
+          case 22:
+            append_node(Type::IntEvent, Member("color_g_eve"));
+            continue;
+          case 23:
+            append_node(Type::IntEvent, Member("color_b_eve"));
+            continue;
+          case 24:
+            append_node(Type::IntEvent, Member("color_rate_eve"));
+            continue;
+          case 25:
+            append_node(Type::IntEvent, Member("color_add_r_eve"));
+            continue;
+          case 26:
+            append_node(Type::IntEvent, Member("color_add_g_eve"));
+            continue;
+          case 27:
+            append_node(Type::IntEvent, Member("color_add_b_eve"));
+            continue;
+          case 28:
+            parse_property("begin_order", Type::Int, true);
+            continue;
+          case 29:
+            parse_property("end_order", Type::Int, true);
+            continue;
+          case 33:
+            parse_property("begin_layer", Type::Int, true);
+            continue;
+          case 34:
+            parse_property("end_layer", Type::Int, true);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::QuakeList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Quake);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Quake:
+        switch (key) {
+          case 0:
+            append_callable("start", Type::None, NONSIMPLE);
+            continue;
+          case 1:
+            append_callable("start_wait", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 2:
+            append_callable("start_wait_key", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 3:
+            append_callable("start_nowait", Type::None, NONSIMPLE);
+            continue;
+          case 4:
+            append_callable("start_all", Type::None, NONSIMPLE);
+            continue;
+          case 5:
+            append_callable("start_all_wait", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 6:
+            append_callable("start_all_wait_key", Type::None,
+                            NONSIMPLE | AWAIT);
+            continue;
+          case 7:
+            append_callable("start_all_nowait", Type::None, NONSIMPLE);
+            continue;
+          case 8:
+            append_callable("end", Type::None, NONSIMPLE);
+            continue;
+          case 10:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 11:
+            append_callable("wait_key", Type::None, AWAIT);
+            continue;
+          case 9:
+            append_callable("check", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Input:
+        switch (key) {
+          case 2:
+            append_callable("clear", Type::None);
+            continue;
+          case 3:
+            append_callable("next", Type::None);
+            continue;
+          case 0:
+            append_node(Type::Key, Member("decide"));
+            continue;
+          case 1:
+            append_node(Type::Key, Member("cancel"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::KeyList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Key);
+            continue;
+          case 0:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 1:
+            append_callable("wait_force", Type::None, AWAIT);
+            continue;
+          case 3:
+            append_callable("clear", Type::None);
+            continue;
+          case 5:
+            append_callable("next", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Key:
+        switch (key) {
+          case 1:
+            append_callable("on_down", Type::Int);
+            continue;
+          case 4:
+            append_callable("on_up", Type::Int);
+            continue;
+          case 5:
+            append_callable("on_down_up", Type::Int);
+            continue;
+          case 6:
+            append_callable("is_down", Type::Int);
+            continue;
+          case 7:
+            append_callable("is_up", Type::Int);
+            continue;
+          case 10:
+            append_callable("on_flick", Type::Int);
+            continue;
+          case 0:
+            append_callable("get_flick_angle", Type::Int);
+            continue;
+          case 14:
+            append_callable("get_flick_pixel", Type::Int);
+            continue;
+          case 15:
+            append_callable("get_flick_mm", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Mouse:
+        switch (key) {
+          case 4:
+            append_callable("clear", Type::None);
+            continue;
+          case 8:
+            append_callable("next", Type::None);
+            continue;
+          case 0:
+            append_callable("pos_x", Type::Int);
+            continue;
+          case 1:
+            append_callable("pos_y", Type::Int);
+            continue;
+          case 2:
+            append_callable("get_pos_x", Type::Int);
+            continue;
+          case 3:
+            append_callable("get_pos_y", Type::Int);
+            continue;
+          case 9:
+            append_callable("get_pos", Type::None);
+            continue;
+          case 10:
+            append_callable("set_pos", Type::None);
+            continue;
+          case 5:
+            append_callable("wheel", Type::Int);
+            continue;
+          case 7:
+            append_node(Type::Key, Member("left"));
+            continue;
+          case 6:
+            append_node(Type::Key, Member("right"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::ObjList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Object);
+            continue;
+          case 4:
+            append_node(Type::Callable, Member("resize"));
+            continue;
+          case 3:
+            append_node(Type::Callable, Member("size"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Object:
+        switch (key) {
+          case 56:
+            parse_property("wipe_copy", Type::Int, true);
+            continue;
+          case 92:
+            parse_property("wipe_erase", Type::Int, true);
+            continue;
+          case 139:
+            parse_property("click_disable", Type::Int, true);
+            continue;
+          case 0:
+            parse_property("disp", Type::Int, true);
+            continue;
+          case 1:
+            parse_property("patno", Type::Int, true);
+            continue;
+          case 44:
+            parse_property("world", Type::Int, true);
+            continue;
+          case 55:
+            parse_property("order", Type::Int, true);
+            continue;
+          case 2:
+            parse_property("layer", Type::Int, true);
+            continue;
+          case 3:
+            parse_property("x", Type::Int, true);
+            continue;
+          case 4:
+            parse_property("y", Type::Int, true);
+            continue;
+          case 5:
+            parse_property("z", Type::Int, true);
+            continue;
+          case 54:
+            parse_property("x_rep", Type::IntList);
+            continue;
+          case 63:
+            parse_property("y_rep", Type::IntList);
+            continue;
+          case 110:
+            parse_property("z_rep", Type::IntList);
+            continue;
+          case 48:
+            append_node(Type::Callable, Member("set_pos"));
+            continue;
+          case 6:
+            parse_property("center_x", Type::Int, true);
+            continue;
+          case 7:
+            parse_property("center_y", Type::Int, true);
+            continue;
+          case 8:
+            parse_property("center_z", Type::Int, true);
+            continue;
+          case 158:
+            append_node(Type::Callable, Member("set_center"));
+            continue;
+          case 9:
+            parse_property("center_rep_x", Type::Int, true);
+            continue;
+          case 10:
+            parse_property("center_rep_y", Type::Int, true);
+            continue;
+          case 11:
+            parse_property("center_rep_z", Type::Int, true);
+            continue;
+          case 159:
+            append_node(Type::Callable, Member("set_center_rep"));
+            continue;
+          case 12:
+            parse_property("scale_x", Type::Int, true);
+            continue;
+          case 13:
+            parse_property("scale_y", Type::Int, true);
+            continue;
+          case 14:
+            parse_property("scale_z", Type::Int, true);
+            continue;
+          case 49:
+            append_node(Type::Callable, Member("set_scale"));
+            continue;
+          case 15:
+            parse_property("rotate_x", Type::Int, true);
+            continue;
+          case 16:
+            parse_property("rotate_y", Type::Int, true);
+            continue;
+          case 17:
+            parse_property("rotate_z", Type::Int, true);
+            continue;
+          case 50:
+            append_node(Type::Callable, Member("set_rotate"));
+            continue;
+          case 18:
+            parse_property("clip_use", Type::Int, true);
+            continue;
+          case 19:
+            parse_property("clip_left", Type::Int, true);
+            continue;
+          case 20:
+            parse_property("clip_top", Type::Int, true);
+            continue;
+          case 21:
+            parse_property("clip_right", Type::Int, true);
+            continue;
+          case 22:
+            parse_property("clip_bottom", Type::Int, true);
+            continue;
+          case 160:
+            append_node(Type::Callable, Member("set_clip"));
+            continue;
+          case 149:
+            parse_property("src_clip_use", Type::Int, true);
+            continue;
+          case 150:
+            parse_property("src_clip_left", Type::Int, true);
+            continue;
+          case 151:
+            parse_property("src_clip_top", Type::Int, true);
+            continue;
+          case 152:
+            parse_property("src_clip_right", Type::Int, true);
+            continue;
+          case 153:
+            parse_property("src_clip_bottom", Type::Int, true);
+            continue;
+          case 161:
+            append_node(Type::Callable, Member("set_src_clip"));
+            continue;
+          case 27:
+            parse_property("tr", Type::Int, true);
+            continue;
+          case 141:
+            parse_property("tr_rep", Type::IntList);
+            continue;
+          case 28:
+            parse_property("mono", Type::Int, true);
+            continue;
+          case 29:
+            parse_property("reverse", Type::Int, true);
+            continue;
+          case 30:
+            parse_property("bright", Type::Int, true);
+            continue;
+          case 31:
+            parse_property("dark", Type::Int, true);
+            continue;
+          case 32:
+            parse_property("color_r", Type::Int, true);
+            continue;
+          case 33:
+            parse_property("color_g", Type::Int, true);
+            continue;
+          case 34:
+            parse_property("color_b", Type::Int, true);
+            continue;
+          case 23:
+            parse_property("color_rate", Type::Int, true);
+            continue;
+          case 57:
+            parse_property("color_add_r", Type::Int, true);
+            continue;
+          case 58:
+            parse_property("color_add_g", Type::Int, true);
+            continue;
+          case 59:
+            parse_property("color_add_b", Type::Int, true);
+            continue;
+          case 145:
+            parse_property("mask_no", Type::Int, true);
+            continue;
+          case 109:
+            parse_property("tonecurve_no", Type::Int, true);
+            continue;
+          case 146:
+            parse_property("culling", Type::Int, true);
+            continue;
+          case 147:
+            parse_property("alpha_test", Type::Int, true);
+            continue;
+          case 148:
+            parse_property("alpha_blend", Type::Int, true);
+            continue;
+          case 46:
+            parse_property("blend", Type::Int, true);
+            continue;
+          case 168:
+            parse_property("light_no", Type::Int, true);
+            continue;
+          case 144:
+            parse_property("fog_use", Type::Int, true);
+            continue;
+          case 90:
+            parse_property("patno_eve", Type::IntEvent);
+            continue;
+          case 51:
+            parse_property("x_eve", Type::IntEvent);
+            continue;
+          case 64:
+            parse_property("y_eve", Type::IntEvent);
+            continue;
+          case 65:
+            parse_property("z_eve", Type::IntEvent);
+            continue;
+          case 112:
+            parse_property("x_rep_eve", Type::IntEventList);
+            continue;
+          case 113:
+            parse_property("y_rep_eve", Type::IntEventList);
+            continue;
+          case 114:
+            parse_property("z_rep_eve", Type::IntEventList);
+            continue;
+          case 77:
+            parse_property("center_x_eve", Type::IntEvent);
+            continue;
+          case 78:
+            parse_property("center_y_eve", Type::IntEvent);
+            continue;
+          case 79:
+            parse_property("center_z_eve", Type::IntEvent);
+            continue;
+          case 80:
+            parse_property("center_rep_x_eve", Type::IntEvent);
+            continue;
+          case 81:
+            parse_property("center_rep_y_eve", Type::IntEvent);
+            continue;
+          case 82:
+            parse_property("center_rep_z_eve", Type::IntEvent);
+            continue;
+          case 67:
+            parse_property("scale_x_eve", Type::IntEvent);
+            continue;
+          case 68:
+            parse_property("scale_y_eve", Type::IntEvent);
+            continue;
+          case 66:
+            parse_property("scale_z_eve", Type::IntEvent);
+            continue;
+          case 69:
+            parse_property("rotate_x_eve", Type::IntEvent);
+            continue;
+          case 70:
+            parse_property("rotate_y_eve", Type::IntEvent);
+            continue;
+          case 71:
+            parse_property("rotate_z_eve", Type::IntEvent);
+            continue;
+          case 105:
+            parse_property("clip_left_eve", Type::IntEvent);
+            continue;
+          case 106:
+            parse_property("clip_top_eve", Type::IntEvent);
+            continue;
+          case 107:
+            parse_property("clip_right_eve", Type::IntEvent);
+            continue;
+          case 108:
+            parse_property("clip_bottom_eve", Type::IntEvent);
+            continue;
+          case 154:
+            parse_property("src_clip_left_eve", Type::IntEvent);
+            continue;
+          case 155:
+            parse_property("src_clip_top_eve", Type::IntEvent);
+            continue;
+          case 156:
+            parse_property("src_clip_right_eve", Type::IntEvent);
+            continue;
+          case 157:
+            parse_property("src_clip_bottom_eve", Type::IntEvent);
+            continue;
+          case 72:
+            parse_property("tr_eve", Type::IntEvent);
+            continue;
+          case 140:
+            parse_property("tr_rep_eve", Type::IntEventList);
+            continue;
+          case 73:
+            parse_property("mono_eve", Type::IntEvent);
+            continue;
+          case 74:
+            parse_property("reverse_eve", Type::IntEvent);
+            continue;
+          case 75:
+            parse_property("bright_eve", Type::IntEvent);
+            continue;
+          case 76:
+            parse_property("dark_eve", Type::IntEvent);
+            continue;
+          case 87:
+            parse_property("color_r_eve", Type::IntEvent);
+            continue;
+          case 88:
+            parse_property("color_g_eve", Type::IntEvent);
+            continue;
+          case 89:
+            parse_property("color_b_eve", Type::IntEvent);
+            continue;
+          case 83:
+            parse_property("color_rate_eve", Type::IntEvent);
+            continue;
+          case 84:
+            parse_property("color_add_r_eve", Type::IntEvent);
+            continue;
+          case 85:
+            parse_property("color_add_g_eve", Type::IntEvent);
+            continue;
+          case 86:
+            parse_property("color_add_b_eve", Type::IntEvent);
+            continue;
+          case 91: {
+            if (elmcode.size() < 2) {
+              warn_("[AllEvent] expected operation");
+              elmcode = elmcode.subspan(1);
+              continue;
+            }
+            const int peek = AsInt(elmcode[1]);
+            switch (peek) {
+              case 0:  // ALLEVENT_END
+                result.nodes.emplace_back(
+                    Type::Callable, Member("alleve_end", Type::None, true));
+                elmcode = elmcode.subspan(2);
+                break;
+              case 1:
+                result.nodes.emplace_back(
+                    Type::Callable,
+                    Member("alleve_wait", Type::None, true, true, true));
+                elmcode = elmcode.subspan(2);
+                break;
+              case 2:
+                result.nodes.emplace_back(
+                    Type::Callable, Member("alleve_check", Type::Int, true));
+                elmcode = elmcode.subspan(2);
+                break;
+              default:
+                result.nodes.emplace_back(Type::Invalid, Member("alleve_???"));
+                elmcode = elmcode.subspan(2);
+                break;
+            }
+
+            continue;
+          }
+          case 169:
+            append_node(Type::Int, Member("pat_cnt"));
+            continue;
+          case 24:
+            append_callable("get_size_x", Type::Int);
+            continue;
+          case 25:
+            append_callable("get_size_y", Type::Int);
+            continue;
+          case 47:
+            append_callable("get_size_z", Type::Int);
+            continue;
+          case 100:
+            append_callable("get_pixel_color_a", Type::Int);
+            continue;
+          case 101:
+            append_callable("get_pixel_color_r", Type::Int);
+            continue;
+          case 102:
+            append_callable("get_pixel_color_g", Type::Int);
+            continue;
+          case 103:
+            append_callable("get_pixel_color_b", Type::Int);
+            continue;
+          case 62:
+            append_callable("get_file_path", Type::String);
+            continue;
+          case 111:
+            parse_property("F", Type::IntList);
+            continue;
+          case 93:
+            parse_property("child", Type::ObjList);
+            continue;
+          case 35:
+            append_callable("init", Type::None);
+            continue;
+          case 36:
+            append_callable("free", Type::None);
+            continue;
+          case 37:
+            append_callable("init_param", Type::None);
+            continue;
+          case 38:
+            append_node(Type::Callable, Member("create"));
+            continue;
+          case 40:
+            append_node(Type::Callable, Member("create_rect"));
+            continue;
+          case 39:
+            append_callable("create_string");
+            continue;
+          case 132:
+            append_node(Type::Callable, Member("create_number"));
+            continue;
+          case 129:
+            append_node(Type::Callable, Member("create_weather"));
+            continue;
+          case 43:
+            append_node(Type::Callable, Member("create_mesh"));
+            continue;
+          case 45:
+            append_node(Type::Callable, Member("create_billboard"));
+            continue;
+          case 116:
+            append_node(Type::Callable, Member("create_save_thumb"));
+            continue;
+          case 170:
+            append_node(Type::Callable, Member("create_capture_thumb"));
+            continue;
+          case 165:
+            append_node(Type::Callable, Member("create_capture"));
+            continue;
+          case 120:
+            append_callable("create_movie", Type::None, NONSIMPLE);
+            continue;
+          case 121:
+            append_callable("create_movie_loop", Type::None, NONSIMPLE);
+            continue;
+          case 122:
+            append_callable("create_movie_wait", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 143:
+            append_callable("create_movie_waitkey", Type::Int,
+                            NONSIMPLE | AWAIT);
+            continue;
+          case 177:
+            append_node(Type::Callable, Member("create_emote"));
+            continue;
+          case 0x01000000:
+            append_callable("load_gan", Type::None);
+            continue;
+          case 0x01000001:
+            append_callable("start_gan", Type::None);
+            continue;
+          case 41:
+            append_node(Type::Callable, Member("copy_from"));
+            continue;
+          case 53:
+            append_node(Type::Callable, Member("change_file"));
+            continue;
+          case 174:
+            append_callable("exist_type", Type::Int);
+            continue;
+          case 99:
+            append_callable("set_string");
+            continue;
+          case 135:
+            append_callable("get_string", Type::String);
+            continue;
+          case 104:
+            append_callable("set_string_param");
+            continue;
+          case 133:
+            append_node(Type::Callable, Member("set_number"));
+            continue;
+          case 136:
+            append_node(Type::Int, Member("set_number"));
+            continue;
+          case 134:
+            append_node(Type::Callable, Member("set_number_param"));
+            continue;
+          case 130:
+            append_node(Type::Callable, Member("set_weather_param_type_a"));
+            continue;
+          case 131:
+            append_node(Type::Callable, Member("set_weather_param_type_a"));
+            continue;
+          case 125:
+            append_callable("pause_movie", Type::None);
+            continue;
+          case 126:
+            append_callable("resume_movie", Type::None);
+            continue;
+          case 137:
+            append_node(Type::Callable, Member("seek_movie"));
+            continue;
+          case 138:
+            append_callable("get_movie_seek_time", Type::Int);
+            continue;
+          case 127:
+            append_callable("check_movie", Type::Int);
+            continue;
+          case 128:
+            append_callable("wait_movie", Type::None, AWAIT);
+            continue;
+          case 142:
+            append_callable("wait_movie_key", Type::Int, AWAIT);
+            continue;
+          case 171:
+            append_callable("end_movie_loop", Type::None);
+            continue;
+          case 172:
+            append_node(Type::Callable, Member("set_movie_auto_free"));
+            continue;
+          case 52:
+            parse_property("frame_action", Type::FrameAction);
+            continue;
+          case 115:
+            parse_property("frame_action_ch", Type::FrameActionList);
+            continue;
+          case 61:
+            append_callable("clear_button", Type::None);
+            continue;
+          case 42:
+            append_node(Type::Callable, Member("set_button"));
+            continue;
+          case 164:
+            append_node(Type::Callable, Member("set_button_group"));
+            continue;
+          case 98:
+            append_node(Type::Callable, Member("set_button_pushkeep"));
+            continue;
+          case 119:
+            append_node(Type::Int, Member("get_button_pushkeep"));
+            continue;
+          case 175:
+            append_node(Type::Callable, Member("set_button_alpha_test"));
+            continue;
+          case 176:
+            append_node(Type::Int, Member("get_button_alpha_test"));
+            continue;
+          case 95:
+            append_callable("set_button_state_normal", Type::None);
+            continue;
+          case 96:
+            append_callable("set_button_state_select", Type::None);
+            continue;
+          case 97:
+            append_callable("set_button_state_disable", Type::None);
+            continue;
+          case 118:
+            append_callable("get_button_state", Type::Int);
+            continue;
+          case 123:
+            append_callable("get_button_hit_state", Type::Int);
+            continue;
+          case 124:
+            append_callable("get_button_real_state", Type::Int);
+            continue;
+          case 26:
+            append_node(Type::Callable, Member("set_button_call"));
+            continue;
+          case 60:
+            append_callable("clear_button_call", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::MaskList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Mask);
+            continue;
+          case 1:
+            append_callable("size", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Mask:
+        switch (key) {
+          case 1:
+            append_callable("init");
+            continue;
+          case 0:
+            append_callable("create", Type::None);
+            continue;
+          case 4:
+            parse_property("x", Type::Int, true);
+            continue;
+          case 5:
+            parse_property("y", Type::Int, true);
+            continue;
+          case 2:
+            parse_property("x_eve", Type::IntEvent);
+            continue;
+          case 3:
+            parse_property("y_eve", Type::IntEvent);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Movie:
+        switch (key) {
+          case 0:
+            append_callable("play", Type::None);
+            continue;
+          case 2:
+            append_callable("play_wait", Type::None, AWAIT);
+            continue;
+          case 3:
+            append_callable("play_waitkey", Type::Int, AWAIT);
+            continue;
+          case 1:
+            append_callable("stop", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::BgmTable:
+        switch (key) {
+          case 0:
+            append_node(Type::Callable, Member("cnt"));
+            continue;
+          case 2:
+            append_node(Type::Callable, Member("set_listen"));
+            continue;
+          case 4:
+            append_node(Type::Callable, Member("set_listen_all"));
+            continue;
+          case 1:
+            append_node(Type::Callable, Member("get_listen"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Bgm:
+        switch (key) {
+          case 0:
+            append_callable("play");
+            continue;
+          case 1:
+            append_callable("play_oneshot");
+            continue;
+          case 2:
+            append_callable("play_wait", Type::None, AWAIT);
+            continue;
+          case 16:
+            append_callable("ready");
+            continue;
+          case 17:
+            append_callable("ready_oneshot");
+            continue;
+          case 4:
+            append_callable("stop");
+            continue;
+          case 10:
+            append_callable("pause");
+            continue;
+          case 11:
+            append_callable("resume");
+            continue;
+          case 12:
+            append_callable("resume_wait", Type::None, AWAIT);
+            continue;
+          case 3:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 14:
+            append_callable("wait_key", Type::Int, AWAIT);
+            continue;
+          case 5:
+            append_callable("wait_fade", Type::None, AWAIT);
+            continue;
+          case 15:
+            append_callable("wait_fade_key", Type::Int, AWAIT);
+            continue;
+          case 18:
+            append_callable("check", Type::Int);
+            continue;
+          case 6:
+            append_callable("set_volume");
+            continue;
+          case 7:
+            append_callable("set_volume_max");
+            continue;
+          case 8:
+            append_callable("set_volume_min");
+            continue;
+          case 9:
+            append_callable("get_volume", Type::Int);
+            continue;
+          case 19:
+            append_callable("get_regist_name", Type::String);
+            continue;
+          case 13:
+            append_callable("get_play_pos", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Se:
+        switch (key) {
+          case 0:
+            append_callable("play");
+            continue;
+          case 5:
+            append_callable("play_by_file_name");
+            continue;
+          case 6:
+            append_callable("play_by_koe_no");
+            continue;
+          case 9:
+            append_callable("play_by_se_no");
+            continue;
+          case 7:
+            append_callable("stop");
+            continue;
+          case 8:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 10:
+            append_callable("wait_key", Type::Int, AWAIT);
+            continue;
+          case 11:
+            append_callable("check", Type::Int);
+            continue;
+          case 1:
+            append_callable("set_volume");
+            continue;
+          case 2:
+            append_callable("set_volume_max");
+            continue;
+          case 3:
+            append_callable("set_volume_min");
+            continue;
+          case 4:
+            append_callable("get_volume", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::MwndList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Mwnd);
+            continue;
+          case 1:
+            append_callable("close", Type::None);
+            continue;
+          case 2:
+            append_callable("close_wait", Type::None);
+            continue;
+          case 3:
+            append_callable("close_nowait", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Mwnd:
+        switch (key) {
+          case 0:
+            append_callable("set_waku");
+            continue;
+          case 79:
+            append_callable("init_waku_file", Type::None);
+            continue;
+          case 78:
+            append_callable("set_waku_file");
+            continue;
+          case 80:
+            append_callable("get_waku_file", Type::String);
+            continue;
+          case 82:
+            append_callable("init_filter_file", Type::None);
+            continue;
+          case 81:
+            append_callable("set_filter_file");
+            continue;
+          case 83:
+            append_callable("get_filter_file", Type::String);
+            continue;
+          case 1:
+            append_callable("open", Type::None);
+            continue;
+          case 15:
+            append_callable("open_wait", Type::None);
+            continue;
+          case 16:
+            append_callable("open_nowait", Type::None);
+            continue;
+          case 65:
+            append_callable("check_open", Type::Int);
+            continue;
+          case 2:
+            append_callable("close", Type::None);
+            continue;
+          case 13:
+            append_callable("close_wait", Type::None);
+            continue;
+          case 14:
+            append_callable("close_nowait", Type::None);
+            continue;
+          case 64:
+            append_callable("end_close", Type::None);
+            continue;
+          case 49:
+            append_callable("msg_block", Type::None);
+            continue;
+          case 59:
+            append_callable("msg_pp_block", Type::None);
+            continue;
+          case 3:
+            append_callable("clear", Type::None);
+            continue;
+          case 55:
+            append_callable("novel_clear", Type::None);
+            continue;
+          case 4:
+            append_callable("print");
+            continue;
+          case 57: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("overflow_print");
+                break;
+              case 1:
+                append_callable("print");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("overflow_print");
+                break;
+            }
+            continue;
+          }
+          case 63:
+            append_callable("overflow_name");
+            continue;
+          case 12: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("ruby_end");
+                break;
+              default:
+                append_callable("ruby_start");
+                break;
+            }
+            continue;
+          }
+          case 18:
+            append_callable("msg_wait", Type::None, AWAIT);
+            continue;
+          case 19:
+            append_callable("pp", Type::None, AWAIT);
+            continue;
+          case 20:
+            append_callable("r", Type::None, AWAIT);
+            continue;
+          case 54:
+            append_callable("page", Type::None, AWAIT);
+            continue;
+          case 6:
+            append_callable("nl", Type::None);
+            continue;
+          case 17:
+            append_callable("nil", Type::None);
+            continue;
+          case 56:
+            append_callable("indent", Type::None);
+            continue;
+          case 28:
+            append_callable("clear_indent", Type::None);
+            continue;
+          case 31:
+            append_callable("enable_multi_msg", Type::None);
+            continue;
+          case 29:
+            append_callable("next_msg", Type::None);
+            continue;
+          case 58:
+            append_callable("set_slide_msg");
+            continue;
+          case 60:
+            append_callable("set_slide_msg", Type::None);
+            continue;
+          case 61:
+            append_callable("slide_msg", Type::None);
+            continue;
+          case 5:
+            append_callable("sel", Type::Int, AWAIT | NONSIMPLE | CONTEXT);
+            continue;
+          case 51:
+            append_callable("sel_cancel", Type::Int,
+                            AWAIT | NONSIMPLE | CONTEXT);
+            continue;
+          case 50:
+            append_callable("selmsg", Type::Int, AWAIT | NONSIMPLE | CONTEXT);
+            continue;
+          case 52:
+            append_callable("selmsg_cancel", Type::Int,
+                            AWAIT | NONSIMPLE | CONTEXT);
+            continue;
+          case 84: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("rep_pos_default");
+                break;
+              case 1:
+                append_callable("rep_pos");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("rep_pos_default");
+                break;
+            }
+            continue;
+          }
+          case 7: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("size_default");
+                break;
+              case 1:
+                append_callable("size");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("size_default");
+                break;
+            }
+            continue;
+          }
+          case 8: {
+            switch (elm.bind_ctx.overload_id) {
+              case 0:
+                append_callable("color_default");
+                break;
+              case 1:
+                append_callable("color");
+                break;
+              default:
+                warn_(std::format(
+                    "[Callable] overload {} not found while parsing {}",
+                    elm.bind_ctx.overload_id, result.ToDebugString()));
+                append_callable("color_default");
+                break;
+            }
+            continue;
+          }
+          case 86:
+            append_node(Type::Callable, Member("msgbtn"));
+            continue;
+          case 85:
+            append_node(Type::Callable, Member("set_namae"));
+            continue;
+          case 9:
+            append_callable("koe", Type::None, NONSIMPLE);
+            continue;
+          case 26:
+            append_callable("koe_play_wait", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 27:
+            append_callable("koe_play_wait_key", Type::Int, NONSIMPLE | AWAIT);
+            continue;
+          case 22:
+            append_callable("clear_face", Type::None);
+            continue;
+          case 21:
+            append_node(Type::Callable, Member("set_face"));
+            continue;
+          case 10:
+            parse_property("layer", Type::Int, true);
+            continue;
+          case 11:
+            parse_property("world", Type::Int, true);
+            continue;
+          case 32:
+            parse_property("button", Type::ObjList);
+            continue;
+          case 53:
+            parse_property("face", Type::ObjList);
+            continue;
+          case 30:
+            parse_property("object", Type::ObjList);
+            continue;
+          case 66:
+            append_node(Type::None, Member("init_window_pos"));
+            continue;
+          case 67:
+            append_node(Type::None, Member("init_window_size"));
+            continue;
+          case 74:
+            append_node(Type::None, Member("init_window_moji_cnt"));
+            continue;
+          case 68:
+            append_node(Type::Callable, Member("set_window_pos"));
+            continue;
+          case 69:
+            append_node(Type::Callable, Member("set_window_size"));
+            continue;
+          case 75:
+            append_node(Type::Callable, Member("set_window_moji_cnt"));
+            continue;
+          case 70:
+            append_node(Type::Int, Member("get_window_pos_x"));
+            continue;
+          case 71:
+            append_node(Type::Int, Member("get_window_pos_y"));
+            continue;
+          case 72:
+            append_node(Type::Int, Member("get_window_size_x"));
+            continue;
+          case 73:
+            append_node(Type::Int, Member("get_window_size_y"));
+            continue;
+          case 77:
+            append_node(Type::Int, Member("get_window_moji_cnt_x"));
+            continue;
+          case 76:
+            append_node(Type::Int, Member("get_window_moji_cnt_y"));
+            continue;
+          case 41:
+            append_node(Type::None, Member("init_open_anime_type"));
+            continue;
+          case 42:
+            append_node(Type::None, Member("init_open_anime_time"));
+            continue;
+          case 43:
+            append_node(Type::None, Member("init_close_anime_type"));
+            continue;
+          case 44:
+            append_node(Type::None, Member("init_close_anime_time"));
+            continue;
+          case 37:
+            append_node(Type::Callable, Member("set_open_anime_type"));
+            continue;
+          case 34:
+            append_node(Type::Callable, Member("set_open_anime_time"));
+            continue;
+          case 45:
+            append_node(Type::Callable, Member("set_close_anime_type"));
+            continue;
+          case 35:
+            append_node(Type::Callable, Member("set_close_anime_time"));
+            continue;
+          case 48:
+            append_node(Type::Int, Member("get_open_anime_type"));
+            continue;
+          case 47:
+            append_node(Type::Int, Member("get_open_anime_time"));
+            continue;
+          case 38:
+            append_node(Type::Int, Member("get_close_anime_type"));
+            continue;
+          case 46:
+            append_node(Type::Int, Member("get_close_anime_time"));
+            continue;
+          case 36:
+            append_node(Type::Int, Member("get_default_open_anime_type"));
+            continue;
+          case 33:
+            append_node(Type::Int, Member("get_default_open_anime_time"));
+            continue;
+          case 40:
+            append_node(Type::Int, Member("get_default_close_anime_type"));
+            continue;
+          case 39:
+            append_node(Type::Int, Member("get_default_close_anime_time"));
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Msgbk:
+        switch (key) {
+          case 1:
+            append_callable("insert_msg", Type::None);
+            continue;
+          case 4:
+            append_callable("add_koe", Type::None);
+            continue;
+          case 5:
+            append_callable("add_namae", Type::None);
+            continue;
+          case 3:
+            append_callable("add_msg", Type::None);
+            continue;
+          case 2:
+            append_callable("go_next_msg", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Pcm:
+        switch (key) {
+          case 0:
+            append_callable("play", Type::None);
+            continue;
+          case 1:
+            append_callable("stop", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::PcmchList:
+        switch (key) {
+          case -1:
+            parse_index(Type::Pcmch);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Pcmch:
+        switch (key) {
+          case 0:
+            append_callable("play");
+            continue;
+          case 2:
+            append_callable("play_loop");
+            continue;
+          case 1:
+            append_callable("play_wait", Type::None, AWAIT);
+            continue;
+          case 11:
+            append_callable("ready");
+            continue;
+          case 16:
+            append_callable("ready_loop");
+            continue;
+          case 5:
+            append_callable("stop");
+            continue;
+          case 10:
+            append_callable("pause");
+            continue;
+          case 9:
+            append_callable("resume");
+            continue;
+          case 17:
+            append_callable("resume_wait", Type::None, AWAIT);
+            continue;
+          case 3:
+            append_callable("wait", Type::None, AWAIT);
+            continue;
+          case 6:
+            append_callable("wait_key", Type::Int, AWAIT);
+            continue;
+          case 8:
+            append_callable("wait_fade", Type::None, AWAIT);
+            continue;
+          case 7:
+            append_callable("wait_fade_key", Type::Int, AWAIT);
+            continue;
+          case 4:
+            append_callable("check", Type::Int);
+            continue;
+          case 13:
+            append_callable("set_volume");
+            continue;
+          case 14:
+            append_callable("set_vol_max");
+            continue;
+          case 15:
+            append_callable("set_vol_min");
+            continue;
+          case 12:
+            append_callable("get_volume", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::Wipe:
+        switch (key) {
+          case 7:
+            append_callable("wipe", Type::None, AWAIT | NONSIMPLE);
+            continue;
+          case 23:
+            append_callable("wipe_all", Type::None, NONSIMPLE | AWAIT);
+            continue;
+          case 51:
+            append_callable("wipe_mask", Type::None, AWAIT | NONSIMPLE);
+            continue;
+          case 50:
+            append_callable("wipe_mask_all", Type::None, AWAIT | NONSIMPLE);
+            continue;
+          case 33:
+            append_callable("end", Type::None, NONSIMPLE);
+            continue;
+          case 103:
+            append_callable("wait", Type::Int, AWAIT);
+            continue;
+          case 109:
+            append_callable("check", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      default:
+        break;
+    }
+    // An unrecognized member or terminal type leaves the remaining code intact.
+    break;
   }
 
   if (!elmcode.empty()) {

@@ -137,6 +137,86 @@ class ElementParserTest : public ::testing::Test {
   }
 };
 
+TEST_F(ElementParserTest, UnknownMemberLeavesTheRemainingTokensUnparsed) {
+  // An unknown list member stops parsing and reports the entire remaining tail.
+  fail_on_warn = false;
+  EXPECT_EQ(chain(25, 123, -1, 4), "A");
+  EXPECT_THAT(warnings,
+              ElementsAre("[ElementParser] leftovers: int:123,int:-1,int:4"));
+}
+
+TEST_F(ElementParserTest, NonIntegerMemberLeavesTheRemainingTokensUnparsed) {
+  // A string in member position preserves the list prefix and is reported.
+  ElementCode elm{25, 0};
+  elm.code.back() = v("member");
+  fail_on_warn = false;
+  EXPECT_EQ(chain(elm), "A");
+  EXPECT_THAT(warnings, ElementsAre("[ElementParser] leftovers: str:member"));
+}
+
+TEST_F(ElementParserTest, TerminalTypeLeavesTheRemainingTokensUnparsed) {
+  // An integer subscript has no members, so its trailing token is reported.
+  fail_on_warn = false;
+  EXPECT_EQ(chain(25, -1, 4, 9), "A[int:4]");
+  EXPECT_THAT(warnings, ElementsAre("[ElementParser] leftovers: int:9"));
+}
+
+TEST_F(ElementParserTest, MissingArrayIndexUsesTheFallbackIndex) {
+  // A dangling index marker produces the existing sentinel index and warning.
+  fail_on_warn = false;
+  EXPECT_EQ(chain(25, -1), "A[int:-1]");
+  EXPECT_THAT(warnings, ElementsAre("[IndexArray] expected index"));
+}
+
+TEST_F(ElementParserTest, AllEventEndIsAnImplicitCall) {
+  // Operation zero consumes both all-event tokens and calls the void method.
+  auto parsed = chain(38, 2, -1, 0, 91, 0);
+  EXPECT_EQ(parsed, "stage.front.object[int:0].alleve_end()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, AllEventWaitIsAwaitable) {
+  // Operation one consumes both all-event tokens and awaits the void method.
+  auto parsed = chain(38, 2, -1, 0, 91, 1);
+  EXPECT_EQ(parsed, "stage.front.object[int:0].alleve_wait()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
+}
+
+TEST_F(ElementParserTest, AllEventCheckReturnsAnInteger) {
+  // Operation two consumes both all-event tokens and calls the integer getter.
+  auto parsed = chain(38, 2, -1, 0, 91, 2);
+  EXPECT_EQ(parsed, "stage.front.object[int:0].alleve_check()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, UnknownAllEventOperationProducesAnInvalidMember) {
+  // An unknown operation consumes both tokens and retains the invalid member.
+  auto parsed = chain(38, 2, -1, 0, 91, 99);
+  EXPECT_EQ(parsed, "stage.front.object[int:0].alleve_???");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Invalid);
+}
+
+TEST_F(ElementParserTest, MissingAllEventOperationPreservesTheObjectPrefix) {
+  // A dangling all-event marker stops safely with the object prefix and
+  // warning.
+  fail_on_warn = false;
+  auto parsed = chain(38, 2, -1, 0, 91);
+  EXPECT_EQ(parsed, "stage.front.object[int:0]");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Object);
+  EXPECT_THAT(warnings, ElementsAre("[AllEvent] expected operation"));
+}
+
+TEST_F(ElementParserTest, SyscomSilentSoundDefaultKeepsTheEffectiveMapping) {
+  // Syscom ID 247 selects the default silent-sound setter without making a
+  // call.
+  auto parsed = chain(63, 247);
+  EXPECT_EQ(parsed, "syscom.set_play_silent_sound_onoff_default");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+}
+
 TEST_F(ElementParserTest, MemoryBank) {
   EXPECT_EQ(chain(25, -1, 0), "A[int:0]");
   EXPECT_EQ(chain(26, 3, -1, 1), "B.b1[int:1]");
