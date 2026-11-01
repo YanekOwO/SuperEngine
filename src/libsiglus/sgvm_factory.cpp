@@ -27,6 +27,7 @@
 #include "core/button_action_table.hpp"
 #include "core/capture.hpp"
 #include "core/counter.hpp"
+#include "core/database.hpp"
 #include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
@@ -190,6 +191,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   rt.gameexe = std::make_shared<Gameexe>(LoadGameexe(rt.asset_scanner));
   Gameexe& gexe = *rt.gameexe;
+  rt.databases = DatabaseList::Load(gexe, rt.base_pth);
   gexe.SetStringAt("CAPTION", "SiglusTest");
   gexe.SetStringAt("REGNAME", "sjis: SIGLUS\\TEST");
   gexe.SetIntAt("NAME_ENC", 0);

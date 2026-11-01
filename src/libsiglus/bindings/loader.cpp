@@ -83,7 +83,11 @@ sr::Module* Loader::Load(int scene) {
   tokens.clear();
 
   if (!compiler.Ok()) {
-    std::ignore = compiler.GetErrors();
+    std::string errors;
+    for (const auto& error : compiler.GetErrors())
+      errors += "\n" + error.ToString();
+    throw sr::RuntimeError(std::format("failed to compile scene {} ({}): {}",
+                                       scene, scn.scnname_, errors));
   }
 
   compiler.module_->name = scn.scnname_;

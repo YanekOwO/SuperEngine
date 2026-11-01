@@ -70,6 +70,7 @@ template <class... Ts>
 class StrListFacade;
 struct ActionReference;
 class BgmTable;
+class DatabaseList;
 class FrameActionManager;
 class KidokuTable;
 class IPlatformImplementor;
@@ -89,6 +90,7 @@ struct SiglusMachine {
   std::filesystem::path base_pth, save_pth;
   std::shared_ptr<Gameexe> gameexe;
   std::shared_ptr<Archive> archive;
+  std::shared_ptr<const DatabaseList> databases;
   std::unique_ptr<Memory> memory;
   LocalConfig local_config;
   GlobalConfig global_config;

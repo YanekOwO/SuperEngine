@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <format>
 #include <functional>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -62,6 +63,9 @@ ElementParser::ElementParser(std::span<const Property> scene_properties,
 ElementParser::~ElementParser() = default;
 
 AccessChain ElementParser::Parse(ElementCode& elm) {
+  if (elm.code.empty())
+    throw std::runtime_error("empty element access chain");
+
   const int first = elm.At<int>(0);
   const int flag = first >> 24;
   const size_t idx = first ^ (flag << 24);
@@ -634,6 +638,9 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
     case 40:  // COUNTER
       return make_sym_chain(Type::CounterList, "counter", elm, 1);
 
+    case 105:  // DATABASE
+      return make_sym_chain(Type::DatabaseList, "database", elm, 1);
+
     case 79:  // FRAME_ACTION
       return make_sym_chain(Type::FrameAction, "frame_action", elm, 1);
     case 53:  // FRAME_ACTION_CH
@@ -672,6 +679,31 @@ AccessChain ElementParser::make_chain(AccessChain result,
     append_node(Type::Callable,
                 Member{member, return_type, !flags.is_explicit,
                        !flags.is_nonsimple, flags.await_result, flags.context});
+  };
+  auto parse_database_call = [&](std::string_view member, Type return_type,
+                                 std::initializer_list<Type> args) {
+    auto database_error = [&](std::string_view reason) {
+      std::string code;
+      for (const auto& value : elm.code)
+        code += '<' + ToString(value) + '>';
+      throw std::runtime_error(
+          std::format("database element {}: {}", code, reason));
+    };
+
+    if (elmcode.size() != 1)
+      database_error("unexpected trailing members");
+    auto& bind = elm.bind_ctx;
+    if (bind.overload_id != 0 || !bind.named_arg.empty() ||
+        bind.arg.size() != args.size())
+      database_error("invalid database call signature");
+    size_t index = 0;
+    for (Type type : args)
+      if (Typeof(bind.arg[index++]) != type)
+        database_error("incorrect database argument type");
+    if (bind.return_type != Type::None && bind.return_type != return_type)
+      database_error("incorrect database result type");
+    bind.return_type = return_type;
+    append_callable(member, return_type);
   };
   auto parse_property = [&](std::string_view member, Type type,
                             bool writable = false) {
@@ -745,8 +777,55 @@ AccessChain ElementParser::make_chain(AccessChain result,
     const auto* token = std::get_if<Integer>(&elmcode.front());
     if (!token)
       break;
+
     const int key = token->val_;
     switch (result.GetType()) {
+      case Type::DatabaseList:
+        switch (key) {
+          case -1:
+            if (elmcode.size() < 2)
+              throw std::runtime_error("missing database index");
+            if (Typeof(elmcode[1]) != Type::Int)
+              throw std::runtime_error("database index must be an integer");
+            parse_index(Type::Database);
+            continue;
+          case 1:
+            parse_database_call("size", Type::Int, {});
+            continue;
+          default:
+            throw std::runtime_error("unsupported database list operation");
+        }
+        break;
+      case Type::Database:
+        switch (key) {
+          case 0:
+            parse_database_call("get_num", Type::Int, {Type::Int, Type::Int});
+            continue;
+          case 1:
+            parse_database_call("get_str", Type::String,
+                                {Type::Int, Type::Int});
+            continue;
+          case 3:
+            parse_database_call("check_item", Type::Int, {Type::Int});
+            continue;
+          case 4:
+            parse_database_call("check_column", Type::Int, {Type::Int});
+            continue;
+          case 5:
+            parse_database_call("find_num", Type::Int, {Type::Int, Type::Int});
+            continue;
+          case 6:
+            parse_database_call("find_str", Type::Int,
+                                {Type::Int, Type::String});
+            continue;
+          case 7:
+            parse_database_call("find_str_real", Type::Int,
+                                {Type::Int, Type::String});
+            continue;
+          default:
+            throw std::runtime_error("unsupported database operation");
+        }
+        break;
       case Type::IntList:
         switch (key) {
           case -1:

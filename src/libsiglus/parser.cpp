@@ -196,7 +196,8 @@ Parser::ParseAll() noexcept {
 
     return std::make_pair(std::move(parsed_), std::move(warnings_));
   } catch (const std::exception& e) {
-    std::string errmsg = e.what();
+    std::string errmsg = std::format("scene {} ({}) instruction {}: {}", scnno_,
+                                     debug_title_, lineno_, e.what());
     errmsg += "\nstack:\n";
     errmsg += stack_.ToDebugString();
     return unexpected(std::move(errmsg));

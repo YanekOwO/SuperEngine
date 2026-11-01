@@ -29,6 +29,10 @@ namespace libsiglus {
 
 std::string ToString(Type type) {
   switch (type) {
+    case Type::Database:
+      return "database";
+    case Type::DatabaseList:
+      return "database[]";
     case Type::None:
       return "null_t";
     case Type::Int:

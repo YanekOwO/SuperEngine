@@ -863,6 +863,13 @@ void Recompiler::emit_tok(const token::ElmAlias& tk) {
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
 void Recompiler::emit_tok(const token::Command& tk) {
+  if (tk.chain.nodes.empty() &&
+      std::holds_alternative<std::monostate>(tk.chain.root.var)) {
+    emit_const("unsupported Siglus command: " + ToString(token::Token_t(tk)));
+    emit(sr::Throw{});
+    return;
+  }
+
   emit_elm(tk.chain);
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
@@ -968,6 +975,11 @@ void Recompiler::emit_tok(const token::Eof& tk) { Finish(); }
 
 // element codegen
 void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
+  if (e.nodes.empty() && std::holds_alternative<std::monostate>(e.root.var)) {
+    emit_const("unsupported Siglus element access chain");
+    emit(sr::Throw{});
+    return;
+  }
   if (assign && !e.nodes.empty() &&
       !std::holds_alternative<elm::Member>(e.nodes.back().var) &&
       !std::holds_alternative<elm::Subscript>(e.nodes.back().var)) {
@@ -1112,7 +1124,6 @@ void Recompiler::emit_elm_node(const elm::Call& nd) {
           "Simple Siglus callable has {} tagged/keyword argument(s); ignoring "
           "kwargs",
           nd.kwargs.size());
-      AddError(msg);
       logger(Severity::Warn) << msg;
     }
 
