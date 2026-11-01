@@ -25,6 +25,8 @@
 
 #include <SDL3/SDL.h>
 
+#include "core/button_action_table.hpp"
+#include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "core/mwnd_config.hpp"
 #include "libsiglus/bindings/flow.hpp"
@@ -33,18 +35,21 @@
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
 #include "mock_clock.hpp"
+#include "mock_graphics_backend.hpp"
 #include "poller_helpers.hpp"
 #include "siglus/fake_scene.hpp"
 #include "systems/event_system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "vm/function.hpp"
+#include "vm/promise.hpp"
 
 #include <chrono>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace libsiglus::binding {
 namespace sr = serilang;
@@ -79,6 +84,12 @@ class SiglusMwndMessageTest : public ::testing::Test {
 
   void SetUp() override {
     runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.frame_requests =
+        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
+          auto promise = std::make_shared<sr::Promise>();
+          vm->TrackPendingPromise(promise);
+          return promise;
+        });
     auto time = std::make_unique<MockClock>(Clock::timepoint_t{});
     clock = time.get();
     runtime.vm->scheduler_ =
@@ -159,6 +170,15 @@ class SiglusMwndMessageTest : public ::testing::Test {
     SDL_PushEvent(&event);
     runtime.system->event().ExecuteEventSystem();
     runtime.vm->RunReadyUntilBlocked();
+  }
+
+  void SetCtrl(bool pressed) {
+    SDL_Event event{};
+    event.type = pressed ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    event.key.scancode = SDL_SCANCODE_LCTRL;
+    event.key.key = SDLK_LCTRL;
+    SDL_PushEvent(&event);
+    runtime.system->event().ExecuteEventSystem();
   }
 
   TextSystem& Text() { return runtime.system->text(); }
@@ -272,6 +292,302 @@ TEST_F(SiglusMwndMessageTest, FastForwardPrintCompletesImmediately) {
   Run("await mwnd.print(\"AB\"); completed = 1;");
   EXPECT_TRUE(Completed());
   EXPECT_FALSE(Window()->HasPendingMessageText());
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlPausePreservesTextUntilTheNextFrame) {
+  // Hold Ctrl through two prologue blocks; the first pause must suspend before
+  // its text can be cleared and replaced without a display frame.
+  SetCtrl(true);
+  Run("set_mwnd(4); mwnd.msg_block(); await mwnd.print(\"AB\"); "
+      "await mwnd.r(); mwnd.msg_block(); await mwnd.print(\"C\"); "
+      "completed = 1;");
+  EXPECT_FALSE(Completed());
+  EXPECT_EQ(Window(4)->GetCharacterCount(), 2);
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlPauseResumesAfterFrameCompletion) {
+  // A skipped r queues a frame; elapsed real time alone cannot complete it,
+  // but completing that frame permits its continuation to run.
+  SetCtrl(true);
+  Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
+  Advance(100ms);
+  EXPECT_FALSE(Completed());
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed());
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlYieldsEveryMessage) {
+  // Skip ten pauses under Ctrl; each requires its own completed frame.
+  SetCtrl(true);
+  Run("advanced = 0; while (advanced < 10) { "
+      "await mwnd.pp(); advanced = advanced + 1; } completed = 1;");
+  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(0));
+  for (int advanced = 1; advanced <= 10; ++advanced) {
+    ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+    runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+    Advance(5ms);
+    EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(advanced));
+  }
+  EXPECT_TRUE(Completed());
+  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+}
+
+TEST_F(SiglusMwndMessageTest, VsyncOffStillYieldsEveryMessage) {
+  // Disable vsync waiting; skipped pauses must still yield every message.
+  runtime.local_config.wait_display_vsync_off = true;
+  SetCtrl(true);
+  Run("advanced = 0; while (advanced < 6) { "
+      "await mwnd.pp(); advanced = advanced + 1; }");
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlPpWaitsForAFrame) {
+  // A skipped pp uses the same frame boundary as r without marking a clear.
+  SetCtrl(true);
+  Run("await mwnd.pp(); completed = 1;");
+  EXPECT_FALSE(Completed());
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed());
+  EXPECT_FALSE(Window()->message_state()->clear_ready);
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlPageDefersClearUntilAFrameCompletes) {
+  // An explicit page under Ctrl must preserve its current block until the
+  // frame boundary, then perform the usual clear-ready transition.
+  SetCtrl(true);
+  Run("await mwnd.page(); completed = 1;");
+  EXPECT_FALSE(Window()->message_state()->clear_ready);
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed());
+  EXPECT_TRUE(Window()->message_state()->clear_ready);
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlPressedDuringPauseStillWaitsForAFrame) {
+  // Starting Ctrl while a normal pause listens for input commits its advance,
+  // but must not let that key event bypass the display boundary.
+  Run("await mwnd.r(); completed = 1;");
+  SetCtrl(true);
+  runtime.vm->RunReadyUntilBlocked();
+  EXPECT_FALSE(Completed());
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed());
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlRepeatCannotCompleteThePacingFrame) {
+  // Repeated Ctrl-down notifications reach an already skipped pause; its
+  // noninterruptible pacing wait must still require an engine frame.
+  SetCtrl(true);
+  Run("await mwnd.r(); completed = 1;");
+  SetCtrl(true);
+  Advance(10ms);
+  EXPECT_FALSE(Completed());
+}
+
+TEST_F(SiglusMwndMessageTest, ReleasingCtrlFinishesTheCommittedAdvance) {
+  // Release Ctrl during the pacing frame; the committed first pause finishes,
+  // and the following message returns to normal timed character reveal.
+  SetCtrl(true);
+  Run("await mwnd.r(); advanced = 1; await mwnd.print(\"AB\"); "
+      "completed = 1;");
+  SetCtrl(false);
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed("advanced"));
+  EXPECT_FALSE(Completed());
+  EXPECT_TRUE(Window()->HasPendingMessageText());
+}
+
+TEST_F(SiglusMwndMessageTest, ReadSkipUsesMessagePacing) {
+  // Read-skip without Ctrl shares interactive message pacing when the current
+  // read marker permits skipping.
+  Text().SetKidokuRead(true);
+  Text().SetSkipMode(true);
+  Run("await mwnd.r(); completed = 1;");
+  EXPECT_FALSE(Completed());
+  EXPECT_TRUE(runtime.frame_requests->BeginFrameRequests());
+}
+
+TEST_F(SiglusMwndMessageTest, MessageOnlyWaitDoesNotRequestAPacingFrame) {
+  // msg_wait only drains pending glyphs, so Ctrl must complete it without
+  // adding the display boundary reserved for message key pauses.
+  SetCtrl(true);
+  Run("await mwnd.print(\"AB\"); await mwnd.msg_wait(); completed = 1;");
+  EXPECT_TRUE(Completed());
+  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+}
+
+TEST_F(SiglusMwndMessageTest, ForcedFastForwardWaitsForTheFirstMessageFrame) {
+  // Forced skipping flushes reveal immediately, but its first message pause
+  // must still wait for an engine frame before resuming the script.
+  runtime.system->set_force_fast_forward();
+  Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
+  EXPECT_FALSE(Completed());
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_TRUE(Completed());
+}
+
+TEST_F(SiglusMwndMessageTest, ForcedFastForwardStillYieldsEveryMessage) {
+  // Force skipping with Ctrl disabled; every skipped pause still needs a frame.
+  runtime.local_config.disable_ctrl = true;
+  runtime.system->set_force_fast_forward();
+  Run("advanced = 0; while (advanced < 8) { "
+      "await mwnd.pp(); advanced = advanced + 1; }");
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  Advance(5ms);
+  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+}
+
+TEST_F(SiglusMwndMessageTest, ResetRejectsThePacingWaitWithoutClearingText) {
+  // Reset a suspended pacing frame; the script receives cancellation and the
+  // abandoned pause must not apply its clear-ready cleanup.
+  SetCtrl(true);
+  Run("caught = 0; try { await mwnd.r(); } catch (e) { caught = 1; }");
+  runtime.frame_requests->Reset();
+  Advance(5ms);
+  EXPECT_EQ(runtime.vm->globals_->at("caught"), sr::Value(1));
+  EXPECT_FALSE(Window()->message_state()->clear_ready);
+}
+
+TEST_F(SiglusMwndMessageTest, CtrlMessageIsPresentedBeforeReplacement) {
+  // Run the real engine loop with a recording presenter; the first message
+  // must reach display before the script can replace it with the next block.
+  auto backend = std::make_shared<::testing::NiceMock<MockGraphicsBackend>>();
+  ON_CALL(*backend, Resize(::testing::_, ::testing::_))
+      .WillByDefault(::testing::Return(Size(1920, 1080)));
+  std::vector<int> displayed;
+  ON_CALL(*backend, RenderFrame(::testing::_, ::testing::_, ::testing::_))
+      .WillByDefault([&](const auto&, const auto&, const auto&) {
+        displayed.push_back(Window(4)->GetCharacterCount());
+      });
+  runtime.presenter =
+      std::make_unique<FramePresenter>(backend, Size(1920, 1080), false);
+  runtime.input_event_listener = std::make_shared<InputListener>();
+  runtime.interaction_manager = std::make_unique<InteractionManager>(
+      *runtime.stage, *runtime.input_event_listener, ButtonActionTable{});
+  int frames = 0;
+  runtime.update_wipe_after_frame_actions = [&] {
+    clock->AdvanceTime(10ms);
+    if (++frames > 5)
+      runtime.vm->RequestStop();
+  };
+  SetCtrl(true);
+  Run("set_mwnd(4); mwnd.msg_block(); await mwnd.print(\"AB\"); "
+      "await mwnd.r(); mwnd.msg_block(); await mwnd.print(\"C\"); "
+      "completed = 1;");
+  runtime.Run();
+  EXPECT_TRUE(Completed());
+  EXPECT_EQ(displayed, (std::vector<int>{2}));
+  EXPECT_EQ(Window(4)->GetCharacterCount(), 1);
+}
+
+class SiglusFastForwardOptionsTest : public ::testing::Test {
+ protected:
+  DummyDriverHint video_{SDL_HINT_VIDEO_DRIVER};
+  DummyDriverHint audio_{SDL_HINT_AUDIO_DRIVER};
+  SiglusMachine runtime;
+  MockClock* clock = nullptr;
+
+  void SetUp() override {
+    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.frame_requests =
+        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
+          auto promise = std::make_shared<sr::Promise>();
+          vm->TrackPendingPromise(promise);
+          return promise;
+        });
+    auto time = std::make_unique<MockClock>(Clock::timepoint_t{});
+    clock = time.get();
+    runtime.vm->scheduler_ =
+        sr::Scheduler(std::make_unique<sr::RecordingPoller>(), std::move(time));
+    runtime.gameexe = std::make_shared<Gameexe>();
+    runtime.gameexe->parseLine("MWND.CNT = 1");
+    runtime.gameexe->parseLine("WAKU.BTN.CNT = 0");
+    runtime.stage = std::make_unique<Stage>();
+    runtime.asset_scanner = std::make_shared<AssetScanner>();
+    runtime.system = std::make_unique<System>(
+        *runtime.gameexe, *runtime.stage, runtime.local_config,
+        runtime.global_config, runtime.asset_scanner,
+        MwndConfig::ParseSiglus(*runtime.gameexe),
+        SystemOptions{.fast_forward = true});
+    (*SiglusBindingRegistry::Find("1_mwnd"))(runtime);
+    SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+    runtime.system->event().ExecuteEventSystem();
+  }
+
+  void Run(const std::string& source) {
+    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    compiler.compile(m6::SourceBuffer::Create(source, "<automated message>"));
+    if (!compiler.Ok())
+      throw std::runtime_error(compiler.FormatErrors());
+    auto* function = runtime.vm->gc_->Allocate<sr::Function>(compiler.Get());
+    runtime.vm->InvokeUntilBlocked(*function, {});
+  }
+};
+
+TEST_F(SiglusFastForwardOptionsTest,
+       CliFastForwardWaitsForTheFirstMessageFrame) {
+  // CLI skipping retains its first message until an actual engine frame
+  // completes, rather than allowing unrestricted message replacement.
+  Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
+  EXPECT_FALSE(runtime.vm->globals_->contains("completed"));
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  clock->AdvanceTime(5ms);
+  runtime.vm->RunReadyUntilBlocked();
+  EXPECT_TRUE(runtime.vm->globals_->contains("completed"));
+}
+
+TEST_F(SiglusFastForwardOptionsTest, CliFastForwardYieldsEveryMessage) {
+  // CLI skipping must suspend at every message until an engine frame completes.
+  Run("advanced = 0; while (advanced < 18) { "
+      "await mwnd.pp(); advanced = advanced + 1; } completed = 1;");
+  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(0));
+  for (int advanced = 1; advanced <= 18; ++advanced) {
+    ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+    runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+    clock->AdvanceTime(5ms);
+    runtime.vm->RunReadyUntilBlocked();
+    EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(advanced));
+  }
+  EXPECT_TRUE(runtime.vm->globals_->contains("completed"));
+  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+}
+
+TEST_F(SiglusFastForwardOptionsTest,
+       CombiningAutomationModesStillYieldsEveryMessage) {
+  // Enable forced and CLI skipping together; every pause still needs a frame.
+  runtime.system->set_force_fast_forward();
+  Run("advanced = 0; while (advanced < 8) { "
+      "await mwnd.pp(); advanced = advanced + 1; }");
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  clock->AdvanceTime(5ms);
+  runtime.vm->RunReadyUntilBlocked();
+  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+}
+
+TEST_F(SiglusFastForwardOptionsTest, CliFastForwardRespectsCtrlDisable) {
+  // CLI fast-forward must preserve scripts' existing ability to
+  // disable Ctrl skipping rather than turning it into forced fast-forward.
+  runtime.local_config.disable_ctrl = true;
+  Run("await mwnd.r(); completed = 1;");
+  EXPECT_FALSE(runtime.vm->globals_->contains("completed"));
+  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusMwndMessageTest, MultiMessageStreamsRemainNonblocking) {

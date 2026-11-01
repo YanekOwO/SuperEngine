@@ -154,6 +154,10 @@ class VM {
   std::size_t execution_depth_ = 0;
   Clock::timepoint_t execution_started_, last_host_service_;
   bool execution_warned_ = false;
+
+  // Expire before any VM state is destroyed: native producers may cancel
+  // their promises while the collector later finalizes binding closures.
+  std::shared_ptr<char> callback_lifetime_ = std::make_shared<char>();
 };
 
 }  // namespace serilang

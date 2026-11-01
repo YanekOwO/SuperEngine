@@ -32,7 +32,7 @@ void BindFrame(SiglusMachine& runtime) {
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   m.def("frame", [&runtime] { return runtime.RequestFrame(); });
   runtime.reset_local_memory.emplace_back(
-      [&runtime] { runtime.ResetFrameRequests(); });
+      [frames = runtime.frame_requests.get()] { frames->Reset(); });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "frame", BindFrame)

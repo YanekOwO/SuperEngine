@@ -110,11 +110,12 @@ class System {
          SystemOptions options = {});
   ~System();
 
-  // Whether we're currently forcing fast forward (only used during game tests
-  // to zoom through).
-  inline bool force_fast_forward() { return force_fast_forward_; }
-  // Set in lua_rlvm, to speed through the game with maximum speed!
+  // Force fast-forward for game tests regardless of Ctrl-skip restrictions.
+  inline bool force_fast_forward() const { return force_fast_forward_; }
   inline void set_force_fast_forward() { force_fast_forward_ = true; }
+
+  // Whether the CLI requested fast-forward through injected Ctrl events.
+  bool automated_fast_forward() const { return automated_fast_forward_; }
 
   inline bool force_wait() { return force_wait_; }
   inline void set_force_wait(bool in) { force_wait_ = in; }
@@ -255,6 +256,7 @@ class System {
   // Whether we are being forced to fast forward through the game for testing
   // reasons.
   bool force_fast_forward_;
+  bool automated_fast_forward_;
 
   // Yield RealLive instruction execution until the next scheduled system frame.
   bool force_wait_;

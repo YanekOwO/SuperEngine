@@ -146,16 +146,15 @@ void BindMwnd(SiglusMachine& runtime) {
   auto page = [get](const MwndHandle* h) -> TextWindow& { return *get(h); };
   auto context = std::make_shared<lop::PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
-  auto wait = [&runtime, get, context](
+  auto wait = [sys, frames = runtime.frame_requests.get(), get, context](
                   MwndHandle* h, sr::VM& vm,
                   lop::SiglusMwndWaitOperation::AfterWait after_wait) {
     auto window = get(h);
     auto message_state = window->message_state();
     auto task = std::make_unique<lop::SiglusMwndWaitOperation>(
-        runtime, std::move(window), std::move(message_state), after_wait);
-    return sr::Value(context->MakeFuture(
-        vm, std::move(task),
-        runtime.system ? runtime.system->event_ptr().get() : nullptr));
+        sys, *frames, std::move(window), std::move(message_state), after_wait);
+    return sr::Value(
+        context->MakeFuture(vm, std::move(task), sys->event_ptr().get()));
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());

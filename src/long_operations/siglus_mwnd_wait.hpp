@@ -29,10 +29,9 @@
 
 class System;
 class TextWindow;
-struct LocalConfig;
 struct MwndMessageState;
 namespace libsiglus {
-struct SiglusMachine;
+class FrameRequestManager;
 }
 
 namespace lop {
@@ -41,7 +40,9 @@ class SiglusMwndWaitOperation final : public LongOperation {
  public:
   enum class AfterWait { MessageOnly, None, Paragraph, Clear };
 
-  SiglusMwndWaitOperation(libsiglus::SiglusMachine& runtime,
+  // The system and frame manager must outlive the operation.
+  SiglusMwndWaitOperation(System* system,
+                          libsiglus::FrameRequestManager& frame_requests,
                           std::shared_ptr<TextWindow> window,
                           std::shared_ptr<MwndMessageState> message_state,
                           AfterWait after_wait);
@@ -49,12 +50,13 @@ class SiglusMwndWaitOperation final : public LongOperation {
 
  private:
   class PauseGuard;
+  Task<void> PaceMessage(WaitContext& waits);
   void FinishWait();
   int AutoModeCharCount();
 
   System* system_;
+  libsiglus::FrameRequestManager& frame_requests_;
   std::shared_ptr<TextWindow> window_;
-  LocalConfig& local_config_;
   std::shared_ptr<MwndMessageState> message_state_;
   AfterWait after_wait_;
 };

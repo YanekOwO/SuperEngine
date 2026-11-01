@@ -40,13 +40,6 @@ static void ValidateStyle(const NumberObjectStyle& style) {
         "Number object digit count must be 0 through 16");
 }
 
-static int Coordinate(std::int64_t value) {
-  if (value < -std::numeric_limits<int>::max() ||
-      value > std::numeric_limits<int>::max())
-    throw std::out_of_range("Number object coordinate overflow");
-  return static_cast<int>(value);
-}
-
 std::vector<NumberObjectGlyph> LayoutNumberObject(
     int value,
     const NumberObjectStyle& style,

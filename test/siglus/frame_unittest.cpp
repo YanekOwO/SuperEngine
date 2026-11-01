@@ -43,6 +43,7 @@
 #include "poller_helpers.hpp"
 #include "siglus/fake_scene.hpp"
 #include "srbind/srbind.hpp"
+#include "systems/event_system.hpp"
 #include "systems/frame_presenter.hpp"
 #include "systems/system.hpp"
 #include "vm/function.hpp"
@@ -67,6 +68,12 @@ class FrameHarness {
 
   FrameHarness() {
     runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.frame_requests =
+        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
+          auto promise = std::make_shared<sr::Promise>();
+          vm->TrackPendingPromise(promise);
+          return promise;
+        });
     Bind("frame");
   }
 
@@ -147,9 +154,10 @@ TEST_F(SiglusFrameWaitTest, AwaitSuspendsUntilAFrameCompletes) {
   harness.Invoke("result = await frame(); resumed = 1;");
   EXPECT_FALSE(harness.runtime.vm->globals_->contains("resumed"));
 
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
   EXPECT_FALSE(harness.runtime.vm->globals_->contains("resumed"));
-  harness.runtime.CompleteFrameRequests();
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("resumed"), sr::Value(1));
@@ -183,8 +191,8 @@ TEST_F(SiglusFrameWaitTest, RecompiledFrameElementSuspendsItsScene) {
 
   harness.Invoke("result = entry();");
   EXPECT_FALSE(runtime.vm->globals_->contains("result"));
-  ASSERT_TRUE(runtime.BeginFrameRequests());
-  runtime.CompleteFrameRequests();
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("result"), sr::Value(42));
@@ -196,26 +204,29 @@ TEST_F(SiglusFrameWaitTest, ConcurrentRequestsCompleteAtTheSameBoundary) {
   harness.Invoke("await frame(); first = 1;");
   harness.Invoke("await frame(); second = 1;");
 
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("first"), sr::Value(1));
   EXPECT_EQ(harness.Global("second"), sr::Value(1));
-  EXPECT_FALSE(harness.runtime.BeginFrameRequests());
+  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, SequentialCallsCrossSeparateBoundaries) {
   // One continuation calls frame twice; the second wait needs another frame.
   harness.Invoke("await frame(); first = 1; await frame(); second = 1;");
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   harness.Pump();
   EXPECT_EQ(harness.Global("first"), sr::Value(1));
   EXPECT_FALSE(harness.runtime.vm->globals_->contains("second"));
 
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("second"), sr::Value(1));
@@ -224,13 +235,15 @@ TEST_F(SiglusFrameWaitTest, SequentialCallsCrossSeparateBoundaries) {
 TEST_F(SiglusFrameWaitTest, RequestsDuringUpdatesWaitForTheFollowingFrame) {
   // A request arrives after a frame begins; completing that frame cannot
   // resolve the request before a subsequent frame has advanced.
-  EXPECT_FALSE(harness.runtime.BeginFrameRequests());
+  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
   auto promise = harness.Request();
-  harness.runtime.CompleteFrameRequests();
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   EXPECT_FALSE(promise->HasResult());
 
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
 
   EXPECT_EQ(promise->status, sr::Promise::Status::Resolved);
 }
@@ -241,14 +254,16 @@ TEST_F(SiglusFrameWaitTest, CompletionCallbacksCanRequestAnotherFrame) {
   auto first = harness.Request();
   std::shared_ptr<sr::Promise> next;
   first->AddWaker([&](const auto&) { next = harness.Request(); });
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
 
-  harness.runtime.CompleteFrameRequests();
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
 
   ASSERT_NE(next, nullptr);
   EXPECT_FALSE(next->HasResult());
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
   EXPECT_EQ(next->status, sr::Promise::Status::Resolved);
 }
 
@@ -258,8 +273,9 @@ TEST_F(SiglusFrameWaitTest, AnUnawaitedRequestKeepsTheRuntimeAlive) {
   auto promise = harness.Request();
   EXPECT_TRUE(harness.runtime.vm->HasPendingWork());
 
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
-  harness.runtime.CompleteFrameRequests();
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
 
   EXPECT_TRUE(promise->HasResult());
   EXPECT_FALSE(harness.runtime.vm->HasPendingWork());
@@ -272,14 +288,14 @@ TEST_F(SiglusFrameWaitTest, InvalidArgumentsDoNotQueueAFrame) {
   harness.Pump();
 
   EXPECT_EQ(harness.Global("caught"), sr::Value(1));
-  EXPECT_FALSE(harness.runtime.BeginFrameRequests());
+  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, LocalResetCancelsQueuedAndActiveRequests) {
   // A local runtime reset occurs with both batches populated; all existing
   // requests must be rejected and the next frame must allow presentation.
   auto active = harness.Request();
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
   auto pending = harness.Request();
 
   for (auto& reset : harness.runtime.reset_local_memory)
@@ -287,7 +303,7 @@ TEST_F(SiglusFrameWaitTest, LocalResetCancelsQueuedAndActiveRequests) {
 
   EXPECT_EQ(active->status, sr::Promise::Status::Rejected);
   EXPECT_EQ(pending->status, sr::Promise::Status::Rejected);
-  EXPECT_FALSE(harness.runtime.BeginFrameRequests());
+  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, ResetRejectionReachesTheWaitingScript) {
@@ -296,7 +312,7 @@ TEST_F(SiglusFrameWaitTest, ResetRejectionReachesTheWaitingScript) {
   harness.Invoke(
       "caught = 0; try { await frame(); } catch (e) { caught = 1; }");
 
-  harness.runtime.ResetFrameRequests();
+  harness.runtime.frame_requests->Reset();
   harness.Pump();
 
   EXPECT_EQ(harness.Global("caught"), sr::Value(1));
@@ -307,7 +323,7 @@ TEST_F(SiglusFrameWaitTest, DestructionCancelsQueuedAndActiveRequests) {
   // rejected before their VM and native services are destroyed.
   auto other = std::make_unique<FrameHarness>();
   auto active = other->Request();
-  ASSERT_TRUE(other->runtime.BeginFrameRequests());
+  ASSERT_TRUE(other->runtime.frame_requests->BeginFrameRequests());
   auto pending = other->Request();
 
   other.reset();
@@ -323,13 +339,59 @@ TEST_F(SiglusFrameWaitTest, TimeStopDoesNotBlockFrameCompletion) {
   counter->StartGame();
   harness.runtime.local_config.time_stop = true;
   auto promise = harness.Request();
-  ASSERT_TRUE(harness.runtime.BeginFrameRequests());
+  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
 
   harness.runtime.Update(16ms, 16ms);
-  harness.runtime.CompleteFrameRequests();
+  harness.runtime.frame_requests->CompleteFrameRequests(
+      harness.runtime.script_input.get());
 
   EXPECT_EQ(counter->Get(), 0);
   EXPECT_EQ(promise->status, sr::Promise::Status::Resolved);
+}
+
+TEST_F(SiglusFrameWaitTest, MessageFramePreservesTheScriptInputSnapshot) {
+  // Queue a physical release behind a published press; a message-pacing
+  // boundary must retain the pressed script snapshot until explicit advance.
+  auto& runtime = harness.runtime;
+  runtime.script_input = std::make_shared<ScriptInput>();
+  runtime.script_input->OnEvent(
+      std::make_shared<Event>(MouseDown{MouseButton::LEFT}));
+  ASSERT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
+  runtime.script_input->OnEvent(
+      std::make_shared<Event>(MouseUp{MouseButton::LEFT}));
+  auto promise = runtime.frame_requests->RequestMessageFrame();
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  EXPECT_TRUE(promise->HasResult());
+  EXPECT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
+}
+
+TEST_F(SiglusFrameWaitTest, ExplicitFrameStillAdvancesAMixedBatch) {
+  // Share a boundary between an explicit frame and message pacing; the
+  // explicit request must retain its normal script-input advance.
+  auto& runtime = harness.runtime;
+  runtime.script_input = std::make_shared<ScriptInput>();
+  runtime.script_input->OnEvent(
+      std::make_shared<Event>(MouseDown{MouseButton::LEFT}));
+  ASSERT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
+  runtime.script_input->OnEvent(
+      std::make_shared<Event>(MouseUp{MouseButton::LEFT}));
+  auto message = runtime.frame_requests->RequestMessageFrame();
+  auto explicit_frame = harness.Request();
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  EXPECT_FALSE(runtime.script_input->Get(ScriptInput::Source::Left).down);
+  EXPECT_TRUE(message->HasResult());
+  EXPECT_TRUE(explicit_frame->HasResult());
+}
+
+TEST_F(SiglusFrameWaitTest, DestructionCancelsMessageFrames) {
+  // A native caller retains a frame promise past runtime destruction; teardown
+  // must reject it before the VM and other runtime services disappear.
+  auto other = std::make_unique<FrameHarness>();
+  auto promise = other->runtime.frame_requests->RequestMessageFrame();
+  other.reset();
+  EXPECT_EQ(promise->status, sr::Promise::Status::Rejected);
 }
 
 class SiglusFrameLoopTest : public ::testing::Test {

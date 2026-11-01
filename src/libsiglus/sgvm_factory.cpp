@@ -57,6 +57,7 @@
 #include "utilities/mapped_file.hpp"
 #include "utilities/string_utilities.hpp"
 #include "vm/function.hpp"
+#include "vm/promise.hpp"
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
@@ -168,6 +169,11 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   rt.platform_implementor = platform_implementor_;
   rt.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+  rt.frame_requests = std::make_unique<FrameRequestManager>([vm = rt.vm.get()] {
+    auto promise = std::make_shared<sr::Promise>();
+    vm->TrackPendingPromise(promise);
+    return promise;
+  });
   sr::VM& vm = *rt.vm;
   std::shared_ptr<sr::GarbageCollector> gc = vm.gc_;
 

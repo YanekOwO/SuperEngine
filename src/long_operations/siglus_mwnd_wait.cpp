@@ -24,10 +24,12 @@
 #include "long_operations/siglus_mwnd_wait.hpp"
 
 #include "core/game_config.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/frame_request_manager.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
+#include "vm/exception.hpp"
+#include "vm/promise.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -76,13 +78,14 @@ class SiglusMwndWaitOperation::PauseGuard {
 };
 
 SiglusMwndWaitOperation::SiglusMwndWaitOperation(
-    libsiglus::SiglusMachine& runtime,
+    System* system,
+    libsiglus::FrameRequestManager& frame_requests,
     std::shared_ptr<TextWindow> window,
     std::shared_ptr<MwndMessageState> message_state,
     AfterWait after_wait)
-    : system_(runtime.system.get()),
+    : system_(system),
+      frame_requests_(frame_requests),
       window_(std::move(window)),
-      local_config_(runtime.local_config),
       message_state_(std::move(message_state)),
       after_wait_(after_wait) {}
 
@@ -110,6 +113,7 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
     co_return 0;
 
   if (!system_ || MessageNowait(system_)) {
+    co_await PaceMessage(waits);
     FinishWait();
     co_return 0;
   }
@@ -119,7 +123,7 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
   try {
     const auto start = system_->text().MessageTime();
     const int auto_time = EffectiveAutoTime(
-        local_config_, system_->global_config(), AutoModeCharCount());
+        system_->local_config(), system_->global_config(), AutoModeCharCount());
 
     while (true) {
       const auto outcome =
@@ -128,12 +132,14 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
         continue;
       if (outcome == WaitOutcome::InterruptedByInput) {
         pause.Reset();
+        co_await PaceMessage(waits);
         FinishWait();
         co_return 1;
       }
 
       if (MessageNowait(system_)) {
         pause.Reset();
+        co_await PaceMessage(waits);
         FinishWait();
         co_return 0;
       }
@@ -153,6 +159,19 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
   }
 }
 
+Task<void> SiglusMwndWaitOperation::PaceMessage(WaitContext& waits) {
+  if (!system_ || !system_->ShouldFastForward())
+    co_return;
+
+  auto frame = frame_requests_.RequestMessageFrame();
+  // Input may initiate skipping, but repeated key events cannot substitute
+  // for the engine frame that makes the skipped message visible.
+  while (!frame->HasResult())
+    co_await waits.Schedule(false);
+  if (frame->status == serilang::Promise::Status::Rejected)
+    throw serilang::RuntimeError(frame->result->error());
+}
+
 void SiglusMwndWaitOperation::FinishWait() {
   if (!system_ || !message_state_)
     return;
@@ -168,13 +187,13 @@ void SiglusMwndWaitOperation::FinishWait() {
       return;
     }
     case AfterWait::Clear:
-      message_state_->MarkMessageClearReady(*window_, local_config_);
+      message_state_->MarkMessageClearReady(*window_, system_->local_config());
       return;
   }
 }
 
 int SiglusMwndWaitOperation::AutoModeCharCount() {
-  const int configured_count = local_config_.auto_mode_moji_cnt;
+  const int configured_count = system_->local_config().auto_mode_moji_cnt;
   if (configured_count > 0)
     return configured_count;
 

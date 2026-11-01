@@ -1467,4 +1467,45 @@ TEST_F(VMTest, Exception) {
   EXPECT_EQ(result.Desc(), "<int: 1>");
 }
 
+// ------------------------------------------------------------------------------
+class VMCallbackLifetimeTest : public ::testing::Test {
+ protected:
+  std::shared_ptr<GarbageCollector> gc = std::make_shared<GarbageCollector>();
+  std::unique_ptr<VM> vm = std::make_unique<VM>(gc);
+  std::shared_ptr<Promise> promise;
+  Fiber* fiber = nullptr;
+
+  void SetUp() override {
+    auto* future = gc->Allocate<Future>();
+    promise = future->promise;
+    auto* code = gc->Allocate<Code>();
+    code->const_pool = {Value(future)};
+    code->Append(Push{0});
+    code->Append(Await{});
+    code->Append(Return{});
+    fiber = vm->AddFiber(code);
+    vm->RunReadyUntilBlocked();
+    ASSERT_EQ(fiber->state, FiberState::Suspended);
+  }
+};
+
+TEST_F(VMCallbackLifetimeTest, ResolutionAfterDestructionDoesNotResumeAFiber) {
+  // Retain the collector and a producer beyond VM destruction; resolving the
+  // future must leave its abandoned fiber and destroyed scheduler untouched.
+  vm.reset();
+  promise->Resolve(42);
+  EXPECT_EQ(fiber->state, FiberState::Suspended);
+  EXPECT_TRUE(fiber->op_stack.empty());
+}
+
+TEST_F(VMCallbackLifetimeTest,
+       CancellationAfterDestructionDoesNotUnwindAFiber) {
+  // A native producer cancels after its VM has gone away; its late rejection
+  // must not invoke exception handling through the former VM callback.
+  vm.reset();
+  promise->Reject("native task cancelled");
+  EXPECT_EQ(fiber->state, FiberState::Suspended);
+  EXPECT_TRUE(fiber->op_stack.empty());
+}
+
 }  // namespace serilang_test

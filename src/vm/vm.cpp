@@ -940,8 +940,11 @@ void VM::ExecuteFiber(Fiber* fib) {
           }
 
           fib->state = FiberState::Suspended;
-          auto cb = [vm = this, fib, awaited_fib = awaited.Get_if<Fiber>()](
+          auto cb = [lifetime = std::weak_ptr(callback_lifetime_), vm = this,
+                     fib, awaited_fib = awaited.Get_if<Fiber>()](
                         const expected<Value, std::string>& result) {
+            if (lifetime.expired())
+              return;
             if (result.has_value())
               push(fib->op_stack, result.value());
             else

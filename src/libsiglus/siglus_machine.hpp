@@ -38,6 +38,7 @@
 #include "core/stage.hpp"
 #include "core/window_title.hpp"
 #include "libsiglus/bindings/loader.hpp"
+#include "libsiglus/frame_request_manager.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/frame_presenter.hpp"
 #include "systems/system.hpp"
@@ -143,14 +144,9 @@ struct SiglusMachine {
   void RenderFrame();
 
   // ------------------------------------------------------------------------------
-  std::vector<std::shared_ptr<serilang::Promise>> pending_frame_requests_;
-  std::vector<std::shared_ptr<serilang::Promise>> active_frame_requests_;
+  std::unique_ptr<FrameRequestManager> frame_requests;
   // Queue a wait for the next system frame while display updates continue.
   serilang::Value RequestFrame();
-  // Activate only requests queued before this frame's updates begin.
-  bool BeginFrameRequests();
-  void CompleteFrameRequests();
-  void ResetFrameRequests();
 
   // ------------------------------------------------------------------------------
   std::shared_ptr<CaptureManager> captures;

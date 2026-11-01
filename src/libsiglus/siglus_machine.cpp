@@ -62,7 +62,8 @@ SiglusMachine::~SiglusMachine() {
     s->prepared_.reset();
   }
 
-  ResetFrameRequests();
+  if (frame_requests)
+    frame_requests->Reset();
   ResetCaptures();
   vm.reset();
   if (system) {
@@ -76,37 +77,12 @@ SiglusMachine::~SiglusMachine() {
 }
 
 sr::Value SiglusMachine::RequestFrame() {
-  if (!vm)
-    throw std::logic_error("SiglusMachine::RequestFrame requires a VM");
-
+  if (!vm || !frame_requests)
+    throw std::logic_error(
+        "SiglusMachine::RequestFrame requires a VM and frame request manager");
   auto* future = vm->gc_->Allocate<sr::Future>();
-  vm->TrackPendingPromise(future->promise);
-  pending_frame_requests_.push_back(future->promise);
+  future->promise = frame_requests->RequestFrame();
   return future;
-}
-
-bool SiglusMachine::BeginFrameRequests() {
-  if (!active_frame_requests_.empty())
-    throw std::logic_error("Previous frame requests have not completed");
-  active_frame_requests_.swap(pending_frame_requests_);
-  return !active_frame_requests_.empty();
-}
-
-void SiglusMachine::CompleteFrameRequests() {
-  auto active = std::exchange(active_frame_requests_, {});
-  if (!active.empty() && script_input)
-    script_input->AdvanceFrame();
-  for (auto& promise : active)
-    promise->Resolve(sr::nil);
-}
-
-void SiglusMachine::ResetFrameRequests() {
-  auto pending = std::exchange(pending_frame_requests_, {});
-  auto active = std::exchange(active_frame_requests_, {});
-  for (auto& promise : active)
-    promise->Reject("Frame wait cancelled by runtime reset");
-  for (auto& promise : pending)
-    promise->Reject("Frame wait cancelled by runtime reset");
 }
 
 sr::Value SiglusMachine::RequestCapture(CaptureRequest request) {
@@ -219,8 +195,9 @@ void SiglusMachine::PumpHostEvents() {
 }
 
 void SiglusMachine::Run() {
-  if (!vm || !system)
-    throw std::logic_error("SiglusMachine::Run requires a VM and system");
+  if (!vm || !system || !frame_requests)
+    throw std::logic_error(
+        "SiglusMachine::Run requires a VM, system and frame request manager");
 
   using FrameClock = std::chrono::steady_clock;
   // assuming max 144 fps
@@ -233,7 +210,7 @@ void SiglusMachine::Run() {
   while (!vm->IsStopRequested() && !system->IsQuitRequested() &&
          vm->HasPendingWork()) {
     const auto next_frame = FrameClock::now() + frame_period;
-    BeginFrameRequests();
+    frame_requests->BeginFrameRequests();
     const bool capture_frame = HasPendingCaptures();
     input_event_listener->ResetState();
 
@@ -269,7 +246,7 @@ void SiglusMachine::Run() {
       RenderFrame();
     if (capture_frame)
       ProcessCaptureFrame();
-    CompleteFrameRequests();
+    frame_requests->CompleteFrameRequests(script_input.get());
 
     vm->RunReadyUntilBlocked();
     if (vm->IsStopRequested() || system->IsQuitRequested() ||
@@ -283,7 +260,7 @@ void SiglusMachine::Run() {
   if (system->IsQuitRequested())
     vm->RequestStop();
   if (vm->IsStopRequested()) {
-    ResetFrameRequests();
+    frame_requests->Reset();
     system->event().DiscardDeferredInput();
   }
 }
