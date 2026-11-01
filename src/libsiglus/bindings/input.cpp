@@ -36,7 +36,6 @@ namespace sb = srbind;
 void BindInput(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ mm(vm.gc_.get(), vm.globals_.get());
-  mm.def("frame", [] {});
 
   sb::module_ m(vm, "input");
 

@@ -401,6 +401,17 @@ TEST_F(ElementParserTest, TimeWait) {
   }
 }
 
+TEST_F(ElementParserTest, FrameWaitsForBoundaryWithoutReturningValue) {
+  // Element six takes no arguments; its void call must suspend the script.
+  ElementCode elm{6};
+  elm.ForceBind({0, {}});
+  auto parsed = chain(elm);
+
+  EXPECT_EQ(parsed, "frame()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
+}
+
 TEST_F(ElementParserTest, Title) {
   {
     ElementCode elm{74};

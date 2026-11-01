@@ -491,7 +491,8 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
 
     case 6: {  // FRAME
       Member frame("frame");
-      auto call = Node::BuildCall(std::move(elm.bind_ctx));
+      elm.bind_ctx.return_type = Type::None;
+      auto call = Node::BuildCall(std::move(elm.bind_ctx), AWAIT);
       elm.force_bind = false;
       return AccessChain{
           .root = std::monostate(),

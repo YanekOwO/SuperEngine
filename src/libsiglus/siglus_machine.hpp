@@ -142,6 +142,16 @@ struct SiglusMachine {
   void RenderFrame();
 
   // ------------------------------------------------------------------------------
+  std::vector<std::shared_ptr<serilang::Promise>> pending_frame_requests_;
+  std::vector<std::shared_ptr<serilang::Promise>> active_frame_requests_;
+  // Queue a wait for the next system frame, suppressing its presentation.
+  serilang::Value RequestFrame();
+  // Activate only requests queued before this frame's updates begin.
+  bool BeginFrameRequests();
+  void CompleteFrameRequests();
+  void ResetFrameRequests();
+
+  // ------------------------------------------------------------------------------
   std::shared_ptr<CaptureManager> captures;
   // Queue eagerly and complete at most one request after each system frame.
   serilang::Value RequestCapture(CaptureRequest request);
