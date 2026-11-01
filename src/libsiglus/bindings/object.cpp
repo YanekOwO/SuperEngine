@@ -33,6 +33,7 @@
 #include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/object_internal/drawer/movie.hpp"
+#include "core/object_internal/drawer/string.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
 #include "core/object_internal/object_parameter.hpp"
@@ -44,10 +45,13 @@
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
+#include "systems/itext_system.hpp"
 #include "systems/system.hpp"
+#include "systems/text_system.hpp"
 #include "utilities/file.hpp"
 #include "vm/exception.hpp"
 #include "vm/object.hpp"
+#include "vm/string.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
@@ -950,6 +954,103 @@ void BindObject(SiglusMachine& runtime) {
           h->object->Param().SetY(*y);
         if (pattern)
           h->object->Param().SetPattNo(*pattern);
+      },
+      sb::vararg);
+  object.def(
+      "create_string",
+      [system, &runtime](ObjectHandle* h, std::vector<sr::Value> args) {
+        if (args.size() != 1 && args.size() != 2 && args.size() != 4)
+          throw sr::RuntimeError(
+              "Object.create_string expects 1, 2, or 4 arguments");
+        const auto* text = args[0].Get_if<sr::String>();
+        if (!text)
+          throw sr::RuntimeError("Object.create_string expects string text");
+        const int visible =
+            args.size() >= 2 ? RequireInt(args[1], "create_string display") : 0;
+        const int x =
+            args.size() == 4 ? RequireInt(args[2], "create_string x") : 0;
+        const int y =
+            args.size() == 4 ? RequireInt(args[3], "create_string y") : 0;
+        StringObjectStyle style;
+        if (auto gexe = runtime.gameexe) {
+          style.color = (*gexe)("MWND.MOJI_COLOR").Int().value_or(0);
+          style.shadow_color = (*gexe)("MWND.SHADOW_COLOR").Int().value_or(1);
+          style.outline_color = (*gexe)("MWND.FUCHI_COLOR").Int().value_or(1);
+        }
+        StringObjectRenderContext context{
+            .rasterize =
+                [system](const std::string& glyph, int size, RGBColour color) {
+                  if (!system)
+                    throw sr::RuntimeError(
+                        "string rendering requires a System");
+                  auto& text = system->text();
+                  return text.impl().RenderText(
+                      glyph,
+                      FontFace{.font = text.LoadFont(size), .is_shadow = false},
+                      color);
+                },
+            .color =
+                [gexe = runtime.gameexe](int index) {
+                  if (gexe) {
+                    const int count =
+                        (*gexe)("COLOR_TABLE.CNT").Int().value_or(256);
+                    index = std::clamp(index, 0, std::max(0, count - 1));
+                    auto rgb = (*gexe)("COLOR_TABLE", index).IntVec();
+                    if (rgb && rgb->size() >= 3)
+                      return RGBColour((*rgb)[0], (*rgb)[1], (*rgb)[2]);
+                  }
+                  return index == 1 ? RGBColour::Black() : RGBColour::White();
+                },
+            .font_settings =
+                [&runtime] {
+                  const auto& local = runtime.local_config;
+                  const auto& global = runtime.global_config;
+                  return StringObjectFontSettings{
+                      .name = EffectiveFontName(local, global),
+                      .bold = EffectiveFontBold(local, global),
+                      .shadow_mode = EffectiveFontShadow(local, global)};
+                }};
+        auto drawer = std::make_unique<StringDrawer>(text->str_, style,
+                                                     std::move(context));
+        h->object->Reset();
+        h->object->SetDrawer(std::move(drawer));
+        h->object->Param().SetVisible(visible);
+        h->object->Param().SetX(x);
+        h->object->Param().SetY(y);
+      },
+      sb::vararg);
+  object.def("set_string", [](ObjectHandle* h, std::string text) {
+    if (auto* drawer = h->object->GetDrawer<StringDrawer>())
+      drawer->SetText(std::move(text));
+  });
+  object.def("get_string", [](ObjectHandle* h) {
+    auto* drawer = h->object->GetDrawer<StringDrawer>();
+    return drawer ? drawer->text() : std::string();
+  });
+  object.def(
+      "set_string_param",
+      [gexe = runtime.gameexe](ObjectHandle* h, std::vector<sr::Value> args) {
+        if (args.size() != 7 && args.size() != 8)
+          throw sr::RuntimeError(
+              "Object.set_string_param expects 7 or 8 arguments");
+        std::vector<int> values;
+        values.reserve(args.size());
+        for (const auto& arg : args)
+          values.push_back(RequireInt(arg, "set_string_param argument"));
+        if (auto* drawer = h->object->GetDrawer<StringDrawer>()) {
+          drawer->SetStyle(StringObjectStyle{
+              .size = values[0],
+              .xspace = values[1],
+              .yspace = values[2],
+              .count = values[3],
+              .color = values[4],
+              .shadow_color = values[5],
+              .outline_color =
+                  values.size() == 8 ? values[7]
+                  : gexe ? (*gexe)("MWND.FUCHI_COLOR").Int().value_or(1)
+                         : 1,
+              .shadow_mode = values[6]});
+        }
       },
       sb::vararg);
   object.def(

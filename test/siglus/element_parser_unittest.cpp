@@ -535,6 +535,31 @@ TEST_F(ElementParserTest, ObjectExistTypeIsImplicitGetterCall) {
   EXPECT_EQ(parsed.chain.GetType(), Type::Int);
 }
 
+TEST_F(ElementParserTest, ObjectStringCommandsUseSimpleTypedCalls) {
+  for (const int argc : {1, 2, 4}) {
+    ElementCode elm{38, 2, -1, 0, 93, -1, 1, 39};
+    std::vector<Value> args{v("text")};
+    while (args.size() < argc)
+      args.push_back(v(1));
+    elm.ForceBind({argc == 1 ? 0 : argc == 2 ? 1 : 2, std::move(args)});
+    auto parsed = chain(elm);
+    EXPECT_EQ(parsed.chain.GetType(), Type::None);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
+  }
+  ElementCode setter{37, 2, -1, 0, 99};
+  setter.ForceBind({0, {v("text")}});
+  EXPECT_EQ(chain(setter), "stage.back.object[int:0].set_string(str:text)");
+  for (const int argc : {7, 8}) {
+    ElementCode elm{38, 2, -1, 0, 104};
+    elm.ForceBind({argc - 7, std::vector<Value>(argc, v(1))});
+    EXPECT_EQ(chain(elm).CallFlags(), "[]s");
+  }
+  auto getter = chain(38, 2, -1, 0, 135);
+  EXPECT_EQ(getter, "stage.front.object[int:0].get_string()");
+  EXPECT_EQ(getter.chain.GetType(), Type::String);
+  EXPECT_EQ(getter.CallFlags(), "[]s");
+}
+
 TEST_F(ElementParserTest, ObjectGetFilePathIsImplicitGetterCall) {
   auto parsed = chain(37, 2, -1, 10, 62);
   EXPECT_EQ(parsed, "stage.back.object[int:10].get_file_path()");

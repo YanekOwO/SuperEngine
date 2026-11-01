@@ -1203,7 +1203,7 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
           id[37] | b_callable("init_param", Type::None),
           id[38] | b(Type::Callable, Member("create")),
           id[40] | b(Type::Callable, Member("create_rect")),
-          id[39] | b(Type::Callable, Member("create_string")),
+          id[39] | b_callable("create_string"),
           id[132] | b(Type::Callable, Member("create_number")),
           id[129] | b(Type::Callable, Member("create_weather")),
           id[43] | b(Type::Callable, Member("create_mesh")),
@@ -1225,9 +1225,9 @@ static flat_map<Builder> const* GetMethodMap(Type type) {
           id[174] | b_callable("exist_type", Type::Int),
 
           // String
-          id[99] | b(Type::Callable, Member("set_string")),
-          id[135] | b(Type::String, Member("get_string")),
-          id[104] | b(Type::Callable, Member("set_string_param")),
+          id[99] | b_callable("set_string"),
+          id[135] | obj_getter("get_string", Type::String),
+          id[104] | b_callable("set_string_param"),
           id[133] | b(Type::Callable, Member("set_number")),
           id[136] | b(Type::Int, Member("set_number")),
           id[134] | b(Type::Callable, Member("set_number_param")),

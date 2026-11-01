@@ -118,6 +118,8 @@ std::string AsString(const sr::Value& value) {
 }
 
 int RequireInt(sr::Value const& value, std::string_view where) {
+  if (auto* b = value.Get_if<bool>())
+    return *b ? 1 : 0;
   if (auto* i = value.Get_if<int>())
     return *i;
   throw sr::RuntimeError(
