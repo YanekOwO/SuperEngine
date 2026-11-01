@@ -25,6 +25,7 @@
 
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/bindings/trace.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -231,7 +232,7 @@ void BindFrameActions(SiglusMachine& runtime) {
             vm.gc_->Allocate<sr::String>(std::get<std::string>(argument)));
     }
     sr::Value command = runtime.loader->ResolveUserCommandTarget(target);
-    vm.InvokeUntilBlocked(command, std::move(arguments));
+    InvokeFrameAction(vm, command, std::move(arguments));
   });
 
   (*vm.builtins_)["%%siglus_frame_action_class"] = action_class.native_class();

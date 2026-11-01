@@ -24,8 +24,10 @@
 
 #pragma once
 
+#include "log/trace.hpp"
+
 enum class Severity { None = 0, Info, Warn, Error };
 
 extern bool logging_enabled;
 
-void SetupLogging(Severity minSeverity);
+void SetupLogging(Severity minSeverity, TraceOptions trace_options = {});

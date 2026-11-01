@@ -180,7 +180,8 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   fs::path seen_path = CorrectPath(base_path_, "scene.pck");
   MappedFile archive_mf(seen_path);
   rt.archive = std::make_shared<Archive>(Archive::Create(archive_mf.Read()));
-  rt.loader = std::make_unique<binding::Loader>(*rt.archive, vm, debug_);
+  rt.loader =
+      std::make_unique<binding::Loader>(*rt.archive, vm, debug_, trace_);
 
   rt.base_pth = base_path_;
   rt.save_pth = rt.base_pth / "save";
@@ -506,23 +507,6 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
     }
     return lhs.Hash() == rhs.Hash();
   });
-  m.def("__builtin_dbgvalue", [](sr::VM& vm, sr::Value value) -> sr::Value {
-    std::string s;
-    if (const auto* str = value.Get_if<sr::String>())
-      s = '"' + EncodeText(str->str_) + '"';
-    else
-      s = value.Str();
-    return vm.gc_->Allocate<sr::String>(std::move(s));
-  });
-  m.def(
-      "__builtin_dbgprint",
-      [](std::vector<sr::Value> args) {
-        for (const auto& it : args)
-          std::cerr << it.Str();
-        std::cerr << std::endl;
-      },
-      sb::vararg);
-
   m.def("savepoint", [] {
     // TODO: implement save/load and serialization support
     return 0;

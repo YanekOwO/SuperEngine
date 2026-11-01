@@ -38,6 +38,7 @@ class SGVMFactory {
 
   std::filesystem::path base_path_;
   bool debug_ = false;
+  bool trace_ = false;
   bool fast_forward_ = false;
   std::shared_ptr<IPlatformImplementor> platform_implementor_;
 };

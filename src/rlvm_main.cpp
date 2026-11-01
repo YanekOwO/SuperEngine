@@ -27,7 +27,10 @@
 #include <boost/program_options.hpp>
 #include <filesystem>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "log/core.hpp"
 #include "platforms/implementor.hpp"
@@ -93,6 +96,8 @@ int main(int argc, char* argv[]) {
       "show-platforms", "Print all avaliable gui platforms.")(
       "log-level", po::value<std::string>(),
       "Minimum severity level to log (none, info, warning, error)")(
+      "trace", po::value<std::string>(),
+      "Trace instructions: --trace[=script|frame-action|all]")(
       "fast-forward", "Fast forward execution by injecting Ctrl key events")(
       "debug",
       po::value<bool>()
@@ -117,7 +122,18 @@ int main(int argc, char* argv[]) {
 
   po::variables_map vm;
   try {
-    po::store(po::basic_command_line_parser<char>(argc, argv)
+    // Optional string arguments otherwise consume the following game path.
+    std::vector<std::string> arguments;
+    bool parse_options = true;
+    for (int i = 1; i < argc; ++i) {
+      std::string argument(argv[i]);
+      if (argument == "--")
+        parse_options = false;
+      if (parse_options && argument == "--trace")
+        argument = "--trace=script";
+      arguments.push_back(std::move(argument));
+    }
+    po::store(po::basic_command_line_parser<char>(arguments)
                   .options(commandLineOpts)
                   .positional(p)
                   .run(),
@@ -155,7 +171,16 @@ int main(int argc, char* argv[]) {
     else if (level == "error")
       log_level = Severity::Error;
   }
-  SetupLogging(log_level);
+  TraceOptions trace_options;
+  if (vm.count("trace")) {
+    try {
+      trace_options = ParseTraceOptions(vm["trace"].as<std::string>());
+    } catch (const std::invalid_argument& e) {
+      std::cerr << e.what() << std::endl;
+      return -1;
+    }
+  }
+  SetupLogging(log_level, trace_options);
 
   if (vm.count("help")) {
     printUsage(argv[0], opts);
@@ -256,6 +281,7 @@ int main(int argc, char* argv[]) {
     if (vm.count("hook"))
       instance.hook_path_ = vm["hook"].as<std::string>();
     instance.debug_ = vm["debug"].as<bool>();
+    instance.trace_ = trace_options.Any();
 
     return instance.Main(gamerootPath);
   } else {

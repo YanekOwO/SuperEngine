@@ -34,6 +34,7 @@
 #include "libsiglus/lexeme.hpp"
 #include "libsiglus/recompiler.hpp"
 #include "libsiglus/scene_entry.hpp"
+#include "log_capture.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "siglus/fake_scene.hpp"
 #include "srbind/srbind.hpp"
@@ -45,6 +46,7 @@
 
 #include <any>
 #include <chrono>
+#include <format>
 #include <memory>
 #include <string>
 #include <utility>
@@ -271,12 +273,12 @@ class SiglusCallMemoryTest : public ::testing::Test {
     runtime.vm->Evaluate(compiler.Get());
   }
 
-  void InstallTokens(std::vector<token::Token_t> body, bool debug = false) {
+  void InstallTokens(std::vector<token::Token_t> body, bool trace = false) {
     std::vector<Parser::ParsedToken> tokens;
     for (auto& token : body)
       tokens.push_back({static_cast<int>(tokens.size() + 1), std::move(token)});
     Recompiler compiler(runtime.vm->gc_);
-    compiler.is_debug_ = debug;
+    compiler.trace_enabled_ = trace;
     compiler.Compile(tokens);
     ASSERT_TRUE(compiler.Ok());
     auto* module = compiler.module_;
@@ -534,19 +536,19 @@ TEST_F(SiglusCallMemoryTest, ZeroInstructionTokensRemainJumpTargets) {
   EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
 }
 
-TEST_F(SiglusCallMemoryTest, DebugAnnotationsRemainAtTokenBoundaries) {
-  // Debug instrumentation runs at the target token before the scene resumes.
+TEST_F(SiglusCallMemoryTest, TraceAnnotationsRemainAtTokenBoundaries) {
+  // Trace instrumentation runs at the target token before the scene resumes.
   std::vector<std::string> annotations;
   srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   bindings.def(
-      "__builtin_dbgprint",
-      [&](std::vector<sr::Value> terms) {
-        std::string text;
+      "__builtin_trace",
+      [&](int scene, int line, std::vector<sr::Value> terms) {
+        std::string text = std::format("[{}:{}] ", scene, line);
         for (const auto& value : terms)
           text += value.Str();
         annotations.push_back(std::move(text));
       },
-      srbind::vararg);
+      srbind::arg("scene"), srbind::arg("line"), srbind::vararg);
   InstallTokens({token::Goto{1}, token::Return{{Integer(0)}}, token::Label{0},
                  token::Label{1}, token::Return{{Integer(42)}}, token::Eof{}},
                 true);
@@ -784,6 +786,32 @@ TEST_F(FrameActionIntegrationTest, DispatchUsesCurrentEntry) {
   ReplaceEntry();
   Dispatch();
   EXPECT_EQ(calls, 11);
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchUsesFrameActionTraceCategory) {
+  // A manager-dispatched callback reaches the frame-action trace stream.
+  LogCapture output;
+  SetupLogging(Severity::Error, {.frame_action = true});
+  (*SiglusBindingRegistry::Find("trace"))(runtime);
+  Execute(*runtime.vm, R"(
+    fn replacement(action) { __builtin_trace(1, 2, "dispatch"); }
+  )");
+  ReplaceEntry();
+  Dispatch();
+  EXPECT_EQ(output.Str(), "[1:2] dispatch\n");
+}
+
+TEST_F(FrameActionIntegrationTest, FinalCallbackUsesFrameActionTraceCategory) {
+  // Explicit finalization uses the same callback category as regular dispatch.
+  LogCapture output;
+  SetupLogging(Severity::Error, {.frame_action = true});
+  (*SiglusBindingRegistry::Find("trace"))(runtime);
+  Execute(*runtime.vm, R"(
+    fn replacement(action) { __builtin_trace(1, 2, "final"); }
+  )");
+  ReplaceEntry();
+  manager->End({manager->global_action(), {}});
+  EXPECT_EQ(output.Str(), "[1:2] final\n");
 }
 
 TEST_F(FrameActionIntegrationTest, FinalizationUsesCurrentEntry) {

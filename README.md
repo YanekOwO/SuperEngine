@@ -81,6 +81,10 @@ Siglus exposes the startup arguments as VM globals before running the hook:
 `--scene`, or `nil` when omitted. These values are available without a hook too;
 assigning to them does not change the engine's startup settings.
 
+Instruction tracing is separate from `--debug` and `--log-level`. Use `--trace`
+or `--trace=script` for script instructions, `--trace=frame-action` for Siglus
+frame-action callbacks, or `--trace=all` for both. Tracing is off by default.
+
 rlvm uses Boost.Serialization text archives for save files and other persistent
 metadata. Compatibility with the original RealLive and Siglus serialization
 formats is outside the scope of this project and will not be supported.

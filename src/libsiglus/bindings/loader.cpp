@@ -78,6 +78,7 @@ sr::Module* Loader::Load(int scene) {
   Recompiler compiler(vm_.gc_);
   compiler.SetSceneProperties(scn.id_, scn.property);
   compiler.is_debug_ = is_debug_;
+  compiler.trace_enabled_ = trace_enabled_;
   compiler.Compile(tokens);
   tokens.clear();
 

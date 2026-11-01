@@ -35,6 +35,7 @@ class SgvmInstance {
  public:
   std::optional<int> start_scene_;
   bool debug_ = false;
+  bool trace_ = false;
   bool fast_forward_ = false;
   std::string font_;
   std::optional<std::filesystem::path> hook_path_;

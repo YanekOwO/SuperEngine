@@ -43,6 +43,7 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
   try {
     SGVMFactory factory(game_root);
     factory.debug_ = debug_;
+    factory.trace_ = trace_;
     factory.fast_forward_ = fast_forward_;
     factory.platform_implementor_ = platform_implementor_;
     std::unique_ptr<SiglusMachine> machine = factory.Create();

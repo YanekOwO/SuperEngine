@@ -108,6 +108,7 @@ class Recompiler {
  public:
   serilang::Module* module_ = nullptr;
   bool is_debug_ = false;
+  bool trace_enabled_ = false;
 
  private:
   // Error handling

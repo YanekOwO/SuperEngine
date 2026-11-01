@@ -34,6 +34,7 @@
 #include "libreallive/expression.hpp"
 #include "libreallive/parser.hpp"
 #include "log/domain_logger.hpp"
+#include "log/trace.hpp"
 #include "long_operations/reallive_task.hpp"
 #include "long_operations/textout_long_operation.hpp"
 #include "machine/reallive_dll.hpp"
@@ -204,12 +205,9 @@ void RLMachine::ExecuteLongop() {
 
 void RLMachine::ExecuteInstruction(std::shared_ptr<Instruction> instruction) {
   try {
-    // write trace log
-    static DomainLogger tracer("TRACER");
-    tracer(Severity::None) << std::format("({:0>4d}:{:d}) ", SceneNumber(),
-                                          line_)
-                           << std::visit(InstructionToString(&module_manager_),
-                                         *instruction);
+    WriteTrace(TraceCategory::Script, {SceneNumber(), line_}, [&] {
+      return std::visit(InstructionToString(&module_manager_), *instruction);
+    });
 
     // execute the instruction
     std::visit(*this, *instruction);
@@ -711,7 +709,8 @@ void RLMachine::ApplyGraphicsConfiguration() {
   Resize(presenter().screen_size());
   mouse_cursor_.reset();
   presenter().backend()->ShowSystemCursor(!ShouldUseCustomCursor());
-  window_title_->subtitle_visible_ = GetGlobalConfig().reallive.display_subtitle;
+  window_title_->subtitle_visible_ =
+      GetGlobalConfig().reallive.display_subtitle;
   window_title_->Apply();
   ForceRefresh();
 }

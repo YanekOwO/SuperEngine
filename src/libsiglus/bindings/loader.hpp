@@ -45,8 +45,11 @@ struct UserCommand {
 
 class Loader {
  public:
-  explicit Loader(Archive& ar, serilang::VM& v, bool debug = true)
-      : archive_(ar), vm_(v), is_debug_(debug) {}
+  explicit Loader(Archive& ar,
+                  serilang::VM& v,
+                  bool debug = true,
+                  bool trace = false)
+      : archive_(ar), vm_(v), is_debug_(debug), trace_enabled_(trace) {}
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);
@@ -74,6 +77,7 @@ class Loader {
   Archive& archive_;
   serilang::VM& vm_;
   bool is_debug_;
+  bool trace_enabled_;
   std::unordered_map<std::string, serilang::Module*> scene_module_cache_;
   std::unordered_map<const Globals*, SceneCommandTable> commands_by_globals_;
 };

@@ -37,11 +37,15 @@ struct Logger::Ctx {
   logger_impl_t logger;
 };
 
-Logger::Logger() : ctx_(std::make_unique<Ctx>()) {}
+Logger::Logger() : ctx_(std::make_unique<Ctx>()) { ClearAttributes(); }
 
 Logger::~Logger() = default;
 
-void Logger::ClearAttributes() const { ctx_->logger.remove_all_attributes(); }
+void Logger::ClearAttributes() const {
+  ctx_->logger.remove_all_attributes();
+  ctx_->logger.add_attribute(
+      "Channel", boost::log::attributes::constant<std::string>("diagnostic"));
+}
 
 void Logger::AddSeverity(Severity severity) const {
   ctx_->logger.add_attribute(

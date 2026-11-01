@@ -416,15 +416,12 @@ void Recompiler::Gen(token::Token_t tok, int lineno) {
 
     cur_chunk_->line_offset.try_emplace(lineno, code_size());
 
-    if (is_debug_) {
-      struct DebugAnnotationVisitor {
+    if (trace_enabled_) {
+      struct TraceAnnotationVisitor {
         Recompiler& compiler;
         std::uint32_t terms = 0;
         bool should_annotate = true;
-        DebugAnnotationVisitor(Recompiler& r, int scnno, int lineno)
-            : compiler(r) {
-          str(std::format("[{}:{}] ", scnno, lineno));
-        }
+        explicit TraceAnnotationVisitor(Recompiler& r) : compiler(r) {}
         void str(std::string s) {
           compiler.emit_const(std::move(s));
           ++terms;
@@ -649,12 +646,15 @@ void Recompiler::Gen(token::Token_t tok, int lineno) {
           }
         }
       };
-      emit_load_global("__builtin_dbgprint");
-      DebugAnnotationVisitor visitor(*this, scene_id_.value_or(-1), lineno);
+      emit_load_global("__builtin_trace");
+      emit_const(scene_id_.value_or(-1));
+      emit_const(lineno);
+      TraceAnnotationVisitor visitor(*this);
       std::visit(visitor, tok);
-      emit(sr::Call{.argcnt = visitor.terms, .kwargcnt = 0});
+      emit(sr::Call{.argcnt = visitor.terms + 2, .kwargcnt = 0});
       emit(sr::Pop{});
-
+    }
+    if (is_debug_) {
       emit_const(ToString(tok));
       emit(sr::DebugValue{});
     }
