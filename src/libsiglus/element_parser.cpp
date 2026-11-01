@@ -3341,7 +3341,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("create_string");
             continue;
           case 132:
-            append_node(Type::Callable, Member("create_number"));
+            append_callable("create_number");
             continue;
           case 129:
             append_node(Type::Callable, Member("create_weather"));
@@ -3402,13 +3402,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("set_string_param");
             continue;
           case 133:
-            append_node(Type::Callable, Member("set_number"));
+            append_callable("set_number");
             continue;
           case 136:
-            append_node(Type::Int, Member("set_number"));
+            append_callable("get_number", Type::Int);
             continue;
           case 134:
-            append_node(Type::Callable, Member("set_number_param"));
+            append_callable("set_number_param");
             continue;
           case 130:
             append_node(Type::Callable, Member("set_weather_param_type_a"));

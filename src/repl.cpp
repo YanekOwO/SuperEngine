@@ -183,7 +183,7 @@ int main(int argc, char* argv[]) {
   try {
     if (!siglus_path.empty()) {
       std::unique_ptr<libsiglus::SiglusMachine> env =
-          libsiglus::SGVMFactory(std::move(siglus_path)).Create();
+          libsiglus::SGVMFactory(fs::absolute(siglus_path)).Create();
       run_repl(*env->vm, [&env](Code* chunk) {
         env->vm->AddFiber(chunk);
         env->Run();

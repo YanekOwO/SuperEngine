@@ -315,7 +315,7 @@ TEST(ObjectDrawerTest, HitTestSamplesAlphaWhenAlphaTestIsEnabled) {
 }
 
 TEST(ObjectDrawerTest, CompositeObjectBoundsUnionLayerRectangles) {
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = OpaqueSurface(Size(10, 10)),
        .offset = Point(0, 0),
        .cut_no = 0,
@@ -344,7 +344,7 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestUsesComposedAlpha) {
   auto right = std::make_shared<SDLSurface>(Size(4, 4));
   right->Fill(RGBAColour(255, 255, 255, 255));
 
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = left, .offset = Point(0, 0), .cut_no = 0, .blend_type = 0},
       {.surface = right, .offset = Point(10, 0), .cut_no = 0, .blend_type = 0},
   };
@@ -366,7 +366,7 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestSamplesOnlyCoveredLayers) {
   spotted->Fill(RGBAColour(255, 255, 255, 0));
   spotted->Fill(RGBAColour(255, 255, 255, 255), Rect::REC(2, 1, 1, 1));
 
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = transparent,
        .offset = Point(0, 0),
        .cut_no = 0,
@@ -389,7 +389,7 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestHonoursCutOriginAndOffset) {
   surface->Fill(RGBAColour(255, 255, 255, 0));
   surface->Fill(RGBAColour(255, 255, 255, 255), Rect::REC(18, 3, 1, 1));
 
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = surface,
        .offset = Point(-3, 7),
        .cut_no = 1,
@@ -408,7 +408,7 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestHonoursCutOriginAndOffset) {
 TEST(ObjectDrawerTest, CompositeObjectHitTestCanIgnoreAlpha) {
   auto transparent = std::make_shared<SDLSurface>(Size(4, 4));
   transparent->Fill(RGBAColour(255, 255, 255, 0));
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = transparent,
        .offset = Point(0, 0),
        .cut_no = 0,
@@ -426,7 +426,7 @@ TEST(ObjectDrawerTest, CompositeObjectHitTestCanIgnoreAlpha) {
 }
 
 TEST(ObjectDrawerTest, CompositeObjectClonePreservesLayerData) {
-  std::vector<CompositeGraphicsObjectLayer> layers = {
+  std::vector<ObjectLayer> layers = {
       {.surface = OpaqueSurface(Size(3, 3)),
        .offset = Point(0, 0),
        .cut_no = 0,

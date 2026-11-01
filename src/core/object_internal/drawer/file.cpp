@@ -24,115 +24,16 @@
 
 #include "core/object_internal/drawer/file.hpp"
 
-#include "core/localrect.hpp"
 #include "core/object.hpp"
-#include "glm/gtc/matrix_transform.hpp"
-#include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/clock.hpp"
 
-#include <algorithm>
-#include <cstdint>
+#include <charconv>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
-
-namespace {
-
-RGBAColour ComposePixel(RGBAColour dst, RGBAColour src) {
-  if (src.a() == 0)
-    return dst;
-  if (src.a() == 255 || dst.a() == 0)
-    return src;
-
-  // Preserve Siglus's integer alpha and channel rounding.
-  const int alpha = src.a() + dst.a() - src.a() * dst.a() / 255;
-  const int dst_weight = (255 - src.a()) * dst.a();
-  auto channel = [&](int d, int s) {
-    return ((255 * src.a() * s + dst_weight * d) >> 8) / alpha;
-  };
-  return RGBAColour(channel(dst.r(), src.r()), channel(dst.g(), src.g()),
-                    channel(dst.b(), src.b()), alpha);
-}
-
-Rect LayerLocalRect(const CompositeGraphicsObjectLayer& layer) {
-  const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
-  const Point origin(layer.offset.x() - pattern.originX,
-                     layer.offset.y() - pattern.originY);
-  return Rect(origin, pattern.rect.size());
-}
-
-Rect ComputeCompositeBounds(
-    const std::vector<CompositeGraphicsObjectLayer>& layers) {
-  if (layers.empty())
-    throw std::runtime_error("Composite object requires at least one layer");
-
-  bool first = true;
-  Rect bounds;
-  for (const auto& layer : layers) {
-    if (!layer.surface)
-      throw std::runtime_error("Composite object layer has no surface");
-
-    const Rect layer_rect = LayerLocalRect(layer);
-    if (layer_rect.is_degenerate())
-      continue;
-
-    bounds = first ? layer_rect : bounds.Union(layer_rect);
-    first = false;
-  }
-
-  if (first)
-    throw std::runtime_error("Composite object layers are empty");
-
-  return bounds;
-}
-
-glm::mat4 BuildCompositeModelMatrix(const RenderGeometry& geometry,
-                                    const Rect& dst) {
-  glm::mat4 model(1.0f);
-  model = glm::translate(model,
-                         glm::vec3(geometry.pivot_x, geometry.pivot_y, 0.0f));
-  model = glm::rotate(model, glm::radians(geometry.rotation_degrees),
-                      glm::vec3(0.0f, 0.0f, 1.0f));
-  model = glm::translate(model,
-                         glm::vec3(-geometry.pivot_x, -geometry.pivot_y, 0.0f));
-  model = glm::translate(model, glm::vec3(dst.x(), dst.y(), 0.0f));
-  return model;
-}
-
-RenderGeometry BuildLayerGeometry(const GraphicsObjectData& data,
-                                  const GraphicsObject& go,
-                                  const CompositeGraphicsObjectLayer& layer,
-                                  const GrpRect& pattern,
-                                  std::optional<RenderState> parent_state) {
-  RenderGeometry geometry;
-  geometry.src = pattern.rect;
-
-  RenderState state = data.BuildRenderState(go);
-  if (parent_state)
-    state = RenderState::Fold(state, *parent_state);
-
-  const float pivot_x = state.pos_x + state.center_rep_x;
-  const float pivot_y = state.pos_y + state.center_rep_y;
-  const float center_x = state.center_x + state.center_rep_x + pattern.originX;
-  const float center_y = state.center_y + state.center_rep_y + pattern.originY;
-
-  geometry.pivot_x = pivot_x;
-  geometry.pivot_y = pivot_y;
-  geometry.rotation_degrees = state.rotation_degrees;
-  geometry.scale_x = state.scale_x;
-  geometry.scale_y = state.scale_y;
-  geometry.local_x = static_cast<float>(layer.offset.x()) - center_x;
-  geometry.local_y = static_cast<float>(layer.offset.y()) - center_y;
-  geometry.UpdateDstFromLocal();
-
-  return geometry;
-}
-
-}  // namespace
 
 // -----------------------------------------------------------------------
 // class GraphicsObjectOfFile
@@ -240,62 +141,28 @@ Animator* GraphicsObjectOfFile::GetAnimator() {
 // -----------------------------------------------------------------------
 // class CompositeGraphicsObject
 CompositeGraphicsObject::CompositeGraphicsObject(
-    std::vector<CompositeGraphicsObjectLayer> layers)
-    : layers_(std::move(layers)), bounds_(ComputeCompositeBounds(layers_)) {}
+    std::vector<ObjectLayer> layers) {
+  if (layers.empty())
+    throw std::runtime_error("Composite object requires at least one layer");
+  layers_.SetLayers(std::move(layers));
+  if (layers_.Bounds().is_degenerate())
+    throw std::runtime_error("Composite object layers are empty");
+}
 
 CompositeGraphicsObject::~CompositeGraphicsObject() = default;
 
 void CompositeGraphicsObject::Render(const GraphicsObject& go,
                                      std::optional<ParentObjState> parent,
                                      std::optional<ObjectMask> mask) {
-  const float parent_alpha = parent ? parent->alpha : 1.f;
-  const float alpha = GetRenderingAlpha(go, parent_alpha);
-  const std::optional<RenderState> parent_state =
-      parent ? std::make_optional(parent->render_state) : std::nullopt;
-  const ObjectParameter& param = go.Param();
-
-  for (const auto& layer : layers_) {
-    const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
-    RenderGeometry geometry =
-        BuildLayerGeometry(*this, go, layer, pattern, parent_state);
-
-    if (auto geo = ApplyClips(geometry, go, parent))
-      geometry = *geo;
-    else
-      continue;
-
-    for (SDLSurface::TextureRecord it : layer.surface->GetTextureArray()) {
-      auto src_rect = geometry.src, dst_rect = geometry.dst;
-      LocalRect coordinate_system(it.x_, it.y_, it.w_, it.h_);
-      if (!coordinate_system.intersectAndTransform(src_rect, dst_rect))
-        continue;
-
-      RenderingConfig config;
-      config.alpha = alpha;
-      config.model = BuildCompositeModelMatrix(geometry, dst_rect);
-      config.blend_type =
-          layer.blend_type == 0 ? param.composite_mode : layer.blend_type;
-      config.color = param.colour();
-      config.tint = param.tint();
-      config.mono = param.mono() / 255.f;
-      config.invert = param.invert() / 255.f;
-      const float bright = param.GetNormalizedBright();
-      const float dark = param.GetNormalizedDark();
-      config.bright = parent ? parent->EffectiveBright(bright) : bright;
-      config.dark = parent ? parent->EffectiveDark(dark) : dark;
-
-      RenderObjectWithMask({it.gltexture, src_rect}, config,
-                           {SDLSurface::screen_, dst_rect}, mask);
-    }
-  }
+  layers_.Render(*this, go, std::move(parent), std::move(mask));
 }
 
 int CompositeGraphicsObject::PixelWidth(const GraphicsObject& rp) {
-  return int(rp.Param().GetWidthScaleFactor() * bounds_.width());
+  return int(rp.Param().GetWidthScaleFactor() * layers_.Bounds().width());
 }
 
 int CompositeGraphicsObject::PixelHeight(const GraphicsObject& rp) {
-  return int(rp.Param().GetHeightScaleFactor() * bounds_.height());
+  return int(rp.Param().GetHeightScaleFactor() * layers_.Bounds().height());
 }
 
 std::unique_ptr<GraphicsObjectData> CompositeGraphicsObject::Clone() const {
@@ -304,61 +171,13 @@ std::unique_ptr<GraphicsObjectData> CompositeGraphicsObject::Clone() const {
 
 RGBAColour CompositeGraphicsObject::GetPixelColor(Point point,
                                                   int cut_no) const {
-  if (cut_no != 0)
-    return RGBAColour::Clear();
-
-  auto cut = [](const CompositeGraphicsObjectLayer& layer) {
-    return std::clamp(layer.cut_no, 0,
-                      std::max(0, layer.surface->GetNumPatterns() - 1));
-  };
-  // The first cut fixes the canvas; its placement offset does not apply.
-  const auto& base = layers_.front();
-  const auto region = base.surface->GetPixelRegion(cut(base));
-  if (!region || !region->Contains(point))
-    return RGBAColour::Clear();
-
-  auto color = base.surface->GetPixelColor(point, cut(base));
-  for (std::size_t i = 1; i < layers_.size(); ++i) {
-    const auto& layer = layers_[i];
-    const auto x = static_cast<std::int64_t>(point.x()) - layer.offset.x();
-    const auto y = static_cast<std::int64_t>(point.y()) - layer.offset.y();
-    if (x < std::numeric_limits<int>::min() ||
-        x > std::numeric_limits<int>::max() ||
-        y < std::numeric_limits<int>::min() ||
-        y > std::numeric_limits<int>::max())
-      continue;
-    color = ComposePixel(
-        color,
-        layer.surface->GetPixelColor(
-            Point(static_cast<int>(x), static_cast<int>(y)), cut(layer)));
-  }
-  return color;
+  return cut_no == 0 ? layers_.GetPixelColor(point) : RGBAColour::Clear();
 }
 
 bool CompositeGraphicsObject::HitTestAtSource(const GraphicsObject& go,
                                               const Point& source_point,
                                               bool alpha_test) const {
-  if (!alpha_test)
-    return !layers_.empty();
-
-  const Point composite_point(bounds_.x() + source_point.x(),
-                              bounds_.y() + source_point.y());
-  for (const auto& layer : layers_) {
-    const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
-    const Rect local_rect = LayerLocalRect(layer);
-    if (!local_rect.Contains(composite_point))
-      continue;
-
-    const Point layer_point(
-        pattern.rect.x() + composite_point.x() - local_rect.x(),
-        pattern.rect.y() + composite_point.y() - local_rect.y());
-    if (pattern.rect.Contains(layer_point) &&
-        layer.surface->GetRect().Contains(layer_point) &&
-        layer.surface->GetPixelAt(layer_point).a() > 0) {
-      return true;
-    }
-  }
-  return false;
+  return layers_.HitTest(source_point, alpha_test);
 }
 
 std::shared_ptr<const SDLSurface> CompositeGraphicsObject::CurrentSurface(
@@ -367,11 +186,11 @@ std::shared_ptr<const SDLSurface> CompositeGraphicsObject::CurrentSurface(
 }
 
 Rect CompositeGraphicsObject::SrcRect(const GraphicsObject& go) const {
-  return Rect::REC(0, 0, bounds_.width(), bounds_.height());
+  return Rect(Point(), layers_.Bounds().size());
 }
 
 Point CompositeGraphicsObject::DstOrigin(const GraphicsObject& go) const {
-  return Point(-bounds_.x(), -bounds_.y());
+  return Point(-layers_.Bounds().x(), -layers_.Bounds().y());
 }
 
 // ------------------------------------------------------------------------------

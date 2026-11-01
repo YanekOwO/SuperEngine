@@ -26,6 +26,7 @@
 
 #include "core/object_internal/animator.hpp"
 #include "core/object_internal/objdrawer.hpp"
+#include "core/object_internal/object_layers.hpp"
 
 #include <memory>
 #include <optional>
@@ -80,12 +81,6 @@ class GraphicsObjectOfFile : public GraphicsObjectData {
 // -----------------------------------------------------------------------
 // GraphicsObjectData class that encapsulates layered G00 files.
 
-struct CompositeGraphicsObjectLayer {
-  std::shared_ptr<SDLSurface> surface;
-  Point offset;
-  int cut_no = 0;
-  int blend_type = 0;
-};
 struct CompositeObjectPart {
   std::string file_name;
   int x = 0;
@@ -101,8 +96,7 @@ std::vector<CompositeObjectPart> ParseCompositeObjectName(
 
 class CompositeGraphicsObject : public GraphicsObjectData {
  public:
-  explicit CompositeGraphicsObject(
-      std::vector<CompositeGraphicsObjectLayer> layers);
+  explicit CompositeGraphicsObject(std::vector<ObjectLayer> layers);
   virtual ~CompositeGraphicsObject();
 
   virtual void Render(const GraphicsObject& go,
@@ -126,6 +120,5 @@ class CompositeGraphicsObject : public GraphicsObjectData {
   virtual Point DstOrigin(const GraphicsObject& go) const override;
 
  private:
-  std::vector<CompositeGraphicsObjectLayer> layers_;
-  Rect bounds_;
+  ObjectLayers layers_;
 };

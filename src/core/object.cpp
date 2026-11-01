@@ -226,7 +226,7 @@ void GraphicsObject::ReplaceFileDrawer(
 
   std::unique_ptr<GraphicsObjectData> drawer;
   if (IsCompositeObjectName(filename)) {
-    std::vector<CompositeGraphicsObjectLayer> layers;
+    std::vector<ObjectLayer> layers;
     for (const CompositeObjectPart& part : ParseCompositeObjectName(filename)) {
       layers.push_back({.surface = images->GetSurfaceNamed(part.file_name),
                         .offset = Point(part.x, part.y),

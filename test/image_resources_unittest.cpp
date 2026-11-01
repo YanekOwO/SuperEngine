@@ -25,8 +25,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "core/asset_scanner.hpp"
 #include "core/image_resources.hpp"
+#include "mock_asset_scanner.hpp"
+#include "mock_graphics_backend.hpp"
 #include "systems/igraphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/bytestream.hpp"
@@ -37,7 +38,6 @@
 #include <limits>
 #include <memory>
 #include <set>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -50,48 +50,6 @@ using ::testing::StrictMock;
 using ::testing::Throw;
 
 const std::set<std::string> kImageExtensions = {"g00", "pdt"};
-
-class MockAssetScanner : public AssetScanner {
- public:
-  MOCK_METHOD((expected<fs::path, std::runtime_error>),
-              FindFile,
-              (std::string, const std::set<std::string>&),
-              (override));
-};
-
-class MockGraphicsBackend : public IGraphicsBackend {
- public:
-  MOCK_METHOD(void, InitSystem, (Size, bool), (override));
-  MOCK_METHOD(void, QuitSystem, (), (override));
-  MOCK_METHOD(Size, Resize, (Size, bool), (override));
-  MOCK_METHOD(std::shared_ptr<SDLSurface>, CreateSurface, (Size), (override));
-  MOCK_METHOD(std::shared_ptr<SDLSurface>,
-              CreateSurfaceBGRA,
-              (Size, std::span<char>, bool),
-              (override));
-  MOCK_METHOD(std::shared_ptr<SDLSurface>,
-              LoadSurface,
-              (const fs::path&),
-              (override));
-  MOCK_METHOD(std::shared_ptr<Album>, LoadAlbum, (const fs::path&), (override));
-  MOCK_METHOD(void, SetWindowTitle, (const std::string&), (override));
-  MOCK_METHOD(void, ShowSystemCursor, (bool), (override));
-  MOCK_METHOD(void, WarpMouse, (Point), (override));
-  MOCK_METHOD(void,
-              RenderFrame,
-              (const RenderFrameConfig&,
-               const DrawCallback&,
-               const DrawCallback&),
-              (override));
-  MOCK_METHOD(bool,
-              RedrawLastFrame,
-              (const RenderFrameConfig&, const DrawCallback&),
-              (override));
-  MOCK_METHOD(std::shared_ptr<SDLSurface>,
-              RenderToSurface,
-              (const RenderFrameConfig&, const DrawCallback&),
-              (override));
-};
 
 ToneCurve MakeToneCurves() {
   std::array<ToneCurveRGBMap, 2> effects{};

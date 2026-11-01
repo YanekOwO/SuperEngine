@@ -640,6 +640,46 @@ TEST_F(ElementParserTest, ObjectStringCommandsUseSimpleTypedCalls) {
   EXPECT_EQ(getter.CallFlags(), "[]s");
 }
 
+TEST_F(ElementParserTest, ObjectNumberCreationUsesSimpleCalls) {
+  // All creation overloads on a child object become ordinary native calls.
+  for (const int argc : {1, 2, 4}) {
+    ElementCode elm{38, 2, -1, 0, 93, -1, 1, 132};
+    std::vector<Value> args{v("font")};
+    while (args.size() < argc)
+      args.push_back(v(1));
+    elm.ForceBind({argc == 1 ? 0 : argc == 2 ? 1 : 2, std::move(args)});
+    auto parsed = chain(elm);
+    EXPECT_EQ(parsed.chain.GetType(), Type::None);
+    EXPECT_EQ(parsed.CallFlags(), "[]s");
+  }
+}
+
+TEST_F(ElementParserTest, ObjectNumberValueSetterUsesSimpleCall) {
+  // A numeric value setter drops the legacy overload envelope.
+  ElementCode elm{37, 2, -1, 0, 133};
+  elm.ForceBind({0, {v(12)}});
+  auto parsed = chain(elm);
+  EXPECT_EQ(parsed, "stage.back.object[int:0].set_number(int:12)");
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ObjectNumberFormattingUsesSimpleCall) {
+  // Formatting passes all six integer options directly to its native method.
+  ElementCode elm{37, 2, -1, 0, 134};
+  elm.ForceBind({0, std::vector<Value>(6, v(1))});
+  auto parsed = chain(elm);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ObjectNumberGetterIsImplicitTypedCall) {
+  // Getter code selects get_number and produces an integer without arguments.
+  auto parsed = chain(38, 2, -1, 0, 136);
+  EXPECT_EQ(parsed, "stage.front.object[int:0].get_number()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
 TEST_F(ElementParserTest, ObjectGetFilePathIsImplicitGetterCall) {
   auto parsed = chain(37, 2, -1, 10, 62);
   EXPECT_EQ(parsed, "stage.back.object[int:10].get_file_path()");

@@ -34,6 +34,7 @@
 #include "core/object_internal/drawer/file.hpp"
 #include "core/object_internal/drawer/gan.hpp"
 #include "core/object_internal/drawer/movie.hpp"
+#include "core/object_internal/drawer/number.hpp"
 #include "core/object_internal/drawer/string.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
@@ -1053,6 +1054,60 @@ void BindObject(SiglusMachine& runtime) {
         }
       },
       sb::vararg);
+
+  object.def(
+      "create_number",  // object.create_number(atlas[, display[, x, y]])
+      [images](ObjectHandle* h, std::vector<sr::Value> args) {
+        if (args.size() != 1 && args.size() != 2 && args.size() != 4)
+          throw sr::RuntimeError(
+              "Object.create_number expects 1, 2, or 4 arguments");
+        const auto* filename = args[0].Get_if<sr::String>();
+        if (!filename || filename->str_.empty())
+          throw sr::RuntimeError(
+              "Object.create_number expects a nonempty filename");
+        const int visible =
+            args.size() >= 2 ? RequireInt(args[1], "create_number display") : 0;
+        const int x =
+            args.size() == 4 ? RequireInt(args[2], "create_number x") : 0;
+        const int y =
+            args.size() == 4 ? RequireInt(args[3], "create_number y") : 0;
+        if (!images)
+          throw sr::RuntimeError(
+              "Object.create_number requires image resources");
+        auto drawer = std::make_unique<NumberDrawer>(
+            images->GetSurfaceNamed(filename->str_));
+        h->object->Reset();
+        h->object->SetDrawer(std::move(drawer));
+        h->object->SetFilePath(filename->str_);
+        auto& param = h->object->Param();
+        param.SetVisible(visible);
+        param.SetX(x);
+        param.SetY(y);
+      },
+      sb::vararg);
+  object.def("set_number", [](ObjectHandle* h, int value) {
+    if (auto* drawer = h->object->GetDrawer<NumberDrawer>())
+      drawer->SetNumber(value);
+  });
+  object.def("get_number", [](ObjectHandle* h) {
+    auto* drawer = h->object->GetDrawer<NumberDrawer>();
+    return drawer ? drawer->value() : 0;
+  });
+  object.def("set_number_param",
+             // object.set_number_param(digits, zero, sign, pack_sign,
+             // space_mode, space)
+             [](ObjectHandle* h, int digits, int zero, int sign, int pack_sign,
+                int space_mode, int space) {
+               if (auto* drawer = h->object->GetDrawer<NumberDrawer>()) {
+                 drawer->SetStyle(NumberObjectStyle{.digits = digits,
+                                                    .zero = zero != 0,
+                                                    .sign = sign != 0,
+                                                    .pack_sign = pack_sign != 0,
+                                                    .space_mode = space_mode,
+                                                    .space = space});
+               }
+             });
+
   object.def(
       "create_movie",
       [system, asset_scanner, backend](ObjectHandle* h,
@@ -1167,11 +1222,17 @@ void BindObject(SiglusMachine& runtime) {
 
   object.def(
       "get_size_x",
-      [](const ObjectHandle* h, int cut_no) { return h->object->PixelWidth(); },
+      [](const ObjectHandle* h, int cut_no) {
+        if (const auto* drawer = h->object->GetDrawer<NumberDrawer>())
+          return drawer->PatternSize(cut_no).width();
+        return h->object->PixelWidth();
+      },
       sb::arg("cut_no") = 0);
   object.def(
       "get_size_y",
       [](const ObjectHandle* h, int cut_no) {
+        if (const auto* drawer = h->object->GetDrawer<NumberDrawer>())
+          return drawer->PatternSize(cut_no).height();
         return h->object->PixelHeight();
       },
       sb::arg("cut_no") = 0);

@@ -1,0 +1,51 @@
+
+set_title("Number object demo");
+number_bg = Object(0, 0);
+number_bg.create_rect(0, 0, 1280, 720, 100, 125, 150, 255, 1);
+
+fn number_label(index, y, text) {
+  object = Object(0, index);
+  object.create_string(text, 1, 480, y);
+  object.set_string_param(22, 0, 0, 0, 0, 1, 0);
+}
+
+fn number_row(index, y, value, digits, zero, mode, space) {
+  object = Object(0, index);
+  object.create_number("sys_day_num01", 1, 100, y);
+  // Options: field digits, leading zeros, sign, packed sign, spacing mode, space.
+  // Mode 0 adds space to the zero cut's width; mode 1 uses space alone.
+  object.set_number_param(digits, zero, 0, 1, mode, space);
+  object.set_number(value);
+  object.set_scale(600, 600);
+}
+
+// Zero is visible even when the value has no significant nonzero digits.
+number_row(1, 100, 0, 1, 1, 0, 11);
+number_label(11, 100, "Zero");
+
+number_row(2, 200, 12, 0, 0, 0, 11);
+number_label(12, 200, "12: image spacing + 11");
+
+// A three-digit field with leading zeros displays 7 as 007.
+number_row(3, 300, 7, 3, 1, 0, 11);
+number_label(13, 300, "007: leading zero padding");
+
+number_row(4, 400, 123, 0, 0, 1, 105);
+number_label(14, 400, "123: fixed 105-pixel advance");
+
+number_alt = Object(0, 5);
+number_alt.create_number("sys_day_num02", 1, 100, 500);
+number_alt.set_number(24);
+number_alt.set_scale(600, 600);
+number_label(15, 500, "24: second day-number atlas");
+
+// Size getters describe an unscaled atlas cut, not the entire rendered number.
+print("[number_object] Value:", number_alt.get_number());
+print("[number_object] Zero cut size:", number_alt.get_size_x(), number_alt.get_size_y());
+number_label(16, 650, "Click or press Enter to finish the demo.");
+print("[number_object] WAIT - click or press Enter to finish the demo.");
+await wait_key();
+
+for (index = 0; index < 17; index += 1)
+  Object(0, index).free();
+print("[number_object] COMPLETE");
