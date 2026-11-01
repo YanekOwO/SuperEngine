@@ -294,6 +294,14 @@ void VM::CollectGarbage() {
   for (auto& [name, mod] : module_cache_)
     collector.MarkSub(mod);
   gc_->Sweep();
+
+  if (gc_threshold_ > 0) {
+    const size_t live_bytes = gc_->AllocatedBytes();
+    constexpr size_t maximum = std::numeric_limits<size_t>::max();
+    gc_threshold_ = live_bytes > maximum / 2
+                        ? maximum
+                        : std::max(kMinimumGcThreshold, live_bytes * 2);
+  }
 }
 
 Value VM::AddTrack(TempValue&& t) { return gc_->TrackValue(std::move(t)); }
@@ -361,10 +369,8 @@ Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
     }
 
     // run garbage collector periodically
-    if (gc_threshold_ > 0 && gc_->AllocatedBytes() >= gc_threshold_) {
+    if (gc_threshold_ > 0 && gc_->AllocatedBytes() >= gc_threshold_)
       CollectGarbage();
-      gc_threshold_ *= 2;
-    }
 
     // Remove dead fibers and record last result
     MaybeSweepDeadFibres();

@@ -57,17 +57,16 @@ class GarbageCollector {
   [[nodiscard]] auto Allocate(Args&&... args) -> std::add_pointer_t<T>
     requires is_object<T>
   {
-    auto obj = static_cast<T*>(::operator new(sizeof(T)));
-    allocated_bytes_ += sizeof(T);
-    new (obj) T(std::forward<Args>(args)...);
-
+    auto* obj = new T(std::forward<Args>(args)...);
     TrackObject(obj);
     return obj;
   }
 
   Value TrackValue(TempValue&& t);
+  // Takes ownership of a constructed object that has not been registered yet.
   void TrackObject(IObject* obj);
 
+  // Registered object sizes; excludes owned buffers and native payloads.
   size_t AllocatedBytes() const;
 
   void UnmarkAll() const;

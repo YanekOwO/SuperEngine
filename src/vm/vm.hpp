@@ -60,6 +60,8 @@ struct UnhandledError : public std::runtime_error {
 };
 
 class VM {
+  static constexpr size_t kMinimumGcThreshold = 1024 * 1024;
+
  public:
   explicit VM(std::shared_ptr<GarbageCollector> gc);
   explicit VM(std::shared_ptr<GarbageCollector> gc,
@@ -92,7 +94,7 @@ class VM {
   // REPL support: execute a single chunk, preserving VM state (globals, etc.)
   Value Evaluate(Code* chunk);
 
-  // Trigger garbage collection: mark-root and sweep unreachable objects
+  // Collect unreachable objects and adapt the threshold if automatic GC is on.
   void CollectGarbage();
   // Let the garbage collector track a Value allocated elsewhere
   Value AddTrack(TempValue&& t);
@@ -109,7 +111,8 @@ class VM {
   //----------------------------------------------------------------
   // Public VM state
   std::shared_ptr<GarbageCollector> gc_;
-  size_t gc_threshold_ = 1024 * 1024;
+  // Zero disables automatic GC for VMs sharing another VM's collector.
+  size_t gc_threshold_ = kMinimumGcThreshold;
 
   Fiber* main_fiber_ = nullptr;
   std::vector<Fiber*> fibres_;

@@ -29,6 +29,7 @@
 #include "vm/iobject.hpp"
 #include "vm/value.hpp"
 
+#include <cassert>
 #include <memory>
 
 namespace serilang {
@@ -66,6 +67,7 @@ Value GarbageCollector::TrackValue(TempValue&& t) {
                     std::move(t));
 }
 void GarbageCollector::TrackObject(IObject* obj) {
+  allocated_bytes_ += obj->Size();
   GCHeader& hdr = obj->hdr_;
   hdr.next = gc_list_;
   hdr.marked = false;
@@ -83,7 +85,9 @@ void GarbageCollector::Sweep() {
     IObject* obj = *cur;
     if (!obj->hdr_.marked) {
       *cur = obj->hdr_.next;
-      allocated_bytes_ -= obj->Size();
+      const size_t size = obj->Size();
+      assert(allocated_bytes_ >= size);
+      allocated_bytes_ -= size;
       delete obj;
     } else {
       obj->hdr_.marked = false;
