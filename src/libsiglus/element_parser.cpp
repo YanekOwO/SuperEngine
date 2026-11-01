@@ -501,8 +501,10 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
                                    std::move(call)}};
     }
 
-    case 6: {  // FRAME
-      Member frame("frame");
+    case 6:   // FRAME
+    case 96:  // DISP
+    {
+      Member frame(root == 6 ? "frame" : "disp");
       elm.bind_ctx.return_type = Type::None;
       auto call = Node::BuildCall(std::move(elm.bind_ctx), AWAIT);
       elm.force_bind = false;

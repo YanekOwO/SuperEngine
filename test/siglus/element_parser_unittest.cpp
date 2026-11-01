@@ -412,6 +412,17 @@ TEST_F(ElementParserTest, FrameWaitsForBoundaryWithoutReturningValue) {
   EXPECT_EQ(parsed.CallFlags(), "[]as");
 }
 
+TEST_F(ElementParserTest, DispWaitsForBoundaryWithoutReturningValue) {
+  // Element 96 takes no arguments; its void call must suspend the script.
+  ElementCode elm{96};
+  elm.ForceBind({0, {}});
+  auto parsed = chain(elm);
+
+  EXPECT_EQ(parsed, "disp()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
+}
+
 TEST_F(ElementParserTest, Title) {
   {
     ElementCode elm{74};

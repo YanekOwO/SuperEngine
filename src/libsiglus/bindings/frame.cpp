@@ -31,6 +31,7 @@ namespace libsiglus::binding {
 void BindFrame(SiglusMachine& runtime) {
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   m.def("frame", [&runtime] { return runtime.RequestFrame(); });
+  m.def("disp", [&runtime] { return runtime.RequestFrame(); });
   runtime.reset_local_memory.emplace_back(
       [frames = runtime.frame_requests.get()] { frames->Reset(); });
 }

@@ -198,6 +198,40 @@ TEST_F(SiglusFrameWaitTest, RecompiledFrameElementSuspendsItsScene) {
   EXPECT_EQ(harness.Global("result"), sr::Value(42));
 }
 
+TEST_F(SiglusFrameWaitTest, RecompiledDispElementSuspendsItsScene) {
+  // A synthetic scene executes DISP before returning 42; the real parser
+  // and recompiler must suspend it without an explicit script await.
+  auto& runtime = harness.runtime;
+  runtime.archive = std::make_shared<Archive>(
+      std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
+  runtime.loader =
+      std::make_unique<Loader>(*runtime.archive, *runtime.vm, false);
+  harness.Bind("0_memory");
+  harness.Bind("flow");
+  FakeScene scene{.scene_name = "display", .command_name = "advance"};
+  scene.AppendElement({96});
+  scene.AppendByte(ByteCode::Cmd);
+  for (int value : {0, 0, 0, static_cast<int>(Type::None)})
+    scene.AppendInt(value);
+  scene.AppendByte(ByteCode::Push);
+  scene.AppendInt(static_cast<int>(Type::Int));
+  scene.AppendInt(42);
+  scene.AppendByte(ByteCode::Return);
+  scene.AppendInt(1);
+  scene.AppendInt(static_cast<int>(Type::Int));
+  scene.AddTo(*runtime.archive);
+  (*runtime.vm->globals_)["entry"] =
+      ResolveSceneCommand(*runtime.loader, "display", "advance");
+
+  harness.Invoke("result = entry();");
+  EXPECT_FALSE(runtime.vm->globals_->contains("result"));
+  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  harness.Pump();
+
+  EXPECT_EQ(harness.Global("result"), sr::Value(42));
+}
+
 TEST_F(SiglusFrameWaitTest, ConcurrentRequestsCompleteAtTheSameBoundary) {
   // Two independent waiters share a system frame; both resume on its
   // completion.
@@ -468,6 +502,42 @@ class SiglusFrameLoopTest : public ::testing::Test {
     };
   }
 };
+
+TEST_F(SiglusFrameLoopTest, DispPresentsSceneChangesBeforeResuming) {
+  // Show a hidden object before DISP; presentation must see it before the
+  // continuation hides it again.
+  auto object = harness.runtime.stage->objects.Get(kLayerFg, 0);
+  std::vector<int> displayed;
+  ON_CALL(*backend, RenderFrame(::testing::_, ::testing::_, ::testing::_))
+      .WillByDefault([&](const auto&, const auto&, const auto&) {
+        displayed.push_back(object->Param().visible());
+      });
+  srbind::module_ globals(harness.runtime.vm->gc_.get(),
+                          harness.runtime.vm->globals_.get());
+  globals.def("show", [&] { object->Param().SetVisible(1); });
+  globals.def("hide", [&] { object->Param().SetVisible(0); });
+  harness.Schedule("show(); await disp(); hide();");
+
+  harness.runtime.Run();
+
+  EXPECT_EQ(displayed, (std::vector<int>{0, 1}));
+  EXPECT_EQ(object->Param().visible(), 0);
+}
+
+TEST_F(SiglusFrameLoopTest, ConsecutiveDispCallsCrossFramesDuringFastForward) {
+  // Fast-forward runs two consecutive DISP calls; each continuation must
+  // observe a separate system update.
+  harness.runtime.system->set_force_fast_forward();
+  std::vector<int> observed_updates;
+  srbind::module_ globals(harness.runtime.vm->gc_.get(),
+                          harness.runtime.vm->globals_.get());
+  globals.def("observe", [&] { observed_updates.push_back(updates); });
+  harness.Schedule("await disp(); observe(); await disp(); observe();");
+
+  harness.runtime.Run();
+
+  EXPECT_EQ(observed_updates, (std::vector<int>{2, 3}));
+}
 
 TEST_F(SiglusFrameLoopTest, ResumesAfterAnUpdateAndPresentation) {
   // The first VM slice requests a frame; its continuation must observe a
