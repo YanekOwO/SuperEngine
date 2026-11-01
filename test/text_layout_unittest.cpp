@@ -44,6 +44,55 @@ TextLayout::FontMetrics Proportional(int advance) {
 
 }  // namespace
 
+class SiglusMessageFitTest : public ::testing::Test {
+ protected:
+  TextLayout layout{
+      {.engine = TextLayout::Engine::Siglus, .font_size = 20, .y_spacing = 5},
+      Size(100, 100),
+      120};
+};
+
+TEST_F(SiglusMessageFitTest, ReachingTheReserveCountsAsOverflow) {
+  // A cursor immediately above the reserve fits; exact equality must trigger
+  // a page boundary according to the legacy conservative comparison.
+  layout.SetInsertionPoint(Point(0, 74));
+  EXPECT_TRUE(layout.CanFitMessage(25, false));
+  layout.SetInsertionPoint(Point(0, 75));
+  EXPECT_FALSE(layout.CanFitMessage(25, false));
+}
+
+TEST_F(SiglusMessageFitTest, ProjectsTheNextParagraphBeforeChecking) {
+  // The current line fits but a projected 25-pixel newline reaches the reserve.
+  layout.SetInsertionPoint(Point(0, 50));
+  EXPECT_TRUE(layout.CanFitMessage(25, false));
+  EXPECT_FALSE(layout.CanFitMessage(25, true));
+}
+
+TEST_F(SiglusMessageFitTest, ProjectsAnAlreadyOverrunLine) {
+  // Ending at the extended-width threshold does not wrap; crossing it adds a
+  // line before the vertical reserve comparison.
+  layout.SetInsertionPoint(Point(100, 50));
+  EXPECT_TRUE(layout.CanFitMessage(25, false));
+  layout.SetInsertionPoint(Point(101, 50));
+  EXPECT_FALSE(layout.CanFitMessage(25, false));
+}
+
+TEST_F(SiglusMessageFitTest, UsesCurrentFontSizeWithTheOriginalExtendedWidth) {
+  // A larger current font must not enlarge the physical message area or its
+  // original extended-width threshold when projecting overflow.
+  layout.SetFontSize(30);
+  layout.SetInsertionPoint(Point(91, 20));
+  EXPECT_FALSE(layout.CanFitMessage(50, false));
+}
+
+TEST_F(SiglusMessageFitTest, CheckingFitDoesNotMoveTheCursor) {
+  // Fit projections are queries; subsequent text must retain its actual cursor.
+  const Point position(101, 50);
+  layout.SetInsertionPoint(position);
+  layout.CanFitMessage(25, true);
+  EXPECT_EQ(layout.GetInsertionPoint(), position);
+}
+
 TEST(TextLayoutTest, ValidatesPhysicalExtentAndDefaultLayoutIsFull) {
   EXPECT_THROW(TextLayout({}, Size(10, 10), 9), std::invalid_argument);
   EXPECT_NO_THROW(TextLayout({}, Size(10, 10), 10));

@@ -50,6 +50,7 @@ class TextWaku;
 class TextWindowButton;
 class TextWindow;
 struct MessageStreamState;
+struct LocalConfig;
 
 struct MwndMessageState {
   bool block_started = false;
@@ -65,7 +66,7 @@ struct MwndMessageState {
 
   void ClearKoe();
   void MarkNovelClear(TextWindow& window);
-  void MarkMessageClearReady(TextWindow& window);
+  void MarkMessageClearReady(TextWindow& window, LocalConfig& config);
 };
 
 constexpr int kNumFaceSlots = MwndConfig::kNumFaceSlots;
@@ -224,6 +225,8 @@ class TextWindow {
 
   // Number of characters on the current page, used for auto-mode timing.
   int GetCharacterCount() const;
+  // A nonpositive Siglus overflow reserve disables the fit check.
+  bool CanFitMessage(bool after_newline) const;
 
   void AdvanceMessageText(std::chrono::milliseconds delta);
   void FlushMessageText();
@@ -293,6 +296,7 @@ class TextWindow {
   // Determines how the window will react to pause()
   // calls. Initialized to #WINDOW.x.R_COMMAND_MOD.
   int action_on_pause_;
+  int overflow_check_size_;
 
   bool is_visible_;
   std::size_t capture_generation_ = 0;

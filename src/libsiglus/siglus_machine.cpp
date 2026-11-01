@@ -400,7 +400,8 @@ void SiglusMachine::FinishSelection(std::shared_ptr<Selection> s) {
     if (s->window->action_on_pause())
       s->window->message_state()->MarkNovelClear(*s->window);
     else
-      s->window->message_state()->MarkMessageClearReady(*s->window);
+      s->window->message_state()->MarkMessageClearReady(*s->window,
+                                                        local_config);
     if (s->request.close_window)
       s->window->SetVisible(false);
   }

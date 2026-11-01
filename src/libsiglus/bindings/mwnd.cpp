@@ -30,6 +30,7 @@
 #include "libsiglus/bindings/selection.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
+#include "long_operations/siglus_textout.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "long_operations/wait_for_selection.hpp"
 #include "srbind/srbind.hpp"
@@ -39,6 +40,7 @@
 #include "systems/text_system.hpp"
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
+#include "vm/dict.hpp"
 #include "vm/future.hpp"
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
@@ -157,6 +159,32 @@ void BindMwnd(SiglusMachine& runtime) {
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
+  m.def(
+      "set_mwnd",
+      [&text = sys->text()](std::vector<sr::Value> raw) {
+        const auto packet = CallPacket::DecodeFrom(std::move(raw));
+        // set_mwnd overload zero selects a window reference, which requires
+        // layer-aware active-window state. Defer it rather than losing the
+        // reference's stage layer by treating it as a window number.
+        if (packet.overload_id == 0)
+          throw sr::RuntimeError(
+              "set_mwnd window-reference selection is not supported");
+
+        if (packet.overload_id && packet.overload_id != 1)
+          throw sr::RuntimeError("Unsupported set_mwnd overload: " +
+                                 std::to_string(*packet.overload_id));
+        if (packet.kwargs && !packet.kwargs->map.empty())
+          throw sr::RuntimeError("set_mwnd does not accept tagged arguments");
+        if (packet.args.size() != 1)
+          throw sr::RuntimeError("set_mwnd requires one window number");
+
+        const int index = RequireInt(packet.args.front(), "set_mwnd");
+        if (index < 0 || !text.mwnd_config().HasWindow(index))
+          throw sr::RuntimeError("Invalid message-window number: " +
+                                 std::to_string(index));
+        text.set_active_window(index);
+      },
+      sb::vararg);
   m.def("get_mwnd",
         [&text = sys->text()]() -> int { return text.active_window(); });
 
@@ -361,8 +389,8 @@ void BindMwnd(SiglusMachine& runtime) {
     auto message = state(h);
     if (message->block_started)
       return;
-    if (message->clear_ready) {
-      auto window = get(h);
+    auto window = get(h);
+    if (message->clear_ready || !window->CanFitMessage(false)) {
       sys->text().Snapshot();
       window->ClearWin();
       sys->text().NewPageOnWindow(std::move(window));
@@ -397,7 +425,7 @@ void BindMwnd(SiglusMachine& runtime) {
         if (cfg->ignore_r)
           return lop::MakeResolvedFuture(*vm.gc_);
         return wait(h, vm,
-                    get(h)->action_on_pause()
+                    get(h)->action_on_pause() && get(h)->CanFitMessage(true)
                         ? lop::SiglusMwndWaitOperation::AfterWait::Paragraph
                         : lop::SiglusMwndWaitOperation::AfterWait::Clear);
       });
@@ -415,11 +443,16 @@ void BindMwnd(SiglusMachine& runtime) {
     page(h).Submit(msgcmd::ClearIndentation{});
     page(h).Submit(msgcmd::HardBreak{});
   });
-  auto clear = [state, page](MwndHandle* h) {
-    state(h)->MarkMessageClearReady(page(h));
+  auto clear = [state, page, sys](MwndHandle* h) {
+    state(h)->MarkMessageClearReady(page(h), sys->local_config());
   };
   mwnd.def("clear", clear);
-  mwnd.def("novel_clear", clear);
+  mwnd.def("novel_clear", [state, page](MwndHandle* h) {
+    auto& window = page(h);
+    state(h)->MarkNovelClear(window);
+    window.Submit(msgcmd::ClearIndentation{});
+    window.Submit(msgcmd::HardBreak{});
+  });
   mwnd.def("clear_face", [get](MwndHandle* h) {
     if (auto* waku = get(h)->GetTextboxWaku())
       waku->ClearFaces();
@@ -448,23 +481,29 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::vararg);
   mwnd.def(
       "print",
-      [get, sys](MwndHandle* h, std::vector<sr::Value> args) {
+      [get, sys, context](MwndHandle* h, sr::VM& vm,
+                          std::vector<sr::Value> args) -> sr::Value {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         if (packet.args.empty())
-          return;
-        const std::string text = AsString(packet.args.front());
+          return lop::MakeResolvedFuture(*vm.gc_);
+        std::string text = AsString(packet.args.front());
         if (text.empty())
-          return;
+          return lop::MakeResolvedFuture(*vm.gc_);
 
         std::shared_ptr<TextWindow> window = get(h);
         const bool multi_message = sys->local_config().multi_msg_mode;
         if (multi_message)
           window->BeginMultiMessage();
-        window->PrepareMessageText([&text](TextWindow& target) {
-          target.SubmitText(msgcmd::Text{text, {}});
-        });
-        if (!multi_message)
-          window->FlushMessageText();
+        if (multi_message || sys->local_config().async_msg_mode) {
+          window->PrepareMessageText([&text](TextWindow& target) {
+            target.SubmitText(msgcmd::Text{text, {}});
+          });
+          return lop::MakeResolvedFuture(*vm.gc_);
+        }
+        auto task = std::make_unique<lop::SiglusTextoutOperation>(
+            sys, std::move(window), std::move(text));
+        return sr::Value(
+            context->MakeFuture(vm, std::move(task), sys->event_ptr().get()));
       },
       sb::vararg);
   mwnd.def("ruby_start", [page, state](MwndHandle* h, std::string ruby) {

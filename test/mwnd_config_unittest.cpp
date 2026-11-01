@@ -28,6 +28,34 @@
 
 #include <gtest/gtest.h>
 
+class MwndOverflowConfigTest : public ::testing::Test {
+ protected:
+  Gameexe gameexe;
+};
+
+TEST_F(MwndOverflowConfigTest, MissingSiglusReserveDefaultsToZero) {
+  // No overflow reserve is configured; novel pagination checks stay disabled.
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).overflow_check_size,
+            0);
+}
+
+TEST_F(MwndOverflowConfigTest, ReadsIndependentNumberedWindowReserves) {
+  // Numbered windows use their own reserves through either supported spelling
+  // of the window index.
+  gameexe.parseLine("MWND.0.OVERFLOW_CHECK_SIZE = 40");
+  gameexe.parseLine("MWND.001.OVERFLOW_CHECK_SIZE = 200");
+  const auto config = MwndConfig::ParseSiglus(gameexe);
+  EXPECT_EQ(config.GetWindow(0).overflow_check_size, 40);
+  EXPECT_EQ(config.GetWindow(1).overflow_check_size, 200);
+}
+
+TEST_F(MwndOverflowConfigTest, RealliveDoesNotUseSiglusOverflowReserves) {
+  // Siglus-only configuration must not change RealLive pause behavior.
+  gameexe.parseLine("MWND.000.OVERFLOW_CHECK_SIZE = 200");
+  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWindow(0).overflow_check_size,
+            0);
+}
+
 TEST(MwndConfigTest, SiglusMessageLinesFitTheConfiguredWindow) {
   Gameexe gameexe;
   gameexe.parseLine("MWND.000.WINDOW_POS = 0,472");

@@ -978,6 +978,39 @@ TEST_F(ElementParserTest, GlobalFaceCommandsTargetActiveWindow) {
   EXPECT_EQ(chain(72), "mwnd.clear_face()");
 }
 
+TEST_F(ElementParserTest, SetMwndPreservesNumberOverloadWithoutAwaiting) {
+  // Select a numbered window; the immediate call retains its overload and
+  // argument so the native binding can distinguish it from window references.
+  ElementCode elm{8};
+  elm.ForceBind({1, {v(4)}});
+  const auto parsed = chain(elm);
+
+  EXPECT_EQ(parsed, "set_mwnd[1](int:4)");
+  EXPECT_EQ(parsed.CallFlags(), "[1]");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+}
+
+TEST_F(ElementParserTest, SetMwndPreservesDeferredReferenceOverload) {
+  // A reference-form call must retain overload zero so the native binding can
+  // reject that deferred form rather than interpreting it as a window number.
+  ElementCode elm{8};
+  elm.ForceBind({0, {list({v(38), v(3), v(-1), v(4)})}});
+  const auto parsed = chain(elm);
+
+  EXPECT_EQ(parsed, "set_mwnd[0]([int:38,int:3,int:-1,int:4])");
+  EXPECT_EQ(parsed.CallFlags(), "[0]");
+}
+
+TEST_F(ElementParserTest, OverflowPrintStringFormWaitsForReveal) {
+  // The string form shares the ordinary print binding, so it must inherit the
+  // same implicit reveal wait as global and indexed print commands.
+  ElementCode elm{38, 3, -1, 0, 57};
+  elm.ForceBind({1, {v("hello")}});
+  const auto parsed = chain(elm);
+  EXPECT_EQ(parsed, "stage.front.mwnd[int:0].print(str:hello)");
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
+}
+
 TEST_F(ElementParserTest, Mwnd) {
   {
     ElementCode elm{22};
@@ -1046,7 +1079,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.print(str:hello)");
     EXPECT_EQ(parsed.chain.kidoku, 105);
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{12};
@@ -1055,7 +1088,7 @@ TEST_F(ElementParserTest, Mwnd) {
     auto parsed = chain(elm);
     EXPECT_EQ(parsed, "mwnd.print(int:123)");
     EXPECT_EQ(parsed.chain.kidoku, 106);
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{21};

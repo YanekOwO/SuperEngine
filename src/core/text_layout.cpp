@@ -326,6 +326,15 @@ void TextLayout::HardBreak() {
   splitting_roman_run_ = false;
 }
 
+bool TextLayout::CanFitMessage(int bottom_reserve, bool after_newline) const {
+  std::int64_t y = insertion_.y();
+  if (std::int64_t(insertion_.x()) + settings_.font_size > extended_width_)
+    y += GetLineHeight();
+  if (after_newline)
+    y += GetLineHeight();
+  return y < std::int64_t(normal_size_.height()) - bottom_reserve;
+}
+
 void TextLayout::NextMessage(const TextLayout& defaults) {
   const Point position = insertion_;
   const NameMode mode = name_mode_;

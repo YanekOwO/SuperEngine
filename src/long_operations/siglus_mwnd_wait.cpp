@@ -168,7 +168,7 @@ void SiglusMwndWaitOperation::FinishWait() {
       return;
     }
     case AfterWait::Clear:
-      message_state_->MarkMessageClearReady(*window_);
+      message_state_->MarkMessageClearReady(*window_, local_config_);
       return;
   }
 }
@@ -180,6 +180,5 @@ int SiglusMwndWaitOperation::AutoModeCharCount() {
 
   return window_->GetCharacterCount();
 }
-
 
 }  // namespace lop

@@ -32,25 +32,27 @@
 
 namespace lop {
 
-SiglusTextoutOperation::SiglusTextoutOperation(System* system, std::string text)
-    : system_(system), text_(std::move(text)) {}
+SiglusTextoutOperation::SiglusTextoutOperation(
+    System* system,
+    std::shared_ptr<TextWindow> window,
+    std::string text)
+    : system_(system), window_(std::move(window)), text_(std::move(text)) {}
 
 Task<int> SiglusTextoutOperation::Run(WaitContext& waits) {
-  if (!system_)
+  if (!system_ || !window_)
     co_return 0;
 
-  auto window = system_->text().GetCurrentMwnd();
   while (system_->text().IsReadingBacklog())
     co_await waits.Schedule(false);
-  window->PrepareMessageText(
+  window_->PrepareMessageText(
       [this](TextWindow& page) { page.SubmitText(msgcmd::Text{text_, {}}); });
-  while (window->HasPendingMessageText()) {
+  while (window_->HasPendingMessageText()) {
     if (system_->text().IsReadingBacklog()) {
       co_await waits.Schedule(false);
       continue;
     }
     if ((co_await waits.Schedule()) == WaitOutcome::InterruptedByInput) {
-      window->FlushMessageText();
+      window_->FlushMessageText();
       // Finish this input dispatch before a subsequent pause can listen.
       co_await waits.WaitFor(std::chrono::milliseconds::zero());
     }

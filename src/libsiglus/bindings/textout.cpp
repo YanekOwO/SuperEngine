@@ -80,9 +80,10 @@ void BindTextout(SiglusMachine& runtime) {
             return lop::MakeResolvedFuture(*to->vm_.gc_);
           to->sys_->text().SetKidokuRead(already_read);
 
-          if (to->localcfg_.multi_msg_mode) {
-            auto window = to->sys_->text().GetCurrentMwnd();
+          auto window = to->sys_->text().GetCurrentMwnd();
+          if (to->localcfg_.multi_msg_mode)
             window->BeginMultiMessage();
+          if (to->localcfg_.multi_msg_mode || to->localcfg_.async_msg_mode) {
             window->PrepareMessageText([&text](TextWindow& page) {
               page.SubmitText(msgcmd::Text{text, {}});
             });
@@ -90,7 +91,7 @@ void BindTextout(SiglusMachine& runtime) {
           }
 
           auto state = std::make_unique<lop::SiglusTextoutOperation>(
-              to->sys_, std::move(text));
+              to->sys_, std::move(window), std::move(text));
           return sr::Value(to->pending_.MakeFuture(
               to->vm_, std::move(state), to->sys_->event_ptr().get()));
         });

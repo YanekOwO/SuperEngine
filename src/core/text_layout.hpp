@@ -115,6 +115,9 @@ class TextLayout {
   // state as the window-clear operation historically does.
   void Reset();
   void HardBreak();
+  // Siglus message fit, optionally projecting a newline. This query leaves
+  // the cursor unchanged; reaching the bottom reserve counts as overflow.
+  bool CanFitMessage(int bottom_reserve, bool after_newline) const;
   // Default style/geometry, at the previous cursor and current name mode.
   void NextMessage(const TextLayout& defaults);
 

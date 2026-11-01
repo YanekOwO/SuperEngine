@@ -159,6 +159,8 @@ class MwndConfig {
     // Pause behavior: 0 starts a new page, nonzero starts a new paragraph.
     // RealLive R_COMMAND_MOD or Siglus novel_mode (0 AVG, 1 novel).
     int action_on_pause = 0;
+    // Siglus bottom reserve for message overflow checks; nonpositive disables.
+    int overflow_check_size = 0;
     // Speaker-name mode: 0 inline, 1 separate name window, 2 hidden
     // (NAME_DISP_MODE)
     int name_mod = 0;

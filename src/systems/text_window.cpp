@@ -89,6 +89,7 @@ TextWindow::TextWindow(System& system,
       default_colour_(params.default_colour),
       font_colour_(params.default_colour),
       action_on_pause_(params.action_on_pause),
+      overflow_check_size_(params.overflow_check_size),
       is_visible_(false),
       namebox_config_(params.namebox),
       namebox_characters_(0),
@@ -122,9 +123,14 @@ void MwndMessageState::MarkNovelClear(TextWindow& window) {
   ClearKoe();
 }
 
-void MwndMessageState::MarkMessageClearReady(TextWindow& window) {
+void MwndMessageState::MarkMessageClearReady(TextWindow& window,
+                                             LocalConfig& config) {
   clear_ready = true;
   MarkNovelClear(window);
+  if (config.async_msg_mode_once) {
+    config.async_msg_mode = false;
+    config.async_msg_mode_once = false;
+  }
 }
 
 const MessagePage& TextWindow::GetPage() { return EnsurePage(); }
@@ -292,6 +298,7 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->default_colour_ = default_colour_;
   result->font_colour_ = font_colour_;
   result->action_on_pause_ = action_on_pause_;
+  result->overflow_check_size_ = overflow_check_size_;
   result->is_visible_ = is_visible_;
   result->SetNameboxConfig(GetNameboxConfig());
   result->namebox_characters_ = namebox_characters_;
@@ -797,6 +804,11 @@ bool TextWindow::HasPendingMessageText() const {
 
 int TextWindow::GetCharacterCount() const {
   return page_ ? std::max(0, page_->number_of_chars_on_page) : 0;
+}
+
+bool TextWindow::CanFitMessage(bool after_newline) const {
+  return overflow_check_size_ <= 0 ||
+         layout_.CanFitMessage(overflow_check_size_, after_newline);
 }
 
 void TextWindow::AdvanceMessageText(std::chrono::milliseconds delta) {

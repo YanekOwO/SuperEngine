@@ -479,6 +479,14 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
           .nodes = {Node(Type::Callable, std::move(jump)), std::move(call)}};
     }
 
+    case 8: {  // SET_MWND
+      Member set_mwnd("set_mwnd");
+      set_mwnd.is_simple = false;
+      elm.bind_ctx.return_type = Type::None;
+      return AccessChain{.root = std::monostate(),
+                         .nodes = {Node(Type::Callable, std::move(set_mwnd))}};
+    }
+
     case 116: {  // GET_MWND
       Member get_mwnd("get_mwnd", Type::Int, true);
       elm.bind_ctx.return_type = Type::Int;
@@ -3757,7 +3765,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("novel_clear", Type::None);
             continue;
           case 4:
-            append_callable("print");
+            append_callable("print", Type::None, AWAIT);
             continue;
           case 57: {
             switch (elm.bind_ctx.overload_id) {
@@ -3765,7 +3773,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                 append_callable("overflow_print");
                 break;
               case 1:
-                append_callable("print");
+                append_callable("print", Type::None, AWAIT);
                 break;
               default:
                 warn_(std::format(

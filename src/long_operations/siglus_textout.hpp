@@ -25,19 +25,24 @@
 
 #include "long_operations/long_operation.hpp"
 
+#include <memory>
 #include <string>
 
 class System;
+class TextWindow;
 
 namespace lop {
 
 class SiglusTextoutOperation final : public LongOperation {
  public:
-  SiglusTextoutOperation(System* system, std::string text);
+  SiglusTextoutOperation(System* system,
+                         std::shared_ptr<TextWindow> window,
+                         std::string text);
   Task<int> Run(WaitContext& waits) override;
 
  private:
   System* system_;
+  std::shared_ptr<TextWindow> window_;
   std::string text_;
 };
 

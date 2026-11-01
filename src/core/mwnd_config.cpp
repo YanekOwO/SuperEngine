@@ -527,6 +527,8 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     window.textbox.y_distance_from_origin = window_y;
     window.default_colour = default_colour;
     window.action_on_pause = novel_mode;
+    window.overflow_check_size =
+        SiglusInt(gexe, id, "OVERFLOW_CHECK_SIZE").value_or(0);
     window.textbox.waku_set = waku_no;
     window.name_mod = name_mode == 2 ? 2 : (name_mode == 0 && name_waku >= 0);
     if (window.name_mod == 1 && name_waku >= 0) {
