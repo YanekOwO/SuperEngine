@@ -121,14 +121,14 @@ void SiglusMachine::Start(std::optional<int> start_scene) {
     throw std::logic_error(
         "SiglusMachine::Start requires a VM, loader and Gameexe");
 
-  sr::Function* script = nullptr;
+  sr::Value script;
   if (start_scene.has_value()) {
     // An explicit --scene ID starts at the scene's main script.
     sr::Module* mod = loader->Load(*start_scene);
     const auto it = mod->globals->find("%%script");
     if (it != mod->globals->end())
-      script = it->second.Get_if<sr::Function>();
-    if (!script)
+      script = it->second;
+    if (script.Type() == sr::ObjType::Nil)
       throw sr::RuntimeError(
           std::format("Scene {}: %%script not found", *start_scene));
   } else {
@@ -405,9 +405,9 @@ void SiglusMachine::UpdateSelection(int ms) {
       if (!loader)
         throw sr::RuntimeError(
             "Selection start callback requires a scene loader");
-      auto* entry = binding::ResolveSceneEntry(*loader, s->request.start_scene,
-                                               s->request.start_entry);
-      vm->InvokeUntilBlocked(*entry, {});
+      auto entry = binding::ResolveSceneEntry(*loader, s->request.start_scene,
+                                              s->request.start_entry);
+      vm->InvokeUntilBlocked(entry, {});
     }
     for (std::size_t i = 0; i < s->items.size(); ++i)
       if (s->request.options[i].type == 1) {

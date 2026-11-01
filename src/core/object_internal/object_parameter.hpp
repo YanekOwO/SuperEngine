@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "vm/value.hpp"
+
 #include "core/button_action_table.hpp"
 #include "core/colour.hpp"
 #include "core/mwnd_config.hpp"
@@ -147,7 +149,7 @@ struct ButtonProperties {
   // WAKU.BTN settings for a configured message-window button.
   std::optional<MwndConfig::Button> config;
   // Script CALL override, owned by the resolved scene module.
-  serilang::Function* call = nullptr;
+  serilang::Value call;
   // Cursor/group hit state: NORMAL, HIT or PUSH.
   ButtonState hit_state = ButtonState::Normal;
   // Drawing state after applying SELECT, DISABLE and window policy.

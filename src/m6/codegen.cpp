@@ -24,6 +24,8 @@
 
 #include "m6/codegen.hpp"
 
+#include "m6/source_buffer.hpp"
+
 #include "utilities/mpl.hpp"
 #include "vm/object.hpp"
 #include "vm/string.hpp"
@@ -304,7 +306,12 @@ void CodeGenerator::emit_expr_node(const AwaitExpr& s) {
 }
 
 // Statement codegen
-void CodeGenerator::emit_stmt(std::shared_ptr<AST> s) {
+void CodeGenerator::emit_stmt(std::shared_ptr<AST> s, bool record_line) {
+  if (record_line && s->loc.src && !s->HoldsAlternative<BlockStmt>() &&
+      !s->HoldsAlternative<ScopeStmt>()) {
+    const auto [line, column] = s->loc.src->GetLineColumn(s->loc.begin_offset);
+    chunk_->line_offset.try_emplace(static_cast<int>(line + 1), code_size());
+  }
   s->Apply([&](auto&& n) { emit_stmt_node(n); });
 }
 
@@ -405,7 +412,7 @@ void CodeGenerator::emit_stmt_node(const ForStmt& f) {
   ++scope_depth_;
 
   if (f.init)
-    emit_stmt(f.init);
+    emit_stmt(f.init, false);
 
   auto condpos = code_size();
   if (f.cond)
@@ -417,7 +424,7 @@ void CodeGenerator::emit_stmt_node(const ForStmt& f) {
   emit(sr::JumpIfFalse{0});
   emit_stmt(f.body);
   if (f.inc)
-    emit_stmt(f.inc);
+    emit_stmt(f.inc, false);
 
   auto jmp = code_size();
   emit(sr::Jump{0});
@@ -575,6 +582,11 @@ void CodeGenerator::emit_stmt_node(const ClassDecl& cd) {
                      static_cast<uint16_t>(cd.staticfn.size()),
                      static_cast<uint16_t>(cd.properties.size())});
   emit(sr::StoreGlobal{intern_name(cd.name)});
+}
+
+void CodeGenerator::emit_stmt_node(const GotoStmt& g) {
+  emit_expr(g.target);
+  emit(sr::Goto{});
 }
 
 void CodeGenerator::emit_stmt_node(const ReturnStmt& r) {

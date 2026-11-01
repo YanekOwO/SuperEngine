@@ -44,6 +44,7 @@ struct Reserved {
     _for,
     _class,
     _fn,
+    _goto,
     _return,
     _yield,
     _spawn,

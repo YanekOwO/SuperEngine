@@ -286,7 +286,7 @@ void BindSyscom(SiglusMachine& runtime) {
         }
 
         auto [scene_name, zlabel] = ReadMenuScene(*gameexe);
-        serilang::Function* entry =
+        serilang::Value entry =
             ResolveSceneEntry(*loader, std::move(scene_name), zlabel);
 
         if (params.se_play && sys)

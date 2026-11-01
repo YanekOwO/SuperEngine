@@ -159,7 +159,8 @@ class FrameActionHandle {
             i - 1, command->str_));
       }
     }
-    manager_->Start(reference_, *duration, real_time, *resolved.function,
+
+    manager_->Start(reference_, *duration, real_time, resolved.function,
                     std::move(arguments));
   }
 
@@ -263,14 +264,14 @@ std::vector<sr::Value> FrameActionManager::MakeCallbackArguments(
 
 void FrameActionManager::RunFinal(const ActionReference& reference) {
   auto& action = ResolveAction(reference);
-  sr::Function* callback = action.function;
+  sr::Value callback = action.function;
   auto arguments = MakeCallbackArguments(action, reference);
-  action.function = nullptr;
+  action.function = sr::nil;
   action.end_action = true;
   action.GetCounter()->Set(std::max(0, action.end_time));
   // Final callbacks do not start a replacement in this slot.
   try {
-    vm_.InvokeUntilBlocked(*callback, std::move(arguments));
+    vm_.InvokeUntilBlocked(callback, std::move(arguments));
   } catch (...) {
     action.Reset();
     throw;
@@ -281,11 +282,11 @@ void FrameActionManager::RunFinal(const ActionReference& reference) {
 void FrameActionManager::Start(ActionReference reference,
                                int duration,
                                bool real_time,
-                               sr::Function& callback,
+                               sr::Value callback,
                                std::vector<FrameActionArgument> arguments) {
   auto& action = ResolveAction(reference);
   End(reference);
-  action.function = &callback;
+  action.function = callback;
   action.arguments = std::move(arguments);
   action.end_time = duration;
   std::shared_ptr<Counter> counter = action.GetCounter();
@@ -315,7 +316,7 @@ void FrameActionManager::StartConfiguredButton(
   if (command.args != std::vector<Type>{Type::FrameAction, Type::Object})
     throw sr::RuntimeError(
         "WAKU.BTN.FRAME_ACTION requires a command taking FrameAction, Object");
-  Start({owner->GetFrameAction(), owner}, -1, false, *command.function, {});
+  Start({owner->GetFrameAction(), owner}, -1, false, command.function, {});
 }
 
 void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
@@ -338,7 +339,7 @@ void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
                  auto& action = *reference.action;
                  if (action.IsActive())
                    vm_.InvokeUntilBlocked(
-                       *action.function,
+                       action.function,
                        MakeCallbackArguments(action, reference));
                });
   VisitActions(global_action_, global_channels_, stage_,
@@ -367,6 +368,7 @@ void BindFrameActions(SiglusMachine& runtime) {
   sb::class_<FrameActionHandle> action_class(m, "FrameAction", false);
   sb::class_<FrameActionListHandle> list_class(m, "FrameActionList", false);
   auto* manager = runtime.frame_action_manager.get();
+
   auto start = [loader = runtime.loader.get()](
                    FrameActionHandle* action, sr::Fiber& fiber,
                    std::vector<sr::Value> args, bool real_time) {
@@ -374,6 +376,7 @@ void BindFrameActions(SiglusMachine& runtime) {
       throw sr::RuntimeError("frame-action start requires a scene loader");
     action->Start(*loader, fiber, std::move(args), real_time);
   };
+
   action_class.def(
       "start",
       [start](FrameActionHandle* action, sr::Fiber& fiber,
@@ -390,11 +393,10 @@ void BindFrameActions(SiglusMachine& runtime) {
       sb::vararg);
   action_class.def("end", &FrameActionHandle::End);
   action_class.def("is_end_action", &FrameActionHandle::IsEndAction);
-  action_class.prop_r(
-      "counter",
-      [make_counter = runtime.make_counter](FrameActionHandle* action) {
-        return make_counter(action->Resolve().GetCounter());
-      });
+  action_class.prop_r("counter", [make_counter = runtime.make_counter](
+                                     FrameActionHandle* action) {
+    return make_counter(action->Resolve().GetCounter());
+  });
   list_class.def("__getitem__", &FrameActionListHandle::Get, sb::arg("index"));
   list_class.def("size", &FrameActionListHandle::Size);
   list_class.def("resize", &FrameActionListHandle::Resize, sb::arg("size"));

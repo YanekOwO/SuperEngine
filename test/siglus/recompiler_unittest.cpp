@@ -302,6 +302,7 @@ TEST(ResolveFastSlotsTest, BitPropertyAssignmentReadsIndexAndValue) {
 }
 
 TEST(RecompilerTest, ExposesUserCommandMetadataAfterCompilation) {
+  // Compile a command declaration and retain its original entry and token line.
   auto gc = std::make_shared<serilang::GarbageCollector>();
   Recompiler compiler(gc);
   const std::vector<Parser::ParsedToken> tokens = {
@@ -313,14 +314,17 @@ TEST(RecompilerTest, ExposesUserCommandMetadataAfterCompilation) {
       Tok(token::Eof{}),
   };
 
-  compiler.Compile(tokens);
+  auto numbered = tokens;
+  for (std::size_t i = 0; i < numbered.size(); ++i)
+    numbered[i].line = i + 1;
+  compiler.Compile(numbered);
 
   ASSERT_TRUE(compiler.Ok());
   ASSERT_EQ(compiler.GetUserCommands().size(), 1);
   auto expected = UserCommandMetadata{
       .name = "$frame_action",
       .source_entry = 42,
-      .bytecode_entry = 5,
+      .token_line = 1,
       .args = {Type::FrameAction, Type::Object, Type::Int, Type::String}};
   EXPECT_EQ(compiler.GetUserCommands().front(), expected);
 }

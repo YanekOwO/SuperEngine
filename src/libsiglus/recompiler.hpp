@@ -58,7 +58,7 @@ struct CompileError {
 struct UserCommandMetadata {
   std::string name;
   int source_entry = -1;
-  int bytecode_entry = -1;
+  int token_line = -1;
   std::vector<Type> args;
 
   bool operator==(const UserCommandMetadata&) const = default;
@@ -74,6 +74,11 @@ class Recompiler {
   inline std::span<const UserCommandMetadata> GetUserCommands() const {
     return user_commands_;
   }
+  const std::unordered_map<int, int>& GetZlabels() const {
+    return zlabel_lines_;
+  }
+  const std::unordered_map<int, int>& GetLabels() const { return label_lines_; }
+  int GetMainLine() const { return main_line_; }
   inline void ClearErrors() { errors_.clear(); }
   inline serilang::Code* GetCode() const { return cur_chunk_; }
 
@@ -84,26 +89,23 @@ class Recompiler {
   void Gen(token::Token_t tok, int lineno = -1);
   void Finish();
 
-  struct ZlabelRecord {
-    int id = -1;
-    std::size_t bytecode_entry = 0;
-  };
-
   // Data members
   std::shared_ptr<serilang::GarbageCollector> gc_;
   serilang::Code* cur_chunk_ = nullptr;
   std::size_t initial_jump_site_ = 0;
   std::size_t main_entry_ = 0;
   bool is_finalized_ = false;
+  int main_line_ = 1;
+  std::size_t handler_site_ = 0;
+  std::vector<std::size_t> return_sites_;
+  std::unordered_map<int, int> label_lines_;
+  std::unordered_map<int, int> zlabel_lines_;
 
   std::optional<int> scene_id_;
   std::vector<Property> scene_properties_;
   std::vector<UserCommandMetadata> user_commands_;
-  std::vector<ZlabelRecord> zlabels_;
-  std::unordered_map<int, std::size_t> zlabel_entries_;
 
  public:
-  std::unordered_map<int, std::size_t> subroutine_entries_;
   serilang::Module* module_ = nullptr;
   bool is_debug_ = false;
 
@@ -138,19 +140,10 @@ class Recompiler {
 
   void emit_store_global(std::string id);
   void emit_load_global(std::string id);
-  void emit_make_function(std::size_t entry, std::size_t nargs);
-  void emit_store_function_global(std::string id,
-                                  std::size_t entry,
-                                  std::size_t nargs);
-  std::size_t emit_user_command_wrapper(const UserCommandMetadata& command);
   void emit_scene_property_table();
   void emit_load_proplist(int scene);
   void emit_init_value(Type type, int size = 0);
 
-  // Patch sites and labels
-  std::vector<std::optional<std::size_t>> label_offsets_;
-  std::vector<std::vector<std::size_t>> patch_sites_;
-  void add_patch_site(int lid, std::size_t site);
   void patch(std::size_t site, std::size_t target);
 
  private:
@@ -188,5 +181,36 @@ class Recompiler {
   void emit_elm_node(const elm::Subscript& nd);
   void emit_elm_node(const elm::SetMember& nd);
 };
+
+/*
+Recompiler generated code:
+
+  Jump bootstrap
+
+dispatch_entry:
+  owns_bank = nil
+  TryBegin error_handler
+  owns_bank = __builtin_init_call(entry, arguments)
+  Goto entry[0]
+
+  ... compiled code for every scene token ...
+
+  Push nil                  // EOF / fallthrough result
+return_entry:
+  TryEnd
+  if owns_bank: pop_bank()
+  Return
+
+error_handler:
+  if owns_bank: pop_bank()
+  Throw
+
+bootstrap:
+  %%dispatch = MakeFunction(this_code, dispatch_entry,
+                            one_parameter, variadic)
+  ... initialize scene properties ...
+  Return nil
+
+*/
 
 }  // namespace libsiglus

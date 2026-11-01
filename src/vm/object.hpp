@@ -36,6 +36,7 @@
 #include <bit>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -53,6 +54,8 @@ struct Code final : public IObject {
   std::string Str() const override;
   std::string Desc() const override;
 
+  // Executable line starts; missing lines resolve to the next mapped line.
+  std::map<int, uint32_t> line_offset;
   std::vector<std::byte> code;
   std::vector<Value> const_pool;
   std::vector<std::string> fast_locals;

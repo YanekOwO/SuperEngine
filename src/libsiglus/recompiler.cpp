@@ -37,6 +37,7 @@
 
 #include "libsiglus/element.hpp"
 #include "libsiglus/intern_name.hpp"
+#include "libsiglus/scene_entry.hpp"
 #include "libsiglus/token.hpp"
 #include "libsiglus/types.hpp"
 #include "libsiglus/value.hpp"
@@ -328,20 +329,6 @@ std::string CompileError::ToString() const {
   return ret;
 }
 
-namespace {
-
-uint16_t fast_local_slot(int id) {
-  if (id < 0)
-    throw std::runtime_error("Codegen: invalid fast-local id " +
-                             std::to_string(id));
-  if (id > std::numeric_limits<uint16_t>::max())
-    throw std::runtime_error("Codegen: too many fast locals (" +
-                             std::to_string(id) + ')');
-  return static_cast<uint16_t>(id);
-}
-
-}  // namespace
-
 DomainLogger logger("Recompiler");
 
 Recompiler::Recompiler(std::shared_ptr<serilang::GarbageCollector> gc)
@@ -363,20 +350,62 @@ void Recompiler::SetSceneProperties(int scene_id,
 }
 
 void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
+  constexpr unsigned shift = kSceneArgumentSlot - 1;
   if (auto plan = resolve_fast_slots(tokens)) {
-    cur_chunk_->fast_locals.resize(plan->total_fast_locals);
-    for (uint16_t i = 0; i < plan->total_fast_locals; ++i) {
-      cur_chunk_->fast_locals[i] =
-          i == 0 ? std::string("fn") : 't' + std::to_string(i);
-    }
+    const unsigned count = plan->total_fast_locals + shift;
+    if (count > std::numeric_limits<uint16_t>::max())
+      throw std::runtime_error("Codegen: too many dispatcher locals");
+    cur_chunk_->fast_locals.resize(count);
+    for (unsigned i = 0; i < count; ++i)
+      cur_chunk_->fast_locals[i] = 't' + std::to_string(i);
+    cur_chunk_->fast_locals[0] = "fn";
+    cur_chunk_->fast_locals[1] = "entry";
+    cur_chunk_->fast_locals[2] = "arguments";
+    cur_chunk_->fast_locals[3] = "owns_bank";
     tvar_slots_ = std::move(plan->slots);
-  } else
+    for (auto& slot : tvar_slots_)
+      if (slot != std::numeric_limits<uint16_t>::max())
+        slot += shift;
+  } else {
     throw std::runtime_error(plan.error());
-
-  for (const Parser::ParsedToken& tok : tokens) {
-    Gen(tok.token, tok.line);
   }
 
+  if (!tokens.empty())
+    main_line_ = tokens.front().line;
+  for (const auto& tok : tokens) {
+    if (tok.line <= 0)
+      throw std::runtime_error("Siglus token lines must be positive");
+    if (const auto* label = std::get_if<token::Label>(&tok.token)) {
+      if (!label_lines_.emplace(label->id, tok.line).second)
+        throw std::runtime_error("redefinition of label entry");
+    } else if (const auto* label = std::get_if<token::Zlabel>(&tok.token)) {
+      if (!zlabel_lines_.emplace(label->id, tok.line).second)
+        throw std::runtime_error("redefinition of zlabel entry");
+    } else if (const auto* sub = std::get_if<token::Subroutine>(&tok.token)) {
+      for (const auto& command : user_commands_)
+        if (command.source_entry == sub->source_entry)
+          throw std::runtime_error("redefinition of user command entry");
+      user_commands_.push_back(
+          {sub->name, sub->source_entry, tok.line, sub->args});
+    }
+  }
+
+  emit_const_nil();
+  emit(sr::StoreFast{kSceneOwnedBankSlot});
+  handler_site_ = code_size();
+  emit(sr::TryBegin{0});
+  emit_load_global("__builtin_init_call");
+  emit(sr::LoadFast{1});
+  emit(sr::LoadFast{2});
+  emit(sr::Call{.argcnt = 2});
+  emit(sr::StoreFast{kSceneOwnedBankSlot});
+  emit(sr::LoadFast{1});
+  emit_const(0);
+  emit(sr::GetItem{});
+  emit(sr::Goto{});
+
+  for (const Parser::ParsedToken& tok : tokens)
+    Gen(tok.token, tok.line);
   Finish();
 }
 
@@ -384,6 +413,8 @@ void Recompiler::Gen(token::Token_t tok, int lineno) {
   try {
     if (is_finalized_)
       throw std::runtime_error("cannot emit token after EOF");
+
+    cur_chunk_->line_offset.try_emplace(lineno, code_size());
 
     if (is_debug_) {
       struct DebugAnnotationVisitor {
@@ -637,76 +668,41 @@ void Recompiler::Finish() {
   if (is_finalized_)
     return;
 
-  // Payload functions should not fall through into the bootstrap block.
   emit_const_nil();
-  emit(sr::Return{});
-
-  std::vector<std::size_t> command_entries;
-  command_entries.reserve(user_commands_.size());
-  for (const auto& command : user_commands_)
-    command_entries.push_back(emit_user_command_wrapper(command));
-
-  const std::size_t bootstrap_entry = code_size();
-  patch(initial_jump_site_, bootstrap_entry);
-  emit_store_function_global("%%script", main_entry_, 0);
-
-  for (std::size_t i = 0; i < user_commands_.size(); ++i) {
-    const auto& metadata = user_commands_[i];
-    const std::string entry_name = GetUsercmdId(metadata.source_entry);
-    emit_store_function_global(entry_name, command_entries[i],
-                               metadata.args.size());
-  }
-
-  for (const auto& record : zlabels_) {
-    const std::string entry_name = GetZlabelId(record.id);
-    emit_store_function_global(entry_name, record.bytecode_entry, 0);
-  }
-
-  if (scene_id_.has_value()) {
-    emit_scene_property_table();
-    emit_store_global("__usrprop");  // __usrprop -> list
-  }
-
-  emit_const_nil();
-  emit(sr::Return{});
-
-  is_finalized_ = true;
-}
-
-std::size_t Recompiler::emit_user_command_wrapper(
-    const UserCommandMetadata& command) {
-  const auto entry = code_size();
-  // Wrap the entry itself so native callbacks and script calls both get fresh
-  // L/K banks. The wrapper stays on the fiber while the command is suspended.
-  emit_load_global("__builtin_push_frame");
-  emit(sr::MakeList{.nelms = 0});
-  emit(sr::MakeList{.nelms = 0});
-  emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
-  emit(sr::Pop{});
-
-  const auto handler = code_size();
-  emit(sr::TryBegin{0});
-  emit_make_function(command.bytecode_entry, command.args.size());
-  for (std::size_t i = 0; i < command.args.size(); ++i)
-    emit(sr::LoadFast{.slot = curcall_fast_slot(i)});
-  emit(sr::Call{.argcnt = static_cast<uint32_t>(command.args.size()),
-                .kwargcnt = 0});
+  const auto return_entry = code_size();
+  for (auto site : return_sites_)
+    patch(site, return_entry);
   emit(sr::TryEnd{});
 
-  auto pop_frame = [&] {
-    // Leave the command's result (or exception) beneath the cleanup call.
+  const auto cleanup = [this] {
+    emit(sr::LoadFast{kSceneOwnedBankSlot});
+    const auto skip = code_size();
+    emit(sr::JumpIfFalse{0});
     emit_load_global("__builtin_pop_frame");
-    emit(sr::Call{.argcnt = 0, .kwargcnt = 0});
+    emit(sr::Call{});
     emit(sr::Pop{});
+    patch(skip, code_size());
   };
-  pop_frame();
+  cleanup();
   emit(sr::Return{});
-
-  patch(handler, code_size());
-  pop_frame();
+  patch(handler_site_, code_size());
+  cleanup();
   emit(sr::Throw{});
 
-  return entry;
+  patch(initial_jump_site_, code_size());
+  emit_current_chunk();
+  emit_const("entry");
+  emit(sr::MakeFunction{.entry = static_cast<uint32_t>(main_entry_),
+                        .nparam = 1,
+                        .has_vararg = true});
+  emit_store_global("%%dispatch");
+  if (scene_id_.has_value()) {
+    emit_scene_property_table();
+    emit_store_global("__usrprop");
+  }
+  emit_const_nil();
+  emit(sr::Return{});
+  is_finalized_ = true;
 }
 
 void Recompiler::emit_current_chunk() { emit(sr::Push{0}); }
@@ -754,7 +750,11 @@ uint16_t Recompiler::curcall_fast_slot(int id) {
   if (id < 0)
     throw std::runtime_error("Codegen: invalid curcall id " +
                              std::to_string(id));
-  return fast_local_slot(id + 1);
+
+  if (id > std::numeric_limits<uint16_t>::max() - kSceneArgumentSlot)
+    throw std::runtime_error("Codegen: too many fast locals (" +
+                             std::to_string(id) + ')');
+  return static_cast<uint16_t>(id + kSceneArgumentSlot);
 }
 
 void Recompiler::emit_store_global(std::string id) {
@@ -762,25 +762,6 @@ void Recompiler::emit_store_global(std::string id) {
 }
 void Recompiler::emit_load_global(std::string id) {
   emit(sr::LoadGlobal{intern_name(std::move(id))});
-}
-
-void Recompiler::emit_make_function(std::size_t entry, std::size_t nargs) {
-  emit_current_chunk();
-  for (std::size_t i = 0; i < nargs; ++i)
-    emit_const("arg" + std::to_string(i));
-
-  emit(sr::MakeFunction{.entry = static_cast<uint32_t>(entry),
-                        .nparam = static_cast<uint32_t>(nargs),
-                        .ndefault = 0,
-                        .has_vararg = false,
-                        .has_kwarg = false});
-}
-
-void Recompiler::emit_store_function_global(std::string id,
-                                            std::size_t entry,
-                                            std::size_t nargs) {
-  emit_make_function(entry, nargs);
-  emit_store_global(std::move(id));
 }
 
 void Recompiler::emit_scene_property_table() {
@@ -828,17 +809,6 @@ void Recompiler::emit_init_value(Type type, int size) {
       emit_const_nil();
       break;
   }
-}
-
-void Recompiler::add_patch_site(int lid, std::size_t site) {
-  if (lid >= patch_sites_.size()) {
-    patch_sites_.resize(lid + 1), label_offsets_.resize(lid + 1);
-  }
-
-  if (label_offsets_[lid].has_value())
-    patch(site, *label_offsets_[lid]);
-  else
-    patch_sites_[lid].emplace_back(site);
 }
 
 template <typename offset_t>
@@ -941,58 +911,32 @@ void Recompiler::emit_tok(const token::Operate2& tk) {
 
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
-void Recompiler::emit_tok(const token::Label& tk) {
-  const int lid = tk.id;
-  if (label_offsets_.size() <= lid) {
-    label_offsets_.resize(lid + 1), patch_sites_.resize(lid + 1);
-  }
-  const std::size_t target = code_size();
-
-  label_offsets_[lid] = target;
-  for (auto site : patch_sites_[lid])
-    patch(site, target);
-  patch_sites_[lid].clear();
-}
-void Recompiler::emit_tok(const token::Zlabel& tk) {
-  const std::size_t loc = code_size();
-  auto [it, ok] = zlabel_entries_.emplace(tk.id, loc);
-  if (!ok) {
-    throw std::runtime_error(
-        std::format("redefinition of zlabel entry {}", tk.id));
-  }
-
-  zlabels_.push_back(ZlabelRecord{.id = tk.id, .bytecode_entry = loc});
-}
+void Recompiler::emit_tok(const token::Label&) {}
+void Recompiler::emit_tok(const token::Zlabel&) {}
 void Recompiler::emit_tok(const token::Goto& tk) {
-  auto site = code_size();
-  emit(sr::Jump{0});
-  add_patch_site(tk.label, site);
+  emit_const(label_lines_.at(tk.label));
+  emit(sr::Goto{});
 }
 void Recompiler::emit_tok(const token::GotoIf& tk) {
   emit_val(tk.src);
-  auto site = code_size();
+  const auto skip = code_size();
   if (tk.cond)
-    emit(sr::JumpIfTrue{0});
-  else
     emit(sr::JumpIfFalse{0});
-  add_patch_site(tk.label, site);
+  else
+    emit(sr::JumpIfTrue{0});
+  emit_const(label_lines_.at(tk.label));
+  emit(sr::Goto{});
+  patch(skip, code_size());
 }
 void Recompiler::emit_tok(const token::Gosub& tk) {
-  emit_current_chunk();
-  for (int i = 0; i < tk.args.size(); ++i)
-    emit_const("arg" + std::to_string(i));
-
-  auto site = code_size();
-  emit(sr::MakeFunction{.entry = 0,
-                        .nparam = tk.args.size(),
-                        .ndefault = 0,
-                        .has_vararg = false,
-                        .has_kwarg = false});
-  add_patch_site(tk.entry_id, site);
-
-  for (auto const& arg : tk.args)
+  emit_load_global("%%dispatch");
+  emit_const(label_lines_.at(tk.entry_id));
+  emit_const(static_cast<int>(tk.args.size()));
+  emit_const(static_cast<int>(SceneCallKind::Gosub));
+  emit(sr::MakeList{.nelms = 3});
+  for (const auto& arg : tk.args)
     emit_val(arg);
-  emit(sr::Call{.argcnt = tk.args.size(), .kwargcnt = 0});
+  emit(sr::Call{.argcnt = static_cast<uint32_t>(tk.args.size() + 1)});
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
 void Recompiler::emit_tok(const token::Assign& tk) {
@@ -1002,16 +946,7 @@ void Recompiler::emit_tok(const token::Duplicate& tk) {
   emit_val(tk.src);
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
-void Recompiler::emit_tok(const token::Subroutine& tk) {
-  const std::size_t loc = code_size();
-  auto [it, ok] = subroutine_entries_.emplace(tk.source_entry, loc);
-  if (!ok) {
-    throw std::runtime_error(
-        std::format("redefinition of user command entry {}", tk.source_entry));
-  }
-
-  user_commands_.emplace_back(tk.name, tk.source_entry, loc, tk.args);
-}
+void Recompiler::emit_tok(const token::Subroutine&) {}
 void Recompiler::emit_tok(const token::LocalVar& tk) {
   emit_init_value(tk.type, tk.size);
   emit(sr::StoreFast{.slot = curcall_fast_slot(tk.id)});
@@ -1026,7 +961,8 @@ void Recompiler::emit_tok(const token::Return& tk) {
       emit_val(it);
     emit(sr::MakeList{.nelms = tk.ret_vals.size()});
   }
-  emit(sr::Return{});
+  return_sites_.push_back(code_size());
+  emit(sr::Jump{0});
 }
 void Recompiler::emit_tok(const token::Eof& tk) { Finish(); }
 
@@ -1141,25 +1077,13 @@ void Recompiler::emit_elm_root(const elm::Farcall& r) {
   emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
   // (farcall, scn, z) -> (fn)
 
-  emit_load_global("__builtin_push_frame");
   for (auto const& it : r.intargs)
     emit_val(it);
-  emit(sr::MakeList{.nelms = r.intargs.size()});
+  emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.intargs.size())});
   for (auto const& it : r.strargs)
     emit_val(it);
-  emit(sr::MakeList{.nelms = r.strargs.size()});
-  emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
-  // (fn, push_frame, L[], K[]) -> (fn, nil)
-  emit(sr::Pop{});
-  // (fn, nil) -> (fn)
-
-  emit(sr::Call{.argcnt = 0, .kwargcnt = 0});
-  // -> (ret)
-
-  emit_load_global("__builtin_pop_frame");
-  emit(sr::Call{.argcnt = 0, .kwargcnt = 0});
-  emit(sr::Pop{});
-  // (ret,nil) -> (ret)
+  emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.strargs.size())});
+  emit(sr::Call{.argcnt = 2});
 }
 
 void Recompiler::emit_elm_node(const elm::Member& nd) {

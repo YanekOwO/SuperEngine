@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "vm/value.hpp"
+
 #include <string>
 
 namespace serilang {
@@ -17,12 +19,12 @@ const UserCommand& ResolveSceneUserCommand(Loader& loader,
                                            std::string scene_name,
                                            const std::string& command_name);
 
-serilang::Function* ResolveSceneEntry(Loader& loader,
-                                      std::string scene_name,
-                                      int zlabel);
+serilang::Value ResolveSceneEntry(Loader& loader,
+                                  std::string scene_name,
+                                  int zlabel);
 
-serilang::Function* ResolveSceneCommand(Loader& loader,
-                                        std::string scene_name,
-                                        const std::string& command_name);
+serilang::Value ResolveSceneCommand(Loader& loader,
+                                    std::string scene_name,
+                                    const std::string& command_name);
 
 }  // namespace libsiglus::binding

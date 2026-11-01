@@ -28,6 +28,7 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
+#include "libsiglus/scene_entry.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
@@ -53,7 +54,7 @@ static std::string NormalizeSceneName(std::string name) {
   return name;
 }
 
-static sr::Function* ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
+static sr::Value ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
   auto it = mod.globals->find(GetZlabelId(zlabel));
   if (it == mod.globals->cend())
     it = mod.globals->find("%%script");
@@ -63,12 +64,14 @@ static sr::Function* ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
         std::format("scene {} has no entry for z-label {}", mod.name, zlabel));
   }
 
-  sr::Function* fn = it->second.Get_if<sr::Function>();
-  if (!fn) {
+  const auto* bound = it->second.Get_if<sr::BoundMethod>();
+  if (!bound || !bound->method.Get_if<sr::Function>() ||
+      bound->additional_args.size() != 1 ||
+      !bound->additional_args.front().Get_if<sr::List>()) {
     throw sr::RuntimeError(
-        std::format("scene {} entry is not a function", mod.name));
+        std::format("scene {} entry is not a dispatcher adapter", mod.name));
   }
-  return fn;
+  return it->second;
 }
 
 static sr::Module& LoadScene(Loader& loader, std::string scene_name) {
@@ -82,15 +85,15 @@ static sr::Module& LoadScene(Loader& loader, std::string scene_name) {
   return *mod;
 }
 
-sr::Function* ResolveSceneEntry(Loader& loader,
-                                std::string scene_name,
-                                int zlabel) {
+sr::Value ResolveSceneEntry(Loader& loader,
+                            std::string scene_name,
+                            int zlabel) {
   return ResolveZlabelEntry(LoadScene(loader, std::move(scene_name)), zlabel);
 }
 
-sr::Function* ResolveSceneCommand(Loader& loader,
-                                  std::string scene_name,
-                                  const std::string& command_name) {
+sr::Value ResolveSceneCommand(Loader& loader,
+                              std::string scene_name,
+                              const std::string& command_name) {
   return ResolveSceneUserCommand(loader, std::move(scene_name), command_name)
       .function;
 }
@@ -146,7 +149,7 @@ void BindFlow(SiglusMachine& rt) {
         if (!mod)
           throw sr::RuntimeError("jump could not load destination scene");
 
-        sr::Function* fn = ResolveZlabelEntry(*mod, zlabel);
+        sr::Value fn = ResolveZlabelEntry(*mod, zlabel);
         vm.ScheduleExecute(fn);
         fiber.frames.clear();
       },
@@ -175,7 +178,8 @@ void BindFlow(SiglusMachine& rt) {
         });
 
   m.def("__builtin_farcall",
-        [loader = rt.loader.get()](std::string scn, int zlabel) -> sr::Value {
+        [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scn,
+                                                      int zlabel) -> sr::Value {
           const std::string dbgname = std::format("SCENE{}@{}", scn, zlabel);
           sr::Module* mod = loader->Load(NormalizeSceneName(std::move(scn)));
 
@@ -183,7 +187,13 @@ void BindFlow(SiglusMachine& rt) {
             throw sr::RuntimeError(
                 std::format("Farcall {} could not load scene", dbgname));
 
-          return ResolveZlabelEntry(*mod, zlabel);
+          const sr::Value entry = ResolveZlabelEntry(*mod, zlabel);
+          const auto* bound = entry.Get_if<sr::BoundMethod>();
+          const auto* descriptor =
+              bound->additional_args.front().Get_if<sr::List>();
+          return MakeSceneEntry(
+              *gc, mod->globals->at("%%dispatch").Get_if<sr::Function>(),
+              descriptor->items.front().Get<int>(), 2, SceneCallKind::Farcall);
         });
 
   m.def("__builtin_load_scn",

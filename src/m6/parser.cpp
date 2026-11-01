@@ -50,6 +50,14 @@ inline static SourceLocation LocRange(Token* begin, Token* end) {
 std::shared_ptr<ExprAST> Parser::ParseExpression() { return parseLogicalOr(); }
 
 std::shared_ptr<AST> Parser::ParseStatement(bool requireSemi) {
+  const SourceLocation start = it_->loc_;
+  auto statement = parseStatement(requireSemi);
+  if (statement)
+    statement->loc = start;
+  return statement;
+}
+
+std::shared_ptr<AST> Parser::parseStatement(bool requireSemi) {
   if (auto reserved = it_->GetIf<tok::Reserved>()) {
     ++it_;
 
@@ -168,6 +176,14 @@ std::shared_ptr<AST> Parser::ParseStatement(bool requireSemi) {
 
       case tok::Reserved::Type::_fn:
         return parseFuncDecl(true);
+
+      case tok::Reserved::Type::_goto: {
+        auto target = ParseExpression();
+        require<tok::Semicol>("expected ';' after goto");
+        if (!target)
+          return nullptr;
+        return std::make_shared<AST>(GotoStmt{std::move(target)});
+      }
 
       case tok::Reserved::Type::_return: {
         auto kwLoc = (it_ - 1)->loc_;

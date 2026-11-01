@@ -169,6 +169,10 @@ void Disassembler::PrintIns(Code& chunk,
     } break;
 
       // ── 4. control-flow ─────────────────────────────────────
+    case OpCode::Goto: {
+      ip += sizeof(Goto);
+      emit_mnemonic("GOTO");
+    } break;
     case OpCode::Jump: {
       const auto ins = chunk.Read<Jump>(ip);
       ip += sizeof(ins);

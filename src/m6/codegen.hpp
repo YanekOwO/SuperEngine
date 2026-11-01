@@ -128,7 +128,7 @@ class CodeGenerator {
   void emit_expr_node(const AwaitExpr& a);
 
   // -- Statement codegen ----------------------------------------------
-  void emit_stmt(std::shared_ptr<AST> s);
+  void emit_stmt(std::shared_ptr<AST> s, bool record_line = true);
   void emit_stmt_node(const ScopeStmt& s);
   void emit_stmt_node(const AssignStmt& s);
   void emit_stmt_node(const AugStmt& s);
@@ -138,6 +138,7 @@ class CodeGenerator {
   void emit_stmt_node(const BlockStmt& s);
   void emit_stmt_node(const FuncDecl& fn);
   void emit_stmt_node(const ClassDecl& cd);
+  void emit_stmt_node(const GotoStmt& g);
   void emit_stmt_node(const ReturnStmt& r);
   void emit_stmt_node(const YieldStmt& y);
   void emit_stmt_node(const ThrowStmt& t);

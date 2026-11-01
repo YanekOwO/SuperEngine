@@ -311,6 +311,11 @@ struct ClassDecl {
   std::string DebugString() const;
 };
 
+struct GotoStmt {
+  std::shared_ptr<ExprAST> target;
+  std::string DebugString() const;
+};
+
 struct ReturnStmt {
   std::shared_ptr<ExprAST> value;  // nullptr means `return;`
   SourceLocation kw_loc;
@@ -365,6 +370,7 @@ using stmt_variant_t = std::variant<AssignStmt,
                                     BlockStmt,
                                     FuncDecl,
                                     ClassDecl,
+                                    GotoStmt,
                                     ReturnStmt,
                                     YieldStmt,
                                     ThrowStmt,
@@ -376,6 +382,9 @@ using stmt_variant_t = std::variant<AssignStmt,
 class AST {
  public:
   AST(stmt_variant_t var) : var_(std::move(var)) {}
+
+  // Physical start of a parsed statement; synthetic nodes have no source.
+  SourceLocation loc;
 
   std::string DumpAST(std::string txt = "",
                       std::string prefix = "",

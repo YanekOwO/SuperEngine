@@ -31,6 +31,8 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/intern_name.hpp"
 #include "libsiglus/lexeme.hpp"
+#include "libsiglus/recompiler.hpp"
+#include "libsiglus/scene_entry.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -50,6 +52,11 @@
 
 namespace libsiglus::binding {
 namespace sr = serilang;
+
+static sr::Function* Dispatcher(sr::Value entry) {
+  auto* bound = entry.Get_if<sr::BoundMethod>();
+  return bound->method.Get_if<sr::Function>();
+}
 
 class SiglusSceneEntryTest : public ::testing::Test {
  protected:
@@ -176,7 +183,74 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
     runtime.vm->Evaluate(compiler.Get());
   }
 
-  sr::Function* AddProbe(std::string name, std::string body) {
+  void InstallTokens(std::vector<token::Token_t> body, bool debug = false) {
+    std::vector<Parser::ParsedToken> tokens;
+    for (auto& token : body)
+      tokens.push_back({static_cast<int>(tokens.size() + 1), std::move(token)});
+    Recompiler compiler(runtime.vm->gc_);
+    compiler.is_debug_ = debug;
+    compiler.Compile(tokens);
+    ASSERT_TRUE(compiler.Ok());
+    auto* module = compiler.module_;
+    (*runtime.vm->builtins_)["test_scene"] = sr::Value(module);
+    sr::VM bootstrap(runtime.vm->gc_);
+    bootstrap.gc_threshold_ = 0;
+    bootstrap.globals_ = module->globals;
+    bootstrap.Evaluate(compiler.GetCode());
+    auto* dispatcher = module->globals->at("%%dispatch").Get_if<sr::Function>();
+    (*runtime.vm->globals_)["entry"] =
+        MakeSceneEntry(*runtime.vm->gc_, dispatcher, compiler.GetMainLine(), 0,
+                       SceneCallKind::Scene);
+  }
+
+  static Variable Temp(int id) { return Variable{.type = Type::Int, .id = id}; }
+
+  static token::GetProperty Argument(int id, int destination) {
+    return token::GetProperty{
+        .chain = elm::AccessChain{.root = elm::Root(Type::Int, elm::Arg{id})},
+        .dst = Temp(destination)};
+  }
+
+  static token::Command UserCall(int scene, int value) {
+    elm::Usrcmd command{.scene = scene, .entry = 5, .name = "probe"};
+    command.arguments.arg = {Integer(value)};
+    return token::Command{
+        .chain = elm::AccessChain{.root = elm::Root(Type::String, command)},
+        .dst = Variable{.type = Type::String, .id = 0}};
+  }
+
+  static token::Command FarCall(std::string scene) {
+    elm::Farcall call;
+    call.scn_name = String(std::move(scene));
+    call.zlabel = Integer(0);
+    call.intargs = {Integer(7)};
+    call.strargs = {String("farcall")};
+    return token::Command{
+        .chain = elm::AccessChain{.root = elm::Root(Type::String, call)},
+        .dst = Variable{.type = Type::String, .id = 0}};
+  }
+
+  void AddFarcallProbe(std::string body) {
+    // The scene calls a substitutable engine callable with a constant argument.
+    std::string code;
+    AppendElement(code, {39, 1});
+    code += static_cast<char>(ByteCode::Push);
+    AppendInt(code, static_cast<int>(Type::Int));
+    AppendInt(code, 0);
+    code += static_cast<char>(ByteCode::Cmd);
+    for (int value :
+         {0, 1, static_cast<int>(Type::Int), 0, static_cast<int>(Type::String)})
+      AppendInt(code, value);
+    code += static_cast<char>(ByteCode::Return);
+    AppendInt(code, 1);
+    AppendInt(code, static_cast<int>(Type::String));
+    AddCommandScene("far", "far", {}, false, std::move(code));
+    Run("fn probe(n) { " + body + " }");
+    srbind::module_ math(*runtime.vm, "math");
+    (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
+  }
+
+  sr::Value AddProbe(std::string name, std::string body) {
     // A real Siglus user command forwards its argument to an engine callable.
     // The test substitutes that callable to inspect the active L/K banks.
     std::string code;
@@ -195,9 +269,10 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
     Run("fn probe(n) { " + body + " }");
     srbind::module_ math(*runtime.vm, "math");
     (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
-    auto* command = ResolveSceneCommand(*runtime.loader, name, name);
+    auto command = ResolveSceneCommand(*runtime.loader, name, name);
     (*runtime.vm->globals_)["command"] = sr::Value(command);
-    EXPECT_EQ(command->globals, runtime.loader->Load(scene)->globals);
+    EXPECT_EQ(Dispatcher(command)->globals,
+              runtime.loader->Load(scene)->globals);
     return command;
   }
 };
@@ -274,7 +349,7 @@ TEST_F(SiglusCallMemoryTest, ExceptionRestoresCallerBeforeCatch) {
 }
 
 TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
-  auto* command = AddProbe("callback", R"(
+  auto command = AddProbe("callback", R"(
     observe(L[0], K[0]);
     L[0] = n; K[0] = "suspended";
     await gate;
@@ -283,7 +358,7 @@ TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
   )");
   auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
   (*runtime.vm->globals_)["gate"] = sr::Value(gate);
-  runtime.vm->InvokeUntilBlocked(*command, {sr::Value(17)});
+  runtime.vm->InvokeUntilBlocked(command, {sr::Value(17)});
 
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 0);
@@ -357,9 +432,223 @@ TEST_F(SiglusCallMemoryTest, PreservesArgumentTypesAndReturnValues) {
   EXPECT_EQ(runtime.vm->globals_->at("empty_result"), sr::nil);
 }
 
+TEST_F(SiglusCallMemoryTest, ZeroInstructionTokensRemainJumpTargets) {
+  // Consecutive labels have token entries even when neither emits bytecode.
+  InstallTokens({token::Goto{1}, token::Return{{Integer(0)}}, token::Label{0},
+                 token::Label{1}, token::Return{{Integer(42)}}, token::Eof{}});
+  auto* code = Dispatcher(runtime.vm->globals_->at("entry"))->chunk;
+  EXPECT_EQ(code->line_offset.size(), 6);
+  EXPECT_EQ(code->line_offset.at(3), code->line_offset.at(4));
+  Run("result = entry();");
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+}
+
+TEST_F(SiglusCallMemoryTest, DebugAnnotationsRemainAtTokenBoundaries) {
+  // Debug instrumentation runs at the target token before the scene resumes.
+  std::vector<std::string> annotations;
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def(
+      "__builtin_dbgprint",
+      [&](std::vector<sr::Value> terms) {
+        std::string text;
+        for (const auto& value : terms)
+          text += value.Str();
+        annotations.push_back(std::move(text));
+      },
+      srbind::vararg);
+  InstallTokens({token::Goto{1}, token::Return{{Integer(0)}}, token::Label{0},
+                 token::Label{1}, token::Return{{Integer(42)}}, token::Eof{}},
+                true);
+  Run("result = entry();");
+  ASSERT_EQ(annotations.size(), 3);
+  EXPECT_NE(annotations[1].find(":4]"), std::string::npos);
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+}
+
+TEST_F(SiglusCallMemoryTest, SceneFallthroughReturnsNil) {
+  // EOF supplies normal termination through the dispatcher's shared epilogue.
+  InstallTokens({token::Label{0}, token::Eof{}});
+  Run("result = entry();");
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::nil);
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledGosubReturnsItsArgument) {
+  // Enter a zero-instruction label and return the supplied argument.
+  InstallTokens(
+      {token::Gosub{.entry_id = 0, .args = {Integer(73)}, .dst = Temp(0)},
+       token::Return{{Temp(0)}}, token::Label{0},
+       token::Subroutine{.source_entry = 42, .args = {Type::Int}},
+       Argument(0, 1), token::Return{{Temp(1)}}, token::Eof{}});
+  Run("result = entry();");
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+}
+
+TEST_F(SiglusCallMemoryTest, NestedGosubPreservesCallerLocals) {
+  // A nested call overwrites its argument slot; its caller retains its own
+  // slot.
+  InstallTokens(
+      {token::Gosub{.entry_id = 0, .args = {Integer(73)}, .dst = Temp(0)},
+       token::Return{{Temp(0)}}, token::Label{0},
+       token::Subroutine{.source_entry = 42, .args = {Type::Int}},
+       token::Gosub{.entry_id = 1, .args = {Integer(99)}, .dst = Temp(1)},
+       Argument(0, 2), token::Return{{Temp(2)}}, token::Label{1},
+       token::Subroutine{.source_entry = 43, .args = {Type::Int}},
+       Argument(0, 3), token::Return{{Temp(3)}}, token::Eof{}});
+  Run("result = entry();");
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+}
+
+TEST_F(SiglusCallMemoryTest, NestedGosubPreservesDeclaredLocal) {
+  // A nested invocation gets its own declared-local slot and preserves its
+  // caller.
+  const elm::AccessChain local{.root = elm::Root(Type::Int, elm::Arg{1})};
+  InstallTokens(
+      {token::Gosub{.entry_id = 0, .args = {Integer(73)}, .dst = Temp(0)},
+       token::Return{{Temp(0)}}, token::Label{0},
+       token::Subroutine{.source_entry = 42, .args = {Type::Int}},
+       token::LocalVar{.id = 1, .type = Type::Int, .size = 0},
+       token::Assign{.dst = local, .src = Integer(42)},
+       token::Gosub{.entry_id = 1, .args = {}, .dst = Temp(1)}, Argument(1, 2),
+       token::Return{{Temp(2)}}, token::Label{1},
+       token::Subroutine{.source_entry = 43},
+       token::LocalVar{.id = 0, .type = Type::Int, .size = 0},
+       token::LocalVar{.id = 1, .type = Type::Int, .size = 0},
+       token::Assign{.dst = local, .src = Integer(99)}, token::Return{},
+       token::Eof{}});
+  Run("result = entry();");
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+}
+
+TEST_F(SiglusCallMemoryTest, MultipleReturnValuesRemainOrdered) {
+  // A dispatcher return preserves the original multi-value list representation.
+  InstallTokens({token::Return{{Integer(42), String("value")}}, token::Eof{}});
+  Run("result = entry();");
+  auto* values = runtime.vm->globals_->at("result").Get_if<sr::List>();
+  ASSERT_NE(values, nullptr);
+  ASSERT_EQ(values->items.size(), 2);
+  EXPECT_EQ(values->items[0], sr::Value(42));
+  EXPECT_EQ(values->items[1].Str(), "value");
+}
+
+TEST_F(SiglusCallMemoryTest, SuspendedGosubPreservesItsArgument) {
+  // Suspend in a subroutine and retain its argument when its caller resumes.
+  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def("__builtin_textout",
+               [gate](int, int, std::string) { return sr::Value(gate); });
+  InstallTokens(
+      {token::Gosub{.entry_id = 0, .args = {Integer(73)}, .dst = Temp(0)},
+       token::Return{{Temp(0)}}, token::Label{0},
+       token::Subroutine{.source_entry = 42, .args = {Type::Int}},
+       token::Textout{.kidoku = 0, .str = String("pause")}, Argument(0, 1),
+       token::Return{{Temp(1)}}, token::Eof{}});
+  Run("fn start() { global result; result = entry(); }");
+  runtime.vm->InvokeUntilBlocked(runtime.vm->globals_->at("start"), {});
+  ASSERT_EQ(runtime.vm->fibres_.size(), 1);
+  EXPECT_EQ(runtime.vm->fibres_.front()->state, sr::FiberState::Suspended);
+  gate->completion_promise->Resolve(sr::nil);
+  runtime.vm->Run();
+  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledUserCommandRestoresCallerBanks) {
+  // A recompiled command receives a fresh bank and restores its caller on
+  // return.
+  AddProbe("probe", "observe(L[0], K[0]); L[0] = n; return n;");
+  InstallTokens({UserCall(0, 19), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("L[0] = 42; K[0] = \"root\"; result = entry(); observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 0);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledFarcallSeedsItsBanks) {
+  // Farcall arguments initialize the destination's L/K banks.
+  AddFarcallProbe("observe(L[0], K[0]); return \"done\";");
+  InstallTokens({FarCall("far"), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("result = entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].string, "farcall");
+  EXPECT_EQ(observations[0].depth, 2);
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledFarcallRestoresBanksAfterException) {
+  // Throw from the destination and observe the original banks after catching.
+  AddFarcallProbe("L[0] = 99; throw \"failure\";");
+  InstallTokens({FarCall("far"), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("L[0] = 42; K[0] = \"root\"; try { entry(); } catch (e) {} "
+      "observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "root");
+  EXPECT_EQ(observations[0].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, SuspendedFarcallKeepsBanksUntilResumed) {
+  // Suspend inside a real farcall; resume with its banks before restoring root.
+  AddFarcallProbe(
+      "observe(L[0], K[0]); await gate; "
+      "observe(L[0], K[0]); return \"done\";");
+  InstallTokens({FarCall("far"), token::Return{{Temp(0)}}, token::Eof{}});
+  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
+  Run("fn start() { L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], K[0]); "
+      "}");
+  auto start = runtime.vm->globals_->at("start");
+  runtime.vm->InvokeUntilBlocked(start, {});
+  ASSERT_EQ(observations.size(), 1);
+  runtime.vm->CollectGarbage();
+  gate->completion_promise->Resolve(sr::nil);
+  runtime.vm->Run();
+  ASSERT_EQ(observations.size(), 3);
+  EXPECT_EQ(observations[1].integer, 7);
+  EXPECT_EQ(observations[1].string, "farcall");
+  EXPECT_EQ(observations[2].integer, 42);
+  EXPECT_EQ(observations[2].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, CommandArgumentCountFailureDoesNotAcquireBanks) {
+  // Missing command arguments fail before acquiring a bank frame.
+  AddProbe("probe", "return n;");
+  Run("try { command(); } catch (e) {} observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, InvalidFarcallArgumentsDoNotAcquireBanks) {
+  // A bad integer bank argument fails without changing the caller's bank depth.
+  AddFarcallProbe("return n;");
+  Run("try { __builtin_farcall(\"far\", 0)([\"bad\"], []); } catch (e) {} "
+      "observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, StoredCommandSurvivesGarbageCollection) {
+  // The scene module roots a borrowed adapter after its script alias is
+  // removed.
+  auto callback = AddProbe("stored", "observe(n, K[0]); return n;");
+  runtime.vm->globals_->erase("command");
+  runtime.vm->CollectGarbage();
+  runtime.vm->InvokeUntilBlocked(callback, {sr::Value(17)});
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 17);
+}
+
+TEST_F(SiglusSceneEntryTest, EntriesShareOneDispatcher) {
+  // Scene, label, and command adapters all retain the same execution function.
+  auto* dispatcher = module->globals->at("%%dispatch").Get_if<sr::Function>();
+  EXPECT_EQ(Dispatcher(module->globals->at("%%script")), dispatcher);
+  EXPECT_EQ(Dispatcher(module->globals->at(GetZlabelId(0))), dispatcher);
+  EXPECT_EQ(Dispatcher(module->globals->at(GetUsercmdId(5))), dispatcher);
+}
+
 TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
-  auto* expected = module->globals->at(GetUsercmdId(5)).Get_if<sr::Function>();
-  ASSERT_NE(expected, nullptr);
+  auto expected = module->globals->at(GetUsercmdId(5));
+  ASSERT_NE(expected.Get_if<sr::BoundMethod>(), nullptr);
   EXPECT_EQ(ResolveSceneCommand(loader, "MENU", "open"), expected);
 }
 
@@ -371,9 +660,8 @@ TEST_F(SiglusSceneEntryTest, IncludedCommandLoadsDeclaringSceneOnDemand) {
 
   EXPECT_TRUE(vm.builtins_->contains("%%siglus_module@SCENE_0001"));
   const auto* owner = loader.Load(1);
-  EXPECT_EQ(resolved.function,
-            owner->globals->at(GetUsercmdId(5)).Get_if<sr::Function>());
-  EXPECT_EQ(resolved.function->globals, owner->globals);
+  EXPECT_EQ(resolved.function, owner->globals->at(GetUsercmdId(5)));
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, owner->globals);
   EXPECT_EQ(resolved.args,
             (std::vector<Type>{Type::FrameAction, Type::Object}));
   EXPECT_EQ(&loader.ResolveUserCommand(*module, "animate"), &resolved);
@@ -382,8 +670,7 @@ TEST_F(SiglusSceneEntryTest, IncludedCommandLoadsDeclaringSceneOnDemand) {
 TEST_F(SiglusSceneEntryTest, IncludedCommandUsesAlreadyLoadedDeclaringScene) {
   AddCallbackScene({Type::FrameAction, Type::Object});
   const auto* owner = loader.Load(1);
-  const auto* expected =
-      owner->globals->at(GetUsercmdId(5)).Get_if<sr::Function>();
+  const auto expected = owner->globals->at(GetUsercmdId(5));
 
   EXPECT_EQ(ResolveSceneCommand(loader, "menu", "animate"), expected);
   EXPECT_EQ(loader.Load(1), owner);
@@ -393,10 +680,9 @@ TEST_F(SiglusSceneEntryTest, IncludedCommandTakesPrecedenceOverLocalCommand) {
   AddCommandScene("shared", "open", {Type::Int}, true);
   const auto& resolved = loader.ResolveUserCommand(*module, "OPEN");
 
-  EXPECT_EQ(resolved.function->globals, loader.Load(1)->globals);
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
   EXPECT_EQ(resolved.args, std::vector<Type>{Type::Int});
-  EXPECT_NE(resolved.function,
-            module->globals->at(GetUsercmdId(5)).Get_if<sr::Function>());
+  EXPECT_NE(resolved.function, module->globals->at(GetUsercmdId(5)));
 }
 
 TEST_F(SiglusSceneEntryTest,
@@ -410,12 +696,11 @@ TEST_F(SiglusSceneEntryTest,
 TEST_F(SiglusSceneEntryTest, LocalCommandNamesAreCaseInsensitive) {
   const int scene = AddCommandScene("other", "LoCaL");
   const auto* owner = loader.Load(scene);
-  const auto* expected =
-      owner->globals->at(GetUsercmdId(5)).Get_if<sr::Function>();
+  const auto expected = owner->globals->at(GetUsercmdId(5));
 
   EXPECT_EQ(loader.ResolveUserCommand(*owner, "LOCAL").function, expected);
   EXPECT_EQ(ResolveSceneCommand(loader, "menu", "OpEn"),
-            module->globals->at(GetUsercmdId(5)).Get_if<sr::Function>());
+            module->globals->at(GetUsercmdId(5)));
   EXPECT_THROW(loader.ResolveUserCommand(*module, "local"), sr::RuntimeError);
 }
 
@@ -424,11 +709,11 @@ TEST_F(SiglusSceneEntryTest, FiberResolvesIncludedCommandFromNearestScene) {
   sr::Fiber fiber;
   fiber.frames.push_back({});  // Native/non-scene frames are ignored.
   fiber.frames.push_back(
-      {.fn = module->globals->at("%%script").Get_if<sr::Function>()});
+      {.fn = module->globals->at("%%dispatch").Get_if<sr::Function>()});
   fiber.frames.push_back({});
 
   const auto& resolved = loader.ResolveUserCommand(fiber, "ANIMATE");
-  EXPECT_EQ(resolved.function->globals, loader.Load(1)->globals);
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
 }
 
 TEST_F(SiglusSceneEntryTest, FiberDoesNotSearchOlderScenesForLocalCommands) {
@@ -436,12 +721,13 @@ TEST_F(SiglusSceneEntryTest, FiberDoesNotSearchOlderScenesForLocalCommands) {
   const auto* current = loader.Load(other);
   sr::Fiber fiber;
   fiber.frames.push_back(
-      {.fn = module->globals->at("%%script").Get_if<sr::Function>()});
+      {.fn = module->globals->at("%%dispatch").Get_if<sr::Function>()});
   fiber.frames.push_back(
-      {.fn = current->globals->at("%%script").Get_if<sr::Function>()});
+      {.fn = current->globals->at("%%dispatch").Get_if<sr::Function>()});
 
-  EXPECT_EQ(loader.ResolveUserCommand(fiber, "LOCAL").function->globals,
-            current->globals);
+  EXPECT_EQ(
+      Dispatcher(loader.ResolveUserCommand(fiber, "LOCAL").function)->globals,
+      current->globals);
   EXPECT_THROW(loader.ResolveUserCommand(fiber, "open"), sr::RuntimeError);
 }
 
@@ -521,7 +807,8 @@ TEST_F(SiglusSceneEntryTest, IncludedFrameActionReceivesItsCounterAndOwner) {
     runtime.vm->Run();
 
     ASSERT_TRUE(action->IsActive());
-    EXPECT_EQ(action->function->globals, runtime.loader->Load(1)->globals);
+    EXPECT_EQ(Dispatcher(action->function)->globals,
+              runtime.loader->Load(1)->globals);
     EXPECT_EQ(action->end_time, -1);
     manager.AdvanceAndDispatch(std::chrono::milliseconds(3),
                                std::chrono::milliseconds(96));
@@ -595,16 +882,16 @@ TEST_F(SiglusSceneEntryTest, FrameActionClocksBorrowLiveLocalConfiguration) {
 }
 
 TEST_F(SiglusSceneEntryTest, MissingNamedCommandDoesNotFallBackToScript) {
-  ASSERT_NE(module->globals->at("%%script").Get_if<sr::Function>(), nullptr);
+  ASSERT_NE(module->globals->at("%%dispatch").Get_if<sr::Function>(), nullptr);
   EXPECT_THROW(ResolveSceneCommand(loader, "menu", "missing"),
                sr::RuntimeError);
 }
 
 TEST_F(SiglusSceneEntryTest, ZlabelResolvesLabelAndFallsBackToScript) {
-  auto* label = module->globals->at(GetZlabelId(0)).Get_if<sr::Function>();
-  auto* script = module->globals->at("%%script").Get_if<sr::Function>();
-  ASSERT_NE(label, nullptr);
-  ASSERT_NE(script, nullptr);
+  auto label = module->globals->at(GetZlabelId(0));
+  auto script = module->globals->at("%%script");
+  ASSERT_NE(label.Get_if<sr::BoundMethod>(), nullptr);
+  ASSERT_NE(script.Get_if<sr::BoundMethod>(), nullptr);
   EXPECT_EQ(ResolveSceneEntry(loader, "MENU", 0), label);
   EXPECT_EQ(ResolveSceneEntry(loader, "menu", 77), script);
 }

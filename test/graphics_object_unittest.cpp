@@ -126,7 +126,7 @@ TEST_F(GraphicsObjectTest, ButtonCloneCopiesParameters) {
 
   ASSERT_TRUE(clone.Param().button.config);
   EXPECT_EQ(clone.Param().button.config->slot_id, 2);
-  EXPECT_EQ(clone.Param().button.call, &callback);
+  EXPECT_EQ(clone.Param().button.call, serilang::Value(&callback));
   EXPECT_EQ(clone.Param().button, obj.Param().button);
   EXPECT_EQ(clone.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(clone.Param().button.real_state, ButtonState::Disable);
@@ -149,12 +149,12 @@ TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
 
   ASSERT_TRUE(moved.Param().button.config);
   EXPECT_EQ(moved.Param().button.config->slot_id, 2);
-  EXPECT_EQ(moved.Param().button.call, &callback);
+  EXPECT_EQ(moved.Param().button.call, serilang::Value(&callback));
   EXPECT_EQ(moved.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(moved.Param().button.real_state, ButtonState::Disable);
   EXPECT_FALSE(moved.Param().button.visible);
   EXPECT_FALSE(obj.Param().button.config);
-  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button.call, serilang::nil);
   EXPECT_EQ(obj.Param().button.hit_state, ButtonState::Normal);
   EXPECT_EQ(obj.Param().button.real_state, ButtonState::Normal);
   EXPECT_TRUE(obj.Param().button.visible);
@@ -165,12 +165,12 @@ TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
 
   ASSERT_TRUE(assigned.Param().button.config);
   EXPECT_EQ(assigned.Param().button.config->slot_id, 2);
-  EXPECT_EQ(assigned.Param().button.call, &callback);
+  EXPECT_EQ(assigned.Param().button.call, serilang::Value(&callback));
   EXPECT_EQ(assigned.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(assigned.Param().button.real_state, ButtonState::Disable);
   EXPECT_FALSE(assigned.Param().button.visible);
   EXPECT_FALSE(moved.Param().button.config);
-  EXPECT_EQ(moved.Param().button.call, nullptr);
+  EXPECT_EQ(moved.Param().button.call, serilang::nil);
   EXPECT_EQ(moved.Param().button, ButtonProperties{});
 
   assigned = GraphicsObject();
@@ -188,7 +188,7 @@ TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
   obj.InitializeParams();
 
   EXPECT_FALSE(obj.Param().button.config);
-  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button.call, serilang::nil);
   EXPECT_EQ(obj.Param().button.hit_state, ButtonState::Normal);
   EXPECT_EQ(obj.Param().button.real_state, ButtonState::Normal);
   EXPECT_TRUE(obj.Param().button.visible);
@@ -198,7 +198,7 @@ TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
   obj.Param().button.call = &callback;
   obj.Reset();
   EXPECT_FALSE(obj.Param().button.config);
-  EXPECT_EQ(obj.Param().button.call, nullptr);
+  EXPECT_EQ(obj.Param().button.call, serilang::nil);
   EXPECT_EQ(obj.Param().button, ButtonProperties{});
 }
 
@@ -225,13 +225,13 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   auto copied = clone.GetFrameAction();
   EXPECT_NE(copied, action);
   EXPECT_NE(copied->counter, action->counter);
-  EXPECT_EQ(copied->function, &callback);
+  EXPECT_EQ(copied->function, serilang::Value(&callback));
   EXPECT_EQ(copied->arguments, action->arguments);
   EXPECT_EQ(copied->end_time, 100);
   EXPECT_FALSE(copied->end_action);
   ASSERT_EQ(clone.frame_action_list_.size(), 2u);
   EXPECT_NE(clone.frame_action_list_[0]->counter, channel->counter);
-  EXPECT_EQ(clone.frame_action_list_[0]->function, &callback);
+  EXPECT_EQ(clone.frame_action_list_[0]->function, serilang::Value(&callback));
   EXPECT_EQ(clone.frame_action_list_[0]->counter->Get(), 7);
   EXPECT_FALSE(clone.frame_action_list_[0]->end_action);
   EXPECT_EQ(clone.frame_action_list_[1], nullptr);
@@ -245,7 +245,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   GraphicsObject moved = std::move(obj);
   EXPECT_EQ(moved.frame_action_, action);
   EXPECT_EQ(moved.frame_action_list_[0], channel);
-  EXPECT_EQ(moved.GetFrameAction()->function, &callback);
+  EXPECT_EQ(moved.GetFrameAction()->function, serilang::Value(&callback));
   EXPECT_EQ(moved.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(moved.GetFrameAction()->counter->Get(), 37);
   EXPECT_TRUE(moved.GetFrameAction()->end_action);
@@ -260,7 +260,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.frame_action_, action);
   EXPECT_EQ(assigned.frame_action_list_[0], channel);
-  EXPECT_EQ(assigned.GetFrameAction()->function, &callback);
+  EXPECT_EQ(assigned.GetFrameAction()->function, serilang::Value(&callback));
   EXPECT_EQ(assigned.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(assigned.GetFrameAction()->end_time, 100);
   ASSERT_EQ(assigned.frame_action_list_.size(), 2u);

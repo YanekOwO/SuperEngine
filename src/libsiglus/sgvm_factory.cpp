@@ -247,7 +247,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   rt.system->text().SetMwndCallHandler(
       [loader = rt.loader.get(), &vm](const MwndConfig::CallTarget& target) {
-        sr::Function* entry;
+        sr::Value entry;
         if (target.command) {
           entry = binding::ResolveSceneCommand(*loader, target.scene,
                                                *target.command);
@@ -421,7 +421,8 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       [text = &rt.system->text(), button_config](const GraphicsObject& object,
                                                  int slot) {
         const auto state = text->GetMwndButtonPresentation(
-            button_config(object, slot), object.Param().button.call != nullptr);
+            button_config(object, slot),
+            object.Param().button.call.Type() != sr::ObjType::Nil);
         return InteractionManager::ButtonPresentation{
             state.visible, state.enabled, state.touch_enabled, state.activated};
       },
@@ -443,7 +444,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
                                       TextSystem::MwndButtonSound::Decide);
             [[fallthrough]];
           case Event::Repeat:
-            if (object->Param().button.call)
+            if (object->Param().button.call.Type() != sr::ObjType::Nil)
               vm.ScheduleExecute(object->Param().button.call);
             else
               text->ExecuteMwndButton(config);

@@ -225,29 +225,47 @@ Fiber* VM::AddFiber(Code* chunk) {
   return fiber;
 }
 
+Fiber* VM::MakeInvocation(Value callable, std::vector<Value> arguments) {
+  if (arguments.size() > std::numeric_limits<uint8_t>::max())
+    throw RuntimeError("callback supports at most 255 positional arguments");
+  Code* thunk = gc_->Allocate<Code>();
+  thunk->const_pool.emplace_back(std::move(callable));
+  thunk->Append(Push{0});
+  for (Value& argument : arguments) {
+    const auto index = static_cast<uint32_t>(thunk->const_pool.size());
+    thunk->const_pool.emplace_back(std::move(argument));
+    thunk->Append(Push{index});
+  }
+  thunk->Append(Call{.argcnt = static_cast<uint32_t>(arguments.size())});
+  thunk->Append(::serilang::Return{});
+  auto* fn = gc_->Allocate<Function>(thunk);
+  auto* fiber = gc_->Allocate<Fiber>();
+  fibres_.push_back(fiber);
+  push(fiber->op_stack, Value(fn));
+  fn->Call(*this, *fiber, 0, 0);
+  return fiber;
+}
+
 Fiber* VM::ScheduleExecute(Function* fn) {
   if (!fn)
     throw std::runtime_error("failed to execute a nullptr function");
-  Code* thunk = gc_->Allocate<Code>();
-  thunk->const_pool.emplace_back(Value(fn));
-  thunk->Append(Push{0});
-  thunk->Append(Call{.argcnt = 0, .kwargcnt = 0});
-  thunk->Append(::serilang::Return{});
-  return AddFiber(thunk);
+  return ScheduleExecute(Value(fn));
+}
+
+Fiber* VM::ScheduleExecute(Value callable) {
+  Fiber* fiber = MakeInvocation(std::move(callable), {});
+  scheduler_.PushTask(fiber);
+  return fiber;
 }
 
 void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
-  if (arguments.size() > std::numeric_limits<uint8_t>::max())
-    throw RuntimeError("callback supports at most 255 positional arguments");
+  InvokeUntilBlocked(Value(&callback), std::move(arguments));
+}
 
-  Fiber* fiber = gc_->Allocate<Fiber>();
+void VM::InvokeUntilBlocked(Value callback, std::vector<Value> arguments) {
+  Fiber* fiber = MakeInvocation(std::move(callback), std::move(arguments));
   fiber->discard_result = true;
-  fibres_.push_back(fiber);
-  push(fiber->op_stack, Value(&callback));
-  for (Value& argument : arguments)
-    push(fiber->op_stack, std::move(argument));
   try {
-    callback.Call(*this, *fiber, static_cast<uint8_t>(arguments.size()), 0);
     if (fiber->state == FiberState::New)
       fiber->state = FiberState::Running;
     while (!stop_requested_ && fiber->IsRunning())
@@ -632,6 +650,26 @@ void VM::ExecuteFiber(Fiber* fib) {
         //------------------------------------------------------------------
         // 4. Control flow
         //------------------------------------------------------------------
+        case OpCode::Goto: {
+          ip += sizeof(serilang::Goto);
+          if (fib->op_stack.empty())
+            throw RuntimeError("goto requires a line target");
+          const Value target = pop(fib->op_stack);
+          const int* line = target.Get_if<int>();
+          if (!line)
+            throw RuntimeError("goto target must be an integer");
+          if (*line <= 0)
+            throw RuntimeError("goto line must be positive");
+          const auto entry = chunk->line_offset.lower_bound(*line);
+          if (entry == chunk->line_offset.end())
+            throw RuntimeError(
+                "goto has no executable statement at or after line " +
+                std::to_string(*line));
+          if (entry->second >= chunk->code.size())
+            throw RuntimeError("goto line maps outside the current code");
+          frame.ip = entry->second;
+        } break;
+
         case OpCode::Jump: {
           const auto ins = chunk->Read<serilang::Jump>(ip);
           ip += sizeof(ins);
@@ -709,6 +747,8 @@ void VM::ExecuteFiber(Fiber* fib) {
         case OpCode::Call: {
           const auto ins = chunk->Read<serilang::Call>(ip);
           ip += sizeof(ins);
+          if (ins.argcnt > 255 || ins.kwargcnt > 255)
+            throw RuntimeError("call has too many arguments");
           Value& callee =
               fib->op_stack.end()[-static_cast<size_t>(ins.argcnt) -
                                   2 * static_cast<size_t>(ins.kwargcnt) - 1];
@@ -817,6 +857,8 @@ void VM::ExecuteFiber(Fiber* fib) {
         case OpCode::MakeFiber: {
           const auto ins = chunk->Read<serilang::MakeFiber>(ip);
           ip += sizeof(ins);
+          if (ins.argcnt > 255 || ins.kwargcnt > 255)
+            throw RuntimeError("call has too many arguments");
           size_t base =
               fib->op_stack.size() - ins.argcnt - 2 * ins.kwargcnt - 1;
           Value fn = fib->op_stack[base];

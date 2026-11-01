@@ -115,6 +115,8 @@ std::string ClassDecl::DebugString() const {
   return "class " + std::string(name);
 }
 std::string PropertyDecl::DebugString() const { return "property " + name; }
+std::string GotoStmt::DebugString() const { return "goto"; }
+
 std::string ReturnStmt::DebugString() const { return "return"; }
 std::string YieldStmt::DebugString() const { return "yield"; }
 std::string ThrowStmt::DebugString() const { return "throw"; }
@@ -254,6 +256,9 @@ struct Dumper {
         oss << x.getter->body->DumpAST("get", childPrefix, !x.setter);
       if (x.setter)
         oss << x.setter->body->DumpAST("set", childPrefix, true);
+    }
+    if constexpr (std::same_as<T, GotoStmt>) {
+      oss << x.target->Apply(Dumper(childPrefix, true));
     }
     if constexpr (std::same_as<T, ReturnStmt>) {
       if (x.value)

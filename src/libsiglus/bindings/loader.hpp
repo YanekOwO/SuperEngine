@@ -37,7 +37,7 @@ class Archive;
 namespace binding {
 
 struct UserCommand {
-  serilang::Function* function = nullptr;
+  serilang::Value function;
   std::vector<Type> args;
 };
 

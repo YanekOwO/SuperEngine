@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <optional>
 
 namespace serilang {
@@ -518,6 +519,8 @@ void BoundMethod::Call(VM& vm,
                        uint8_t nargs,
                        uint8_t nkwargs,
                        CallResultMode mode) {
+  if (additional_args.size() > std::numeric_limits<uint8_t>::max() - nargs)
+    throw RuntimeError("bound callable has too many positional arguments");
   size_t base = f.op_stack.size() - nargs - 2 * nkwargs - 1;
   f.op_stack[base] = method;
   f.op_stack.insert(f.op_stack.begin() + base + 1, additional_args.cbegin(),

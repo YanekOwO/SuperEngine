@@ -63,6 +63,9 @@ std::string tok::DebugStringVisitor::operator()(const tok::Reserved& p) const {
     case Reserved::Type::_class:
       s = "class";
       break;
+    case Reserved::Type::_goto:
+      s = "goto";
+      break;
     case Reserved::Type::_return:
       s = "return";
       break;

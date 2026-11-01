@@ -126,6 +126,7 @@ class Parser {
   //------------------------------------------------------------------
   //  Recursive‑descent productions (all member functions)
   //------------------------------------------------------------------
+  std::shared_ptr<AST> parseStatement(bool requireSemi);
   std::shared_ptr<AST> parseAssignment();
   std::shared_ptr<AST> parseImportStmt();
   std::shared_ptr<AST> parseFromImportStmt();

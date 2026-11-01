@@ -1303,7 +1303,7 @@ void BindObject(SiglusMachine& runtime) {
     h->object->Param().button.call = resolved.function;
   });
   object.def("clear_button_call", [](ObjectHandle* h) {
-    h->object->Param().button.call = nullptr;
+    h->object->Param().button.call = sr::nil;
     if (h->object->Param().button.config)
       h->object->Param().button.config->call.reset();
   });

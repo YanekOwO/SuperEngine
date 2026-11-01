@@ -70,11 +70,13 @@ class VM {
 
   Fiber* AddFiber(Code* entry);
   Fiber* ScheduleExecute(Function* fn);
+  Fiber* ScheduleExecute(Value callable);
 
   // Invoke a script callback on a VM-owned isolated fiber through its first
   // suspension or completion. Suspended continuations use the normal scheduler.
   // Inline failures propagate to the caller; return values are discarded.
   void InvokeUntilBlocked(Function& callback, std::vector<Value> arguments);
+  void InvokeUntilBlocked(Value callback, std::vector<Value> arguments);
 
   // Run the event loop until no runnable work or pending promises remain.
   // Returns the last dead fiber's result if any.
@@ -129,6 +131,7 @@ class VM {
   //----------------------------------------------------------------
   // Execution helpers
   Value RunUntil(std::optional<Clock::timepoint_t> deadline);
+  Fiber* MakeInvocation(Value callable, std::vector<Value> arguments);
   void Return(Fiber& f);
   std::unordered_map<std::string, Value>* GetNamespace(Fiber& f);
 

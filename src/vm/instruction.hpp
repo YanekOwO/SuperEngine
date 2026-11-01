@@ -87,6 +87,7 @@ struct JumpIfTrue {
 struct JumpIfFalse {
   int32_t offset;
 };  // (cond) ->
+struct Goto {};    // (line) -> transfers within the current Code
 struct Return {};  // (retval) -> pops frame
 
 // ––– 5. Function & call –––––––––––––––––––––––––––––––––––––––––––
@@ -158,6 +159,7 @@ using Instruction = std::variant<Nop,
                                  LoadUpvalue,
                                  StoreUpvalue,
                                  CloseUpvalues,
+                                 Goto,
                                  Jump,
                                  JumpIfTrue,
                                  JumpIfFalse,
@@ -213,7 +215,8 @@ enum class OpCode : uint8_t {
   Throw,
   TryBegin,
   TryEnd,
-  DebugValue
+  DebugValue,
+  Goto
 };
 
 template <typename T>
@@ -247,6 +250,8 @@ constexpr inline OpCode GetOpcode() {
     return OpCode::StoreUpvalue;
   else if constexpr (std::same_as<T, CloseUpvalues>)
     return OpCode::CloseUpvalues;
+  else if constexpr (std::same_as<T, Goto>)
+    return OpCode::Goto;
   else if constexpr (std::same_as<T, Jump>)
     return OpCode::Jump;
   else if constexpr (std::same_as<T, JumpIfTrue>)

@@ -76,7 +76,7 @@ class FrameActionManager {
   void Start(ActionReference reference,
              int duration,
              bool real_time,
-             serilang::Function& callback,
+             serilang::Value callback,
              std::vector<FrameActionArgument> arguments);
   void End(ActionReference reference);
   void StartConfiguredButton(Loader& loader,

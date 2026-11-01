@@ -28,6 +28,8 @@
 #include "libsiglus/parser.hpp"
 #include "libsiglus/recompiler.hpp"
 #include "libsiglus/scene.hpp"
+#include "libsiglus/scene_entry.hpp"
+#include "vm/dict.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
 
@@ -105,23 +107,27 @@ sr::Module* Loader::Load(int scene) {
                                        scene, scn.scnname_, e.what()));
   }
 
+  auto* dispatcher = mod->globals->at("%%dispatch").Get_if<sr::Function>();
+  (*mod->globals)["%%script"] = MakeSceneEntry(
+      *vm_.gc_, dispatcher, compiler.GetMainLine(), 0, SceneCallKind::Scene);
+  for (const auto& [id, target] : compiler.GetZlabels())
+    (*mod->globals)[GetZlabelId(id)] =
+        MakeSceneEntry(*vm_.gc_, dispatcher, target, 0, SceneCallKind::Scene);
+
+  auto* labels = vm_.gc_->Allocate<sr::Dict>();
+  for (const auto& [id, target] : compiler.GetLabels())
+    labels->map.emplace(id, target);
+  (*mod->globals)["%%labels"] = labels;
+
   SceneCommandTable command_table{.scene_id = scene,
                                   .scene_name = scn.scnname_};
   command_table.commands.reserve(compiler.GetUserCommands().size());
   for (const UserCommandMetadata& metadata : compiler.GetUserCommands()) {
     const std::string entry_name = GetUsercmdId(metadata.source_entry);
-    auto fn_it = mod->globals->find(entry_name);
-    if (fn_it == mod->globals->end()) {
-      throw sr::RuntimeError(
-          std::format("failed to bootstrap user command '{}' in scene {} ({})",
-                      metadata.name, scene, scn.scnname_));
-    }
-    sr::Function* function = fn_it->second.Get_if<sr::Function>();
-    if (!function) {
-      throw sr::RuntimeError(
-          std::format("user command '{}' in scene {} ({}) is not a function",
-                      metadata.name, scene, scn.scnname_));
-    }
+    const sr::Value function =
+        MakeSceneEntry(*vm_.gc_, dispatcher, metadata.token_line,
+                       metadata.args.size(), SceneCallKind::Command);
+    (*mod->globals)[entry_name] = function;
     const bool inserted =
         command_table.commands
             .emplace(NormalizeCommandName(metadata.name),

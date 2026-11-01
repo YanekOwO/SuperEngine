@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "vm/value.hpp"
+
 #include "core/counter.hpp"
 
 #include <memory>
@@ -44,11 +46,13 @@ struct FrameAction {
   FrameAction& operator=(FrameAction&& source) noexcept;
 
   std::shared_ptr<Counter> GetCounter();
-  inline bool IsActive() const { return function != nullptr; }
+  inline bool IsActive() const {
+    return function.Type() != serilang::ObjType::Nil;
+  }
   void Reset();
 
   // Borrowed from a scene module kept alive by the VM.
-  serilang::Function* function = nullptr;
+  serilang::Value function;
   std::vector<FrameActionArgument> arguments;
   // Created on first use; retained Counter handles own this allocation.
   std::shared_ptr<Counter> counter;

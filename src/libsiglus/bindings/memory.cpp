@@ -27,6 +27,7 @@
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/property.hpp"
+#include "libsiglus/scene_entry.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "log/domain_logger.hpp"
 #include "srbind/srbind.hpp"
@@ -63,6 +64,31 @@ static MemoryHandle& GetFiberMemory(Fiber& fiber, Memory& memory) {
     handle->PushStackFrame(kRootStackBankSize, kRootStackBankSize);
   }
   return *handle;
+}
+
+static void PushCallFrame(Fiber& fiber,
+                          Memory& memory,
+                          const std::vector<Value>& integers,
+                          const std::vector<Value>& strings) {
+  // Convert before acquiring a frame so invalid arguments cannot leak banks.
+  std::vector<int> largs;
+  std::vector<std::string> kargs;
+  for (const Value& value : integers)
+    largs.push_back(RequireInt(value, "L frame argument"));
+  for (const Value& value : strings)
+    kargs.push_back(value.Str());
+  MemoryHandle& handle = GetFiberMemory(fiber, memory);
+  handle.PushStackFrame(std::max(kMinimumCallStackBankSize, largs.size()),
+                        std::max(kMinimumCallStackBankSize, kargs.size()));
+  try {
+    for (std::size_t i = 0; i < largs.size(); ++i)
+      handle.Write(IntBank::L, i, largs[i]);
+    for (std::size_t i = 0; i < kargs.size(); ++i)
+      handle.Write(StrBank::K, i, kargs[i]);
+  } catch (...) {
+    handle.PopStackFrame();
+    throw;
+  }
 }
 
 struct IntBitView {
@@ -275,18 +301,46 @@ void BindMemory(SiglusMachine& rt) {
         const List* largs = RequireList(newl, "L frame arguments");
         const List* kargs = RequireList(newk, "K frame arguments");
 
-        MemoryHandle& handle = GetFiberMemory(fiber, memory);
-        handle.PushStackFrame(
-            std::max(kMinimumCallStackBankSize, largs->items.size()),
-            std::max(kMinimumCallStackBankSize, kargs->items.size()));
-
-        for (std::size_t i = 0; i < largs->items.size(); ++i)
-          handle.Write(IntBank::L, i,
-                       RequireInt(largs->items[i], "L frame argument"));
-        for (std::size_t i = 0; i < kargs->items.size(); ++i)
-          handle.Write(StrBank::K, i, kargs->items[i].Str());
+        PushCallFrame(fiber, memory, largs->items, kargs->items);
       },
       sb::arg("newl"), sb::arg("newk"));
+
+  m.def(
+      "__builtin_init_call",
+      [&memory](Fiber& fiber, Value entry, Value arguments) -> bool {
+        const auto* descriptor = RequireList(entry, "scene entry");
+        const auto* args = RequireList(arguments, "scene arguments");
+        if (descriptor->items.size() != 3)
+          throw RuntimeError("invalid scene entry descriptor");
+        const int arity = RequireInt(descriptor->items[1], "scene arity");
+        const int kind = RequireInt(descriptor->items[2], "scene call kind");
+        if (arity < 0 || args->items.size() != static_cast<std::size_t>(arity))
+          throw RuntimeError(
+              "scene entry received an incorrect argument count");
+        if (kind < static_cast<int>(SceneCallKind::Scene) ||
+            kind > static_cast<int>(SceneCallKind::Farcall))
+          throw RuntimeError("invalid scene call kind");
+        if (kind == static_cast<int>(SceneCallKind::Farcall)) {
+          if (args->items.size() != 2)
+            throw RuntimeError("farcall requires L and K argument lists");
+          const auto* integers =
+              RequireList(args->items[0], "farcall L arguments");
+          const auto* strings =
+              RequireList(args->items[1], "farcall K arguments");
+          PushCallFrame(fiber, memory, integers->items, strings->items);
+          return true;
+        }
+        auto& locals = fiber.frames.back().fast_locals;
+        if (kSceneArgumentSlot + args->items.size() > locals.size())
+          throw RuntimeError("scene arguments exceed available local slots");
+        for (std::size_t i = 0; i < args->items.size(); ++i)
+          locals[kSceneArgumentSlot + i] = args->items[i];
+        if (kind == static_cast<int>(SceneCallKind::Command)) {
+          PushCallFrame(fiber, memory, {}, {});
+          return true;
+        }
+        return false;
+      });
 
   m.def("__builtin_pop_frame", [&memory](Fiber& fiber) {
     MemoryHandle& handle = GetFiberMemory(fiber, memory);

@@ -54,7 +54,7 @@ FrameAction& FrameAction::operator=(const FrameAction& source) {
 }
 
 FrameAction::FrameAction(FrameAction&& source) noexcept
-    : function(std::exchange(source.function, nullptr)),
+    : function(std::exchange(source.function, serilang::nil)),
       arguments(std::move(source.arguments)),
       counter(std::move(source.counter)),
       end_time(std::exchange(source.end_time, 0)),
@@ -65,7 +65,7 @@ FrameAction::FrameAction(FrameAction&& source) noexcept
 FrameAction& FrameAction::operator=(FrameAction&& source) noexcept {
   if (this == &source)
     return *this;
-  function = std::exchange(source.function, nullptr);
+  function = std::exchange(source.function, serilang::nil);
   arguments = std::move(source.arguments);
   source.arguments.clear();
   counter = std::move(source.counter);
@@ -81,7 +81,7 @@ std::shared_ptr<Counter> FrameAction::GetCounter() {
 }
 
 void FrameAction::Reset() {
-  function = nullptr;
+  function = serilang::nil;
   arguments.clear();
   end_time = 0;
   end_action = false;
