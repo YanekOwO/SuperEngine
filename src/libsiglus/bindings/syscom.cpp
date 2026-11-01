@@ -23,13 +23,13 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
 #include "core/mask.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/flow.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "platforms/implementor.hpp"
 #include "srbind/srbind.hpp"

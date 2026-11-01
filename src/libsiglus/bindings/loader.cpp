@@ -131,7 +131,9 @@ sr::Module* Loader::Load(int scene) {
     const bool inserted =
         command_table.commands
             .emplace(NormalizeCommandName(metadata.name),
-                     UserCommand{.function = function, .args = metadata.args})
+                     UserCommand{.function = function,
+                                 .args = metadata.args,
+                                 .target = {scene, metadata.source_entry}})
             .second;
     if (!inserted) {
       throw sr::RuntimeError(
@@ -145,6 +147,17 @@ sr::Module* Loader::Load(int scene) {
   commands_by_globals_.emplace(mod->globals.get(), std::move(command_table));
 
   return mod;
+}
+
+sr::Value Loader::ResolveUserCommandTarget(const FrameAction::Target& target) {
+  const auto* mod = Load(target.scene_id);
+  const auto it = mod->globals->find(GetUsercmdId(target.entry));
+  if (it == mod->globals->end()) {
+    throw sr::RuntimeError(
+        std::format("user command entry {} not found in scene {} ({})",
+                    target.entry, target.scene_id, mod->name));
+  }
+  return it->second;
 }
 
 serilang::Module* Loader::Load(std::string const& scnname) {

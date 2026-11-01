@@ -26,6 +26,7 @@
 #include "core/object.hpp"
 #include "core/object_internal/drawer/file.hpp"
 #include "systems/event_system.hpp"
+#include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_waku_normal.hpp"
@@ -166,18 +167,42 @@ std::unique_ptr<TextWaku> TextFactory::CreateWakuNormal(
         ResolveButtonRect(window_rect, button_config, surface_size));
     button->SetUsePatternGeometry(!button_config.explicit_size.has_value());
     button->SetAlphaHitTest(button_config.slot_id >= 0);
-    button->on_hit_ = [&text, button_config] {
-      text.PlayMwndButtonSound(button_config, TextSystem::MwndButtonSound::Hit);
+
+    auto register_button_se = [&](std::function<void()>& callback,
+                                  TextSystem::MwndButtonSound event) {
+      auto& sounds = text.mwnd_config_.button_sounds_;
+      int se_no = button_config.se_no;
+      if (se_no < 0 || se_no >= sounds.size()) {
+        callback = {};
+        return;
+      }
+
+      int se = -1;
+      switch (event) {
+        case TextSystem::MwndButtonSound::Hit:
+          se = sounds[se_no].hit;
+          break;
+        case TextSystem::MwndButtonSound::Push:
+          se = sounds[se_no].push;
+          break;
+        case TextSystem::MwndButtonSound::Decide:
+          se = sounds[se_no].decide;
+          break;
+      }
+      if (se >= 0)
+        callback = [&system, se] { system.sound().PlaySe(se); };
     };
-    button->on_pressed_ = [&text, button_config] {
-      text.PlayMwndButtonSound(button_config,
-                               TextSystem::MwndButtonSound::Push);
-    };
-    button->on_release_ = [&text, button_config] {
-      text.PlayMwndButtonSound(button_config,
-                               TextSystem::MwndButtonSound::Decide);
+    register_button_se(button->on_hit_, TextSystem::MwndButtonSound::Hit);
+    register_button_se(button->on_pressed_, TextSystem::MwndButtonSound::Push);
+    register_button_se(button->on_release_,
+                       TextSystem::MwndButtonSound::Decide);
+    button->on_release_ = [&text, button_config,
+                           sound = std::move(button->on_release_)] {
+      if (sound)
+        sound();
       text.ExecuteMwndButton(button_config);
     };
+
     button->SetSurface(surface, button_config.slot_id >= 0
                                     ? button_config.cut_no
                                     : button_config.reallive_pattern);

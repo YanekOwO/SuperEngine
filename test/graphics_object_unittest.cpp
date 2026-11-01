@@ -205,9 +205,10 @@ TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
 TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   EXPECT_EQ(obj.frame_action_, nullptr);
   EXPECT_EQ(obj.frame_action_list_.size(), 0u);
-  serilang::Function callback(nullptr);
+  // Clone and move active targets while preserving independent clone counters.
+  const FrameAction::Target target{1, 5};
   auto action = obj.GetFrameAction();
-  action->function = &callback;
+  action->target = target;
   action->arguments = {12, std::string("original")};
   action->end_time = 100;
   action->end_action = true;
@@ -215,7 +216,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   action->counter->Advance(37ms, 37ms);
   obj.frame_action_list_.resize(2);
   auto channel = obj.GetFrameAction(0);
-  channel->function = &callback;
+  channel->target = target;
   channel->end_action = true;
   channel->GetCounter()->Set(7);
   std::weak_ptr<Counter> counter = action->counter;
@@ -225,13 +226,13 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   auto copied = clone.GetFrameAction();
   EXPECT_NE(copied, action);
   EXPECT_NE(copied->counter, action->counter);
-  EXPECT_EQ(copied->function, serilang::Value(&callback));
+  EXPECT_EQ(copied->target, target);
   EXPECT_EQ(copied->arguments, action->arguments);
   EXPECT_EQ(copied->end_time, 100);
   EXPECT_FALSE(copied->end_action);
   ASSERT_EQ(clone.frame_action_list_.size(), 2u);
   EXPECT_NE(clone.frame_action_list_[0]->counter, channel->counter);
-  EXPECT_EQ(clone.frame_action_list_[0]->function, serilang::Value(&callback));
+  EXPECT_EQ(clone.frame_action_list_[0]->target, target);
   EXPECT_EQ(clone.frame_action_list_[0]->counter->Get(), 7);
   EXPECT_FALSE(clone.frame_action_list_[0]->end_action);
   EXPECT_EQ(clone.frame_action_list_[1], nullptr);
@@ -245,7 +246,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   GraphicsObject moved = std::move(obj);
   EXPECT_EQ(moved.frame_action_, action);
   EXPECT_EQ(moved.frame_action_list_[0], channel);
-  EXPECT_EQ(moved.GetFrameAction()->function, serilang::Value(&callback));
+  EXPECT_EQ(moved.GetFrameAction()->target, target);
   EXPECT_EQ(moved.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(moved.GetFrameAction()->counter->Get(), 37);
   EXPECT_TRUE(moved.GetFrameAction()->end_action);
@@ -260,7 +261,7 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.frame_action_, action);
   EXPECT_EQ(assigned.frame_action_list_[0], channel);
-  EXPECT_EQ(assigned.GetFrameAction()->function, serilang::Value(&callback));
+  EXPECT_EQ(assigned.GetFrameAction()->target, target);
   EXPECT_EQ(assigned.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(assigned.GetFrameAction()->end_time, 100);
   ASSERT_EQ(assigned.frame_action_list_.size(), 2u);
@@ -270,6 +271,21 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   EXPECT_EQ(moved.frame_action_list_.size(), 0u);
   EXPECT_EQ(moved.GetFrameAction()->GetCounter()->Get(), 0);
   EXPECT_EQ(assigned.GetFrameAction()->counter->Get(), 37);
+}
+
+TEST_F(GraphicsObjectTest, FrameActionMoveTransfersTarget) {
+  // Move an active action twice; each destination owns the selected target
+  // and each source becomes inactive.
+  FrameAction source;
+  const FrameAction::Target target{3, 7};
+  source.target = target;
+  FrameAction moved(std::move(source));
+  EXPECT_EQ(moved.target, target);
+  EXPECT_FALSE(source.IsActive());
+  FrameAction assigned;
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.target, target);
+  EXPECT_FALSE(moved.IsActive());
 }
 
 TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {

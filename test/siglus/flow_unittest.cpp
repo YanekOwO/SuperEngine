@@ -23,17 +23,19 @@
 
 #include <gtest/gtest.h>
 
+#include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
 #include "libsiglus/lexeme.hpp"
 #include "libsiglus/recompiler.hpp"
 #include "libsiglus/scene_entry.hpp"
 #include "m6/compiler_pipeline.hpp"
+#include "siglus/fake_scene.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
@@ -43,8 +45,6 @@
 
 #include <any>
 #include <chrono>
-#include <cstdint>
-#include <initializer_list>
 #include <memory>
 #include <string>
 #include <utility>
@@ -58,98 +58,193 @@ static sr::Function* Dispatcher(sr::Value entry) {
   return bound->method.Get_if<sr::Function>();
 }
 
+static Archive MakeEmptyArchive() {
+  return Archive(std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
+}
+
+static ::testing::AssertionResult InitializeFlowRuntime(SiglusMachine& runtime,
+                                                        Archive& archive) {
+  runtime.vm =
+      std::make_unique<sr::VM>(std::make_shared<sr::GarbageCollector>());
+  runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
+  for (const auto* name : {"0_memory", "flow"}) {
+    const auto* bind = SiglusBindingRegistry::Find(name);
+    if (bind == nullptr)
+      return ::testing::AssertionFailure()
+             << "Missing Siglus binding: " << name;
+    (*bind)(runtime);
+  }
+  return ::testing::AssertionSuccess();
+}
+
 class SiglusSceneEntryTest : public ::testing::Test {
  protected:
-  std::string pack_data = std::string(sizeof(Pack_hdr), '\0');
-  xorkey_t key{};
-  Archive archive{pack_data, key};
+  Archive archive = MakeEmptyArchive();
   sr::VM vm{std::make_shared<sr::GarbageCollector>()};
   Loader loader{archive, vm, false};
-  sr::Module* module = nullptr;
+  sr::Module* mod = nullptr;
 
-  static void AppendInt(std::string& data, int32_t value) {
-    data.append(reinterpret_cast<const char*>(&value), sizeof(value));
-  }
-
-  static void AppendElement(std::string& code,
-                            std::initializer_list<int> elements) {
-    code += static_cast<char>(ByteCode::Marker);
-    for (int element : elements) {
-      code += static_cast<char>(ByteCode::Push);
-      AppendInt(code, static_cast<int32_t>(Type::Int));
-      AppendInt(code, element);
-    }
-  }
-
-  int AddCommandScene(std::string scene_name,
-                      std::string command_name,
-                      std::vector<Type> args = {},
-                      bool included = false,
-                      std::string body = {}) {
-    const int scene_id = archive.raw_scene_data_.size();
-    std::string code(5, '\0');
-    code[0] = static_cast<char>(ByteCode::Return);
-    const int32_t offset = code.size();
-    for (std::size_t i = 0; i < args.size(); ++i) {
-      code += static_cast<char>(ByteCode::Declare);
-      AppendInt(code, static_cast<int32_t>(args[i]));
-      AppendInt(code, i);
-    }
-    code += static_cast<char>(ByteCode::Arg);
-    code += body;
-    code += static_cast<char>(ByteCode::Return);
-    code.append(4, '\0');
-    code += static_cast<char>(ByteCode::End);
-    Scene_hdr header{
-        .header_size = sizeof(Scene_hdr),
-        .scene_offset = sizeof(Scene_hdr),
-        .scene_size = static_cast<int32_t>(code.size()),
-        .zlabel_list_offset =
-            static_cast<int32_t>(sizeof(Scene_hdr) + code.size()),
-        .zlabel_cnt = 1,
-    };
-    const std::u16string name(command_name.begin(), command_name.end());
-    if (!included) {
-      header.cmdlist_offset = header.zlabel_list_offset + sizeof(int32_t);
-      header.cmd_cnt = 1;
-      header.cmd_nameidx_offset = header.cmdlist_offset + sizeof(int32_t);
-      header.cmd_nameidx_cnt = 1;
-      header.cmd_name_offset = header.cmd_nameidx_offset + 2 * sizeof(int32_t);
-      header.cmd_name_cnt = name.size();
-    }
-    std::string scene(reinterpret_cast<const char*>(&header), sizeof(header));
-    scene += code;
-    AppendInt(scene, offset);
-    if (!included) {
-      AppendInt(scene, offset);
-      AppendInt(scene, 0);
-      AppendInt(scene, name.size());
-      scene.append(reinterpret_cast<const char*>(name.data()),
-                   name.size() * sizeof(char16_t));
-    } else {
-      archive.cmd_map_[command_name] = archive.cmd_.size();
-      archive.cmd_.push_back(Command{.scene_id = scene_id,
-                                     .offset = offset,
-                                     .name = std::move(command_name)});
-    }
-    archive.raw_scene_data_.push_back(std::move(scene));
-    archive.scene_names_.push_back(scene_name);
-    archive.scn_map_[std::move(scene_name)] = scene_id;
-    return scene_id;
-  }
-
-  void AddCallbackScene(std::vector<Type> args, std::string body = {}) {
-    AddCommandScene("ui", "animate", std::move(args), true, std::move(body));
+  void AddCallbackScene(std::vector<Type> args) {
+    FakeScene{.scene_name = "ui",
+              .command_name = "animate",
+              .args = std::move(args),
+              .included = true}
+        .AddTo(archive);
   }
 
   void SetUp() override {
-    AddCommandScene("menu", "open");
-    module = loader.Load(0);
+    FakeScene{.scene_name = "menu", .command_name = "open"}.AddTo(archive);
+    mod = loader.Load(0);
   }
 };
 
-class SiglusCallMemoryTest : public SiglusSceneEntryTest {
+TEST_F(SiglusSceneEntryTest, EntriesShareOneDispatcher) {
+  // Scene, label, and command adapters all retain the same execution function.
+  auto* dispatcher = mod->globals->at("%%dispatch").Get_if<sr::Function>();
+  EXPECT_EQ(Dispatcher(mod->globals->at("%%script")), dispatcher);
+  EXPECT_EQ(Dispatcher(mod->globals->at(GetZlabelId(0))), dispatcher);
+  EXPECT_EQ(Dispatcher(mod->globals->at(GetUsercmdId(5))), dispatcher);
+}
+
+TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
+  // Resolve a named command from a loaded scene; return its command adapter.
+  auto expected = mod->globals->at(GetUsercmdId(5));
+  ASSERT_NE(expected.Get_if<sr::BoundMethod>(), nullptr);
+  EXPECT_EQ(ResolveSceneCommand(loader, "MENU", "open"), expected);
+}
+
+TEST_F(SiglusSceneEntryTest, IncludedCommandLoadsDeclaringSceneOnDemand) {
+  // Resolve an included command before its owner is loaded; load and cache
+  // the declaring scene and command metadata.
+  AddCallbackScene({Type::FrameAction, Type::Object});
+  EXPECT_FALSE(vm.builtins_->contains("%%siglus_module@SCENE_0001"));
+
+  const auto& resolved = loader.ResolveUserCommand(*mod, "AnImAtE");
+
+  EXPECT_TRUE(vm.builtins_->contains("%%siglus_module@SCENE_0001"));
+  const auto* owner = loader.Load(1);
+  EXPECT_EQ(resolved.function, owner->globals->at(GetUsercmdId(5)));
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, owner->globals);
+  EXPECT_EQ(resolved.args,
+            (std::vector<Type>{Type::FrameAction, Type::Object}));
+  EXPECT_EQ(&loader.ResolveUserCommand(*mod, "animate"), &resolved);
+}
+
+TEST_F(SiglusSceneEntryTest, IncludedCommandUsesAlreadyLoadedDeclaringScene) {
+  // Preload the declaring scene; included lookup must reuse its adapter.
+  AddCallbackScene({Type::FrameAction, Type::Object});
+  const auto* owner = loader.Load(1);
+  const auto expected = owner->globals->at(GetUsercmdId(5));
+
+  EXPECT_EQ(ResolveSceneCommand(loader, "menu", "animate"), expected);
+  EXPECT_EQ(loader.Load(1), owner);
+}
+
+TEST_F(SiglusSceneEntryTest, IncludedCommandTakesPrecedenceOverLocalCommand) {
+  // Declare an included command with a local name; lookup selects the
+  // included command.
+  FakeScene{.scene_name = "shared",
+            .command_name = "open",
+            .args = {Type::Int},
+            .included = true}
+      .AddTo(archive);
+  const auto& resolved = loader.ResolveUserCommand(*mod, "OPEN");
+
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
+  EXPECT_EQ(resolved.args, std::vector<Type>{Type::Int});
+  EXPECT_NE(resolved.function, mod->globals->at(GetUsercmdId(5)));
+}
+
+TEST_F(SiglusSceneEntryTest,
+       InvalidIncludedTargetDoesNotFallBackToLocalCommand) {
+  // Point an included command at a missing scene; lookup must fail rather
+  // than invoke the local command of the same name.
+  archive.cmd_map_["open"] = archive.cmd_.size();
+  archive.cmd_.push_back(Command{.scene_id = 99, .offset = 5, .name = "open"});
+
+  EXPECT_THROW(loader.ResolveUserCommand(*mod, "open"), sr::RuntimeError);
+}
+
+TEST_F(SiglusSceneEntryTest, LocalCommandNamesAreCaseInsensitive) {
+  // Use mixed-case local names; lookup ignores case but stays within the
+  // selected scene.
+  const int scene =
+      FakeScene{.scene_name = "other", .command_name = "LoCaL"}.AddTo(archive);
+  const auto* owner = loader.Load(scene);
+  const auto expected = owner->globals->at(GetUsercmdId(5));
+
+  EXPECT_EQ(loader.ResolveUserCommand(*owner, "LOCAL").function, expected);
+  EXPECT_EQ(ResolveSceneCommand(loader, "menu", "OpEn"),
+            mod->globals->at(GetUsercmdId(5)));
+  EXPECT_THROW(loader.ResolveUserCommand(*mod, "local"), sr::RuntimeError);
+}
+
+TEST_F(SiglusSceneEntryTest, FiberResolvesIncludedCommandFromNearestScene) {
+  // Surround a scene frame with native frames; lookup finds its included
+  // command while ignoring native frames.
+  AddCallbackScene({Type::FrameAction, Type::Object});
+  sr::Fiber fiber;
+  fiber.frames.push_back({});  // Native/non-scene frames are ignored.
+  fiber.frames.push_back(
+      {.fn = mod->globals->at("%%dispatch").Get_if<sr::Function>()});
+  fiber.frames.push_back({});
+
+  const auto& resolved = loader.ResolveUserCommand(fiber, "ANIMATE");
+  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
+}
+
+TEST_F(SiglusSceneEntryTest, FiberDoesNotSearchOlderScenesForLocalCommands) {
+  // Stack two scene frames; local lookup must use only the nearest scene.
+  const int other =
+      FakeScene{.scene_name = "other", .command_name = "local"}.AddTo(archive);
+  const auto* current = loader.Load(other);
+  sr::Fiber fiber;
+  fiber.frames.push_back(
+      {.fn = mod->globals->at("%%dispatch").Get_if<sr::Function>()});
+  fiber.frames.push_back(
+      {.fn = current->globals->at("%%dispatch").Get_if<sr::Function>()});
+
+  EXPECT_EQ(
+      Dispatcher(loader.ResolveUserCommand(fiber, "LOCAL").function)->globals,
+      current->globals);
+  EXPECT_THROW(loader.ResolveUserCommand(fiber, "open"), sr::RuntimeError);
+}
+
+TEST_F(SiglusSceneEntryTest, IncludedCommandsStillRequireSceneContext) {
+  // Resolve an included command without a loaded scene context; both
+  // fiber and module lookup must reject the request.
+  AddCallbackScene({Type::FrameAction, Type::Object});
+  sr::Fiber fiber;
+  EXPECT_THROW(loader.ResolveUserCommand(fiber, "animate"), sr::RuntimeError);
+  sr::Module unloaded("unloaded");
+  EXPECT_THROW(loader.ResolveUserCommand(unloaded, "animate"),
+               sr::RuntimeError);
+}
+
+TEST_F(SiglusSceneEntryTest, MissingNamedCommandDoesNotFallBackToScript) {
+  // Request a missing command in a valid scene; lookup must fail rather
+  // than invoke the scene script.
+  ASSERT_NE(mod->globals->at("%%dispatch").Get_if<sr::Function>(), nullptr);
+  EXPECT_THROW(ResolveSceneCommand(loader, "menu", "missing"),
+               sr::RuntimeError);
+}
+
+TEST_F(SiglusSceneEntryTest, ZlabelResolvesLabelAndFallsBackToScript) {
+  // Resolve present and absent labels; return the label adapter or the
+  // scene script fallback respectively.
+  auto label = mod->globals->at(GetZlabelId(0));
+  auto script = mod->globals->at("%%script");
+  ASSERT_NE(label.Get_if<sr::BoundMethod>(), nullptr);
+  ASSERT_NE(script.Get_if<sr::BoundMethod>(), nullptr);
+  EXPECT_EQ(ResolveSceneEntry(loader, "MENU", 0), label);
+  EXPECT_EQ(ResolveSceneEntry(loader, "menu", 77), script);
+}
+
+// ------------------------------------------------------------------------------
+
+class SiglusCallMemoryTest : public ::testing::Test {
  protected:
+  Archive archive = MakeEmptyArchive();
   SiglusMachine runtime;
   struct Observation {
     int integer;
@@ -159,14 +254,7 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
   std::vector<Observation> observations;
 
   void SetUp() override {
-    runtime.vm =
-        std::make_unique<sr::VM>(std::make_shared<sr::GarbageCollector>());
-    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
-    for (const auto* name : {"0_memory", "flow"}) {
-      const auto* bind = SiglusBindingRegistry::Find(name);
-      ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
-    }
+    ASSERT_TRUE(InitializeFlowRuntime(runtime, archive));
     srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
     bindings.def("observe", [this](sr::Fiber& fiber, int i, std::string s) {
       auto* memory = std::any_cast<MemoryHandle>(&fiber.usrdata);
@@ -232,19 +320,19 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
 
   void AddFarcallProbe(std::string body) {
     // The scene calls a substitutable engine callable with a constant argument.
-    std::string code;
-    AppendElement(code, {39, 1});
-    code += static_cast<char>(ByteCode::Push);
-    AppendInt(code, static_cast<int>(Type::Int));
-    AppendInt(code, 0);
-    code += static_cast<char>(ByteCode::Cmd);
+    FakeScene scene{.scene_name = "far", .command_name = "far"};
+    scene.AppendElement({39, 1});
+    scene.AppendByte(ByteCode::Push);
+    scene.AppendInt(static_cast<int>(Type::Int));
+    scene.AppendInt(0);
+    scene.AppendByte(ByteCode::Cmd);
     for (int value :
          {0, 1, static_cast<int>(Type::Int), 0, static_cast<int>(Type::String)})
-      AppendInt(code, value);
-    code += static_cast<char>(ByteCode::Return);
-    AppendInt(code, 1);
-    AppendInt(code, static_cast<int>(Type::String));
-    AddCommandScene("far", "far", {}, false, std::move(code));
+      scene.AppendInt(value);
+    scene.AppendByte(ByteCode::Return);
+    scene.AppendInt(1);
+    scene.AppendInt(static_cast<int>(Type::String));
+    scene.AddTo(archive);
     Run("fn probe(n) { " + body + " }");
     srbind::module_ math(*runtime.vm, "math");
     (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
@@ -253,18 +341,19 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
   sr::Value AddProbe(std::string name, std::string body) {
     // A real Siglus user command forwards its argument to an engine callable.
     // The test substitutes that callable to inspect the active L/K banks.
-    std::string code;
-    AppendElement(code, {39, 1});  // math.tostr
-    AppendElement(code, {83, 0x7d000000});
-    code += static_cast<char>(ByteCode::Property);
-    code += static_cast<char>(ByteCode::Cmd);
+    FakeScene scene{
+        .scene_name = name, .command_name = name, .args = {Type::Int}};
+    scene.AppendElement({39, 1});  // math.tostr
+    scene.AppendElement({83, 0x7d000000});
+    scene.AppendByte(ByteCode::Property);
+    scene.AppendByte(ByteCode::Cmd);
     for (int value :
          {0, 1, static_cast<int>(Type::Int), 0, static_cast<int>(Type::String)})
-      AppendInt(code, value);
-    code += static_cast<char>(ByteCode::Return);
-    AppendInt(code, 1);
-    AppendInt(code, static_cast<int>(Type::String));
-    const int scene = AddCommandScene(name, name, {Type::Int}, false, code);
+      scene.AppendInt(value);
+    scene.AppendByte(ByteCode::Return);
+    scene.AppendInt(1);
+    scene.AppendInt(static_cast<int>(Type::String));
+    const int scene_id = scene.AddTo(archive);
 
     Run("fn probe(n) { " + body + " }");
     srbind::module_ math(*runtime.vm, "math");
@@ -272,7 +361,7 @@ class SiglusCallMemoryTest : public SiglusSceneEntryTest {
     auto command = ResolveSceneCommand(*runtime.loader, name, name);
     (*runtime.vm->globals_)["command"] = sr::Value(command);
     EXPECT_EQ(Dispatcher(command)->globals,
-              runtime.loader->Load(scene)->globals);
+              runtime.loader->Load(scene_id)->globals);
     return command;
   }
 };
@@ -406,19 +495,21 @@ TEST_F(SiglusCallMemoryTest, FarcallBanksSurviveNestedUserCommand) {
 }
 
 TEST_F(SiglusCallMemoryTest, PreservesArgumentTypesAndReturnValues) {
+  // Invoke commands returning integer, string, or no value; preserve each
+  // result's type and value.
   for (const auto type : {Type::Int, Type::String}) {
     const std::string name = type == Type::Int ? "integer" : "string";
-    std::string body;
-    AppendElement(body, {83, 0x7d000000});
-    body += static_cast<char>(ByteCode::Property);
-    body += static_cast<char>(ByteCode::Return);
-    AppendInt(body, 1);
-    AppendInt(body, static_cast<int>(type));
-    AddCommandScene(name, name, {type}, false, body);
+    FakeScene scene{.scene_name = name, .command_name = name, .args = {type}};
+    scene.AppendElement({83, 0x7d000000});
+    scene.AppendByte(ByteCode::Property);
+    scene.AppendByte(ByteCode::Return);
+    scene.AppendInt(1);
+    scene.AppendInt(static_cast<int>(type));
+    scene.AddTo(archive);
     (*runtime.vm->globals_)[name] =
         sr::Value(ResolveSceneCommand(*runtime.loader, name, name));
   }
-  AddCommandScene("empty", "empty");
+  FakeScene{.scene_name = "empty", .command_name = "empty"}.AddTo(archive);
   (*runtime.vm->globals_)["empty"] =
       sr::Value(ResolveSceneCommand(*runtime.loader, "empty", "empty"));
   Run(R"(
@@ -638,262 +729,238 @@ TEST_F(SiglusCallMemoryTest, StoredCommandSurvivesGarbageCollection) {
   EXPECT_EQ(observations[0].integer, 17);
 }
 
-TEST_F(SiglusSceneEntryTest, EntriesShareOneDispatcher) {
-  // Scene, label, and command adapters all retain the same execution function.
-  auto* dispatcher = module->globals->at("%%dispatch").Get_if<sr::Function>();
-  EXPECT_EQ(Dispatcher(module->globals->at("%%script")), dispatcher);
-  EXPECT_EQ(Dispatcher(module->globals->at(GetZlabelId(0))), dispatcher);
-  EXPECT_EQ(Dispatcher(module->globals->at(GetUsercmdId(5))), dispatcher);
-}
+// ------------------------------------------------------------------------------
 
-TEST_F(SiglusSceneEntryTest, NamedCommandResolvesThroughCachedMetadata) {
-  auto expected = module->globals->at(GetUsercmdId(5));
-  ASSERT_NE(expected.Get_if<sr::BoundMethod>(), nullptr);
-  EXPECT_EQ(ResolveSceneCommand(loader, "MENU", "open"), expected);
-}
+class FrameActionIntegrationTest : public ::testing::Test {
+ protected:
+  Archive archive = MakeEmptyArchive();
+  SiglusMachine runtime;
+  Stage stage;
+  LocalConfig config;
+  std::shared_ptr<FrameActionManager> manager;
+  FrameAction::Target target{1, 5};
+  sr::Module* owner = nullptr;
+  int calls = 0;
 
-TEST_F(SiglusSceneEntryTest, IncludedCommandLoadsDeclaringSceneOnDemand) {
-  AddCallbackScene({Type::FrameAction, Type::Object});
-  EXPECT_FALSE(vm.builtins_->contains("%%siglus_module@SCENE_0001"));
-
-  const auto& resolved = loader.ResolveUserCommand(*module, "AnImAtE");
-
-  EXPECT_TRUE(vm.builtins_->contains("%%siglus_module@SCENE_0001"));
-  const auto* owner = loader.Load(1);
-  EXPECT_EQ(resolved.function, owner->globals->at(GetUsercmdId(5)));
-  EXPECT_EQ(Dispatcher(resolved.function)->globals, owner->globals);
-  EXPECT_EQ(resolved.args,
-            (std::vector<Type>{Type::FrameAction, Type::Object}));
-  EXPECT_EQ(&loader.ResolveUserCommand(*module, "animate"), &resolved);
-}
-
-TEST_F(SiglusSceneEntryTest, IncludedCommandUsesAlreadyLoadedDeclaringScene) {
-  AddCallbackScene({Type::FrameAction, Type::Object});
-  const auto* owner = loader.Load(1);
-  const auto expected = owner->globals->at(GetUsercmdId(5));
-
-  EXPECT_EQ(ResolveSceneCommand(loader, "menu", "animate"), expected);
-  EXPECT_EQ(loader.Load(1), owner);
-}
-
-TEST_F(SiglusSceneEntryTest, IncludedCommandTakesPrecedenceOverLocalCommand) {
-  AddCommandScene("shared", "open", {Type::Int}, true);
-  const auto& resolved = loader.ResolveUserCommand(*module, "OPEN");
-
-  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
-  EXPECT_EQ(resolved.args, std::vector<Type>{Type::Int});
-  EXPECT_NE(resolved.function, module->globals->at(GetUsercmdId(5)));
-}
-
-TEST_F(SiglusSceneEntryTest,
-       InvalidIncludedTargetDoesNotFallBackToLocalCommand) {
-  archive.cmd_map_["open"] = archive.cmd_.size();
-  archive.cmd_.push_back(Command{.scene_id = 99, .offset = 5, .name = "open"});
-
-  EXPECT_THROW(loader.ResolveUserCommand(*module, "open"), sr::RuntimeError);
-}
-
-TEST_F(SiglusSceneEntryTest, LocalCommandNamesAreCaseInsensitive) {
-  const int scene = AddCommandScene("other", "LoCaL");
-  const auto* owner = loader.Load(scene);
-  const auto expected = owner->globals->at(GetUsercmdId(5));
-
-  EXPECT_EQ(loader.ResolveUserCommand(*owner, "LOCAL").function, expected);
-  EXPECT_EQ(ResolveSceneCommand(loader, "menu", "OpEn"),
-            module->globals->at(GetUsercmdId(5)));
-  EXPECT_THROW(loader.ResolveUserCommand(*module, "local"), sr::RuntimeError);
-}
-
-TEST_F(SiglusSceneEntryTest, FiberResolvesIncludedCommandFromNearestScene) {
-  AddCallbackScene({Type::FrameAction, Type::Object});
-  sr::Fiber fiber;
-  fiber.frames.push_back({});  // Native/non-scene frames are ignored.
-  fiber.frames.push_back(
-      {.fn = module->globals->at("%%dispatch").Get_if<sr::Function>()});
-  fiber.frames.push_back({});
-
-  const auto& resolved = loader.ResolveUserCommand(fiber, "ANIMATE");
-  EXPECT_EQ(Dispatcher(resolved.function)->globals, loader.Load(1)->globals);
-}
-
-TEST_F(SiglusSceneEntryTest, FiberDoesNotSearchOlderScenesForLocalCommands) {
-  const int other = AddCommandScene("other", "local");
-  const auto* current = loader.Load(other);
-  sr::Fiber fiber;
-  fiber.frames.push_back(
-      {.fn = module->globals->at("%%dispatch").Get_if<sr::Function>()});
-  fiber.frames.push_back(
-      {.fn = current->globals->at("%%dispatch").Get_if<sr::Function>()});
-
-  EXPECT_EQ(
-      Dispatcher(loader.ResolveUserCommand(fiber, "LOCAL").function)->globals,
-      current->globals);
-  EXPECT_THROW(loader.ResolveUserCommand(fiber, "open"), sr::RuntimeError);
-}
-
-TEST_F(SiglusSceneEntryTest, IncludedCommandsStillRequireSceneContext) {
-  AddCallbackScene({Type::FrameAction, Type::Object});
-  sr::Fiber fiber;
-  EXPECT_THROW(loader.ResolveUserCommand(fiber, "animate"), sr::RuntimeError);
-  sr::Module unloaded("unloaded");
-  EXPECT_THROW(loader.ResolveUserCommand(unloaded, "animate"),
-               sr::RuntimeError);
-}
-
-TEST_F(SiglusSceneEntryTest, IncludedFrameActionReceivesItsCounterAndOwner) {
-  // The included callback assigns its own counter to its owner's rotation:
-  //   arg_1.rotate_z = arg_0.counter.get();
-  std::string body;
-  AppendElement(body, {83, 0x7d000001, 17});
-  AppendElement(body, {83, 0x7d000000, 0, 1});
-  body += static_cast<char>(ByteCode::Cmd);
-  for (int value : {0, 0, 0, static_cast<int>(Type::Int)})
-    AppendInt(body, value);
-  body += static_cast<char>(ByteCode::Assign);
-  for (int value :
-       {static_cast<int>(Type::Int), static_cast<int>(Type::Int), 1})
-    AppendInt(body, value);
-  AddCallbackScene({Type::FrameAction, Type::Object}, std::move(body));
-
-  for (const std::string method : {"start", "start_real"}) {
-    SCOPED_TRACE(method);
-    SiglusMachine runtime;
-    runtime.vm =
-        std::make_unique<sr::VM>(std::make_shared<sr::GarbageCollector>());
-    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
-    runtime.stage = std::make_unique<Stage>(1);
-    runtime.counter_list = std::make_shared<CounterList>(0);
-    runtime.frame_action_manager = std::make_shared<FrameActionManager>(
-        *runtime.vm, *runtime.stage, runtime.local_config, 0);
-    const auto* bind_memory = SiglusBindingRegistry::Find("0_memory");
-    const auto* bind_counter = SiglusBindingRegistry::Find("1_counter");
-    const auto* bind_actions = SiglusBindingRegistry::Find("1_frame_action");
-    ASSERT_NE(bind_memory, nullptr);
-    ASSERT_NE(bind_counter, nullptr);
-    ASSERT_NE(bind_actions, nullptr);
-    (*bind_memory)(runtime);
-    (*bind_counter)(runtime);
-    (*bind_actions)(runtime);
-
-    // Only the object's rotation is needed; no renderer or GUI is required.
+  void SetUp() override {
+    ASSERT_TRUE(InitializeFlowRuntime(runtime, archive));
+    FakeScene{.scene_name = "menu", .command_name = "open"}.AddTo(archive);
+    FakeScene{.scene_name = "animation",
+              .command_name = "animate",
+              .args = {Type::FrameAction}}
+        .AddTo(archive);
+    owner = runtime.loader->Load(target.scene_id);
+    manager = std::make_shared<FrameActionManager>(stage, config, 2);
     srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
-    srbind::class_<ActionOwner> owner_class(bindings, "TestOwner");
-    owner_class.prop(
-        "rotate_z", [](ActionOwner* o) { return (*o)->Param().rotation(); },
-        [](ActionOwner* o, int value) { (*o)->Param().SetRotation(value); });
-    auto& manager = *runtime.frame_action_manager;
-    manager.SetObjectFactory([owner_class](ActionOwner owner) mutable {
-      return sr::Value(owner_class.make_inst(std::move(owner)));
-    });
-    auto object = std::make_shared<GraphicsObject>();
-    runtime.stage->objects[kLayerBg][0] = object;
-    auto action = object->GetFrameAction();
-    (*runtime.vm->globals_)["action"] =
-        manager.MakeActionValue({action, object});
-
-    m6::CompilerPipeline compiler(runtime.vm->gc_, false);
-    compiler.compile(m6::SourceBuffer::Create(
-        "fn start_action(){ action." + method + "(-1, \"AnImAtE\"); }",
-        "<IncludedFrameActionTest>"));
-    ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
-    runtime.vm->Evaluate(compiler.Get());
-    auto* start =
-        runtime.vm->globals_->at("start_action").Get_if<sr::Function>();
-    ASSERT_NE(start, nullptr);
-    auto* caller = runtime.loader->Load(0);
-    start->globals = caller->globals;
-    (*caller->globals)["action"] = runtime.vm->globals_->at("action");
-    runtime.vm->ScheduleExecute(start);
-    runtime.vm->Run();
-
-    ASSERT_TRUE(action->IsActive());
-    EXPECT_EQ(Dispatcher(action->function)->globals,
-              runtime.loader->Load(1)->globals);
-    EXPECT_EQ(action->end_time, -1);
-    manager.AdvanceAndDispatch(std::chrono::milliseconds(3),
-                               std::chrono::milliseconds(96));
-    EXPECT_EQ(object->Param().rotation(), method == "start" ? 96 : 3);
-    manager.AdvanceAndDispatch(std::chrono::milliseconds(2),
-                               std::chrono::milliseconds(64));
-    EXPECT_EQ(object->Param().rotation(), method == "start" ? 160 : 5);
+    runtime.frame_action_manager = manager;
+    runtime.counter_list = std::make_shared<CounterList>(0);
+    for (const auto* name : {"1_counter", "1_frame_action"}) {
+      const auto* bind = SiglusBindingRegistry::Find(name);
+      ASSERT_NE(bind, nullptr);
+      (*bind)(runtime);
+    }
+    bindings.def("replacement", [this](sr::Value) { ++calls; });
+    manager->Start({manager->global_action(), {}}, -1, false, target, {});
   }
-}
 
-TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionUsesTypedSceneCommand) {
-  AddCallbackScene({Type::FrameAction, Type::Object});
-  Stage stage;
-  LocalConfig config;
-  FrameActionManager manager(vm, stage, config, 0);
-  auto object = std::make_shared<GraphicsObject>();
-  manager.StartConfiguredButton(
-      loader, object,
-      MwndConfig::CallTarget{.scene = "UI", .command = "animate"});
-  const auto action = object->GetFrameAction();
-  EXPECT_TRUE(action->IsActive());
-  EXPECT_EQ(action->end_time, -1);
-  action->GetCounter()->Advance(std::chrono::milliseconds(32),
+  void ReplaceEntry() {
+    (*owner->globals)[GetUsercmdId(target.entry)] =
+        runtime.vm->globals_->at("replacement");
+  }
+
+  void Dispatch() {
+    manager->AdvanceAndDispatch(std::chrono::milliseconds(1),
                                 std::chrono::milliseconds(1));
-  EXPECT_EQ(action->GetCounter()->Get(), 32);
+  }
+};
+
+TEST_F(FrameActionIntegrationTest, DispatchUsesCurrentEntry) {
+  // Replace an entry after starting; each dispatch must fetch its new callable.
+  ReplaceEntry();
+  Dispatch();
+  EXPECT_EQ(calls, 1);
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def("replacement", [this](sr::Value) { calls += 10; });
+  ReplaceEntry();
+  Dispatch();
+  EXPECT_EQ(calls, 11);
+}
+
+TEST_F(FrameActionIntegrationTest, FinalizationUsesCurrentEntry) {
+  // Replace a running action's entry; explicit end must invoke the replacement.
+  ReplaceEntry();
+  manager->End({manager->global_action(), {}});
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(FrameActionIntegrationTest, ExpirationUsesCurrentEntry) {
+  // Expire an action with a replaced entry; regular and final calls both use
+  // it.
+  ReplaceEntry();
+  manager->global_action()->end_time = 1;
+  Dispatch();
+  EXPECT_EQ(calls, 2);
+  EXPECT_FALSE(manager->global_action()->IsActive());
+}
+
+TEST_F(FrameActionIntegrationTest, TargetRetainsSelectedCommand) {
+  // Add an included override after start; dispatch must retain the selected
+  // local entry even though name resolution now selects the override.
+  const int other = FakeScene{.scene_name = "other_animation",
+                              .command_name = "animate",
+                              .args = {Type::FrameAction},
+                              .included = true}
+                        .AddTo(archive);
+  ReplaceEntry();
+  EXPECT_EQ(runtime.loader->ResolveUserCommand(*owner, "animate").target,
+            (FrameAction::Target{other, 5}));
+  Dispatch();
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(FrameActionIntegrationTest, CallbackSurvivesGarbageCollection) {
+  // Keep the replacement only in scene globals; collection must retain it.
+  ReplaceEntry();
+  runtime.vm->globals_->erase("replacement");
+  runtime.vm->CollectGarbage();
+  Dispatch();
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(FrameActionIntegrationTest, MissingDispatchEntryRaisesRuntimeError) {
+  // Remove an active entry; dispatch reports failure and leaves the action
+  // active.
+  owner->globals->erase(GetUsercmdId(target.entry));
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+  EXPECT_TRUE(manager->global_action()->IsActive());
+}
+
+TEST_F(FrameActionIntegrationTest, MissingFinalEntryResetsAction) {
+  // Remove an active entry; final resolution failure must still reset its
+  // state.
+  auto action = manager->global_action();
+  action->arguments = {7};
+  action->GetCounter()->Set(23);
+  owner->globals->erase(GetUsercmdId(target.entry));
+  EXPECT_THROW(manager->End({action, {}}), sr::RuntimeError);
+  EXPECT_FALSE(action->IsActive());
+  EXPECT_FALSE(action->end_action);
   EXPECT_TRUE(action->arguments.empty());
+  EXPECT_EQ(action->end_time, 0);
+  EXPECT_EQ(action->GetCounter()->Get(), 0);
 }
 
-TEST_F(SiglusSceneEntryTest, ConfiguredButtonFrameActionRejectsWrongSignature) {
-  AddCallbackScene({Type::Int, Type::Object});
-  Stage stage;
-  LocalConfig config;
-  FrameActionManager manager(vm, stage, config, 0);
-  auto object = std::make_shared<GraphicsObject>();
-  EXPECT_THROW(manager.StartConfiguredButton(
-                   loader, object,
-                   MwndConfig::CallTarget{.scene = "ui", .command = "animate"}),
-               sr::RuntimeError);
-  EXPECT_FALSE(object->GetFrameAction()->IsActive());
+TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
+  // Dispatch mixed arguments; the native action handle precedes typed values.
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def(
+      "replacement", [this](sr::Value handle, int number, std::string text) {
+        ++calls;
+        const auto* instance = handle.Get_if<sr::NativeInstance>();
+        ASSERT_NE(instance, nullptr);
+        EXPECT_EQ(sr::Value(instance->klass),
+                  runtime.vm->builtins_->at("%%siglus_frame_action_class"));
+        EXPECT_EQ(number, 7);
+        EXPECT_EQ(text, "argument");
+        (*runtime.vm->globals_)["observed_action"] = handle;
+      });
+  ReplaceEntry();
+  manager->global_action()->arguments = {7, std::string("argument")};
+
+  Dispatch();
+
+  ASSERT_EQ(calls, 1);
+  Execute(*runtime.vm, "observed_action.counter.set(47);");
+  EXPECT_EQ(manager->global_action()->counter->Get(), 47);
 }
 
-TEST_F(SiglusSceneEntryTest, FrameActionClocksBorrowLiveLocalConfiguration) {
-  Stage stage(1);
-  LocalConfig config;
-  FrameActionManager manager(vm, stage, config, 0);
-  auto global_counter = manager.global_action()->GetCounter();
-  global_counter->StartGame();
-  auto object = std::make_shared<GraphicsObject>();
-  stage.objects[kLayerFg][0] = object;
-  auto object_counter = object->GetFrameAction()->GetCounter();
-  object_counter->StartGame();
+TEST_F(FrameActionIntegrationTest,
+       DispatchUsesObjectFactoryInstalledAfterBinding) {
+  // Install the owner factory after binding; place its result before arguments.
+  manager->CancelGlobals();
+  stage.objects.Resize(kLayerFg, 1);
+  auto object = stage.objects.Get(kLayerFg, 0);
+  int converted = 0;
+  runtime.make_object = [&](ActionOwner owner) {
+    ++converted;
+    EXPECT_EQ(owner, object);
+    return sr::Value(89);
+  };
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def("replacement", [this](sr::Value handle, int owner, int number,
+                                     std::string text) {
+    ++calls;
+    EXPECT_NE(handle.Get_if<sr::NativeInstance>(), nullptr);
+    EXPECT_EQ(owner, 89);
+    EXPECT_EQ(number, 7);
+    EXPECT_EQ(text, "argument");
+  });
+  ReplaceEntry();
+  manager->Start({object->GetFrameAction(), object}, -1, false, target,
+                 {7, std::string("argument")});
 
-  config.frame_action_time_stop = true;
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(10),
-                             std::chrono::milliseconds(10));
-  EXPECT_EQ(global_counter->Get(), 0);
-  EXPECT_EQ(object_counter->Get(), 10);
+  Dispatch();
 
-  config.frame_action_time_stop = false;
-  config.stage_time_stop = true;
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(10),
-                             std::chrono::milliseconds(10));
-  EXPECT_EQ(global_counter->Get(), 10);
-  EXPECT_EQ(object_counter->Get(), 10);
-
-  config = LocalConfig{};
-  manager.AdvanceAndDispatch(std::chrono::milliseconds(5),
-                             std::chrono::milliseconds(160));
-  EXPECT_EQ(global_counter->Get(), 170);
-  EXPECT_EQ(object_counter->Get(), 170);
+  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(converted, 1);
 }
 
-TEST_F(SiglusSceneEntryTest, MissingNamedCommandDoesNotFallBackToScript) {
-  ASSERT_NE(module->globals->at("%%dispatch").Get_if<sr::Function>(), nullptr);
-  EXPECT_THROW(ResolveSceneCommand(loader, "menu", "missing"),
-               sr::RuntimeError);
+TEST_F(FrameActionIntegrationTest,
+       FinalCallbackExposesFinalStateThroughNativeHandle) {
+  // End through the manager; the script handle exposes final flags and time.
+  int end_action = -1;
+  int time = -1;
+  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  bindings.def("observe_frame", [&](int end, int counter) {
+    ++calls;
+    end_action = end;
+    time = counter;
+  });
+  Execute(*runtime.vm, R"(
+    fn replacement(action) {
+      observe_frame(action.is_end_action(), action.counter.get());
+    }
+  )");
+  ReplaceEntry();
+  manager->global_action()->end_time = 17;
+
+  manager->End({manager->global_action(), {}});
+
+  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(end_action, 1);
+  EXPECT_EQ(time, 17);
+  EXPECT_FALSE(manager->global_action()->end_action);
 }
 
-TEST_F(SiglusSceneEntryTest, ZlabelResolvesLabelAndFallsBackToScript) {
-  auto label = module->globals->at(GetZlabelId(0));
-  auto script = module->globals->at("%%script");
-  ASSERT_NE(label.Get_if<sr::BoundMethod>(), nullptr);
-  ASSERT_NE(script.Get_if<sr::BoundMethod>(), nullptr);
-  EXPECT_EQ(ResolveSceneEntry(loader, "MENU", 0), label);
-  EXPECT_EQ(ResolveSceneEntry(loader, "menu", 77), script);
+TEST_F(FrameActionIntegrationTest, NativeFactoriesSurviveGarbageCollection) {
+  // Remove global wrappers before collection; factories must retain class
+  // roots.
+  runtime.vm->globals_->erase("frame_action");
+  runtime.vm->globals_->erase("frame_action_ch");
+  runtime.vm->CollectGarbage();
+  (*runtime.vm->globals_)["retained_action"] =
+      runtime.make_frame_action(ActionReference{manager->global_action(), {}});
+  (*runtime.vm->globals_)["retained_list"] = runtime.make_frame_action_list({});
+
+  Execute(*runtime.vm, R"(
+    retained_action.counter.set(23);
+    retained_list[1].counter.set(47);
+  )");
+
+  EXPECT_EQ(manager->global_action()->counter->Get(), 23);
+  ASSERT_NE(manager->global_channels()[1], nullptr);
+  EXPECT_EQ(manager->global_channels()[1]->counter->Get(), 47);
+}
+
+TEST_F(FrameActionIntegrationTest, GlobalChannelListRemainsFixedSize) {
+  // Resize the bound global list; reject the request and retain its channel
+  // count.
+  Execute(*runtime.vm, R"(
+    caught = 0;
+    try { frame_action_ch.resize(3); } catch (error) { caught = 1; }
+  )");
+  EXPECT_EQ(runtime.vm->globals_->at("caught"), sr::Value(1));
+  EXPECT_EQ(manager->global_channels().size(), 2);
 }
 
 }  // namespace libsiglus::binding

@@ -26,6 +26,7 @@
 #include "core/avdec/gan.hpp"
 #include "core/capture.hpp"
 #include "core/colour.hpp"
+#include "core/frame_action_manager.hpp"
 #include "core/frame_counter.hpp"
 #include "core/memory_internal/facade.hpp"
 #include "core/object.hpp"
@@ -38,7 +39,6 @@
 #include "core/object_internal/object_mutator.hpp"
 #include "core/object_internal/object_parameter.hpp"
 #include "core/stage.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/siglus_machine.hpp"
@@ -745,13 +745,12 @@ void BindObject(SiglusMachine& runtime) {
   Stage* stage_state = runtime.stage.get();
   if (!stage_state)
     throw std::runtime_error("Object requires a stage buffer");
-  if (!runtime.frame_action_manager)
-    throw std::runtime_error("Object binding requires frame-action state");
+  if (!runtime.make_frame_action || !runtime.make_frame_action_list)
+    throw std::runtime_error("Object binding requires frame-action bindings");
   System* system = runtime.system.get();
   auto backend = runtime.presenter ? runtime.presenter->backend() : nullptr;
   auto images = runtime.images;
   AssetScanner* asset_scanner = runtime.asset_scanner.get();
-  FrameActionManager* frame_actions = runtime.frame_action_manager.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<ObjectHandle> object(m, "Object");
   sb::class_<ObjectChildListHandle> child(m, "ObjectChild", false);
@@ -826,19 +825,19 @@ void BindObject(SiglusMachine& runtime) {
     return sr::Value(child.make_inst(h->object));
   });
 
-  // FrameActionManager's C++ factory is opaque to the VM's garbage collector.
+  // Runtime C++ factories are opaque to the VM's garbage collector.
   (*vm.builtins_)["%%siglus_object_class"] = object.native_class();
   runtime.make_object = [object](ActionOwner owner) mutable {
     return sr::Value(object.make_inst(std::move(owner)));
   };
-  frame_actions->SetObjectFactory(runtime.make_object);
-  object.prop_r("frame_action", [frame_actions](ObjectHandle* h) {
-    return frame_actions->MakeActionValue(
-        ActionReference{h->object->GetFrameAction(), h->object});
+  object.prop_r("frame_action", [make_action = runtime.make_frame_action](
+                                    ObjectHandle* h) {
+    return make_action(ActionReference{h->object->GetFrameAction(), h->object});
   });
-  object.prop_r("frame_action_ch", [frame_actions](ObjectHandle* h) {
-    return frame_actions->MakeListValue(h->object);
-  });
+  object.prop_r("frame_action_ch",
+                [make_list = runtime.make_frame_action_list](ObjectHandle* h) {
+                  return make_list(h->object);
+                });
 
   auto ilist_param = [&](const char* name, auto member) {
     object.add_gc_root(*runtime.ilist_cls);

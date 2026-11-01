@@ -27,6 +27,7 @@
 #include "core/button_action_table.hpp"
 #include "core/capture.hpp"
 #include "core/counter.hpp"
+#include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
 #include "core/input.hpp"
@@ -38,7 +39,6 @@
 #include "core/window_title.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
@@ -49,6 +49,7 @@
 #include "srbind/module.hpp"
 #include "systems/event_system.hpp"
 #include "systems/sdl/graphics_backend.hpp"
+#include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
 #include "utilities/file.hpp"
@@ -234,15 +235,24 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   int frame_action_count = gexe("FRAME_ACTION_CH.CNT").Int().value_or(4);
   frame_action_count = std::clamp(frame_action_count, 0, 256);
-  rt.frame_action_manager = std::make_shared<binding::FrameActionManager>(
-      vm, *rt.stage, rt.local_config,
-      static_cast<std::size_t>(frame_action_count));
+  rt.frame_action_manager = std::make_shared<FrameActionManager>(
+      *rt.stage, rt.local_config, static_cast<std::size_t>(frame_action_count));
 
   rt.system->text().SetMwndFrameActionHandler(
-      [loader = rt.loader.get(), manager = rt.frame_action_manager](
+      [manager = rt.frame_action_manager, loader = rt.loader.get()](
           std::shared_ptr<GraphicsObject> object,
           const MwndConfig::CallTarget& target) {
-        manager->StartConfiguredButton(*loader, std::move(object), target);
+        if (!target.command || target.command->empty())
+          throw sr::RuntimeError(
+              "WAKU.BTN.FRAME_ACTION requires a scene and command");
+        const auto& command =
+            ResolveSceneUserCommand(*loader, target.scene, *target.command);
+        if (command.args != std::vector<Type>{Type::FrameAction, Type::Object})
+          throw sr::RuntimeError(
+              "WAKU.BTN.FRAME_ACTION requires a command taking FrameAction, "
+              "Object");
+        manager->Start({object->GetFrameAction(), object}, -1, false,
+                       command.target, {});
       });
 
   rt.system->text().SetMwndCallHandler(
@@ -426,22 +436,36 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
         return InteractionManager::ButtonPresentation{
             state.visible, state.enabled, state.touch_enabled, state.activated};
       },
-      [text = &rt.system->text(), &vm, button_config](
-          std::shared_ptr<GraphicsObject> object, int slot,
-          InteractionManager::MwndButtonEvent event) {
+      [text = &rt.system->text(), sound = &rt.system->sound(), &vm,
+       button_config](std::shared_ptr<GraphicsObject> object, int slot,
+                      InteractionManager::MwndButtonEvent event) {
         using Event = InteractionManager::MwndButtonEvent;
         const auto config = button_config(*object, slot);
+        const MwndConfig::ButtonSound* sounds =
+            text->mwnd_config_.GetButtonSound(config.se_no);
+
         switch (event) {
-          case Event::Hit:
-            text->PlayMwndButtonSound(config, TextSystem::MwndButtonSound::Hit);
-            break;
-          case Event::Push:
-            text->PlayMwndButtonSound(config,
-                                      TextSystem::MwndButtonSound::Push);
-            break;
-          case Event::Decide:
-            text->PlayMwndButtonSound(config,
-                                      TextSystem::MwndButtonSound::Decide);
+          case Event::Hit: {
+            int se = -1;
+            if (sounds)
+              se = sounds->hit;
+            if (se >= 0)
+              sound->PlaySe(se);
+          } break;
+          case Event::Push: {
+            int se = -1;
+            if (sounds)
+              se = sounds->push;
+            if (se >= 0)
+              sound->PlaySe(se);
+          } break;
+          case Event::Decide: {
+            int se = -1;
+            if (sounds)
+              se = sounds->decide;
+            if (se >= 0)
+              sound->PlaySe(se);
+          }
             [[fallthrough]];
           case Event::Repeat:
             if (object->Param().button.call.Type() != sr::ObjType::Nil)

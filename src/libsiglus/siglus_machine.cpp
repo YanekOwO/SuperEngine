@@ -27,9 +27,9 @@
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 
+#include "core/frame_action_manager.hpp"
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "systems/event_system.hpp"
 #include "systems/sound_system.hpp"

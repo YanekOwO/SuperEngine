@@ -67,7 +67,9 @@ template <class... Ts>
 class IntListFacade;
 template <class... Ts>
 class StrListFacade;
+struct ActionReference;
 class BgmTable;
+class FrameActionManager;
 class KidokuTable;
 class IPlatformImplementor;
 class MaskList;
@@ -76,9 +78,6 @@ namespace libsiglus {
 using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
 using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
 
-namespace binding {
-class FrameActionManager;
-}  // namespace binding
 class Archive;
 class SiglusSceneRenderer;
 
@@ -134,7 +133,7 @@ struct SiglusMachine {
   std::shared_ptr<KidokuTable> kidoku_table;
   std::shared_ptr<CounterList> counter_list;
   std::shared_ptr<::QuakeList> screen_quakes;
-  std::shared_ptr<binding::FrameActionManager> frame_action_manager;
+  std::shared_ptr<FrameActionManager> frame_action_manager;
   std::shared_ptr<MaskList> mask_list;
 
   std::shared_ptr<SiglusSceneRenderer> renderer;
@@ -176,6 +175,9 @@ struct SiglusMachine {
   std::shared_ptr<srbind::class_<SiglusStrListFacade>> slist_cls;
   std::function<serilang::Value(std::shared_ptr<Counter>)> make_counter;
   std::function<serilang::Value(std::shared_ptr<GraphicsObject>)> make_object;
+  std::function<serilang::Value(ActionReference)> make_frame_action;
+  std::function<serilang::Value(std::shared_ptr<GraphicsObject>)>
+      make_frame_action_list;
 
   SiglusMachine() = default;
   ~SiglusMachine();

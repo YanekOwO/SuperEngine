@@ -24,24 +24,16 @@
 #pragma once
 
 #include "core/frame_action.hpp"
-#include "core/stage.hpp"
-#include "vm/value.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <vector>
 
+class GraphicsObject;
+class Stage;
 struct LocalConfig;
-
-namespace serilang {
-class VM;
-struct Function;
-struct NativeClass;
-}  // namespace serilang
-
-namespace libsiglus::binding {
-class Loader;
 
 using ActionOwner = std::shared_ptr<GraphicsObject>;
 
@@ -52,10 +44,11 @@ struct ActionReference {
 
 class FrameActionManager {
  public:
-  using ObjectFactory = std::function<serilang::Value(ActionOwner)>;
+  // Execute synchronously using the saved target. During a final callback,
+  // the action is inactive and end_action is true; arguments remain available.
+  using Exec = std::function<void(const ActionReference&, FrameAction::Target)>;
 
-  FrameActionManager(serilang::VM& vm,
-                     Stage& stage,
+  FrameActionManager(Stage& stage,
                      LocalConfig& local_config,
                      std::size_t global_channel_count);
 
@@ -65,41 +58,31 @@ class FrameActionManager {
   inline const std::shared_ptr<FrameAction>& global_action() const {
     return global_action_;
   }
-  FrameActionList& global_channels() { return global_channels_; }
-  const FrameActionList& global_channels() const { return global_channels_; }
-  void SetBindingClasses(serilang::NativeClass* action_class,
-                         serilang::NativeClass* list_class);
-  void SetObjectFactory(ObjectFactory object_factory);
-  serilang::Value MakeActionValue(ActionReference reference);
-  serilang::Value MakeListValue(ActionOwner owner = {});
+  inline FrameActionList& global_channels() { return global_channels_; }
+  inline const FrameActionList& global_channels() const {
+    return global_channels_;
+  }
+
+  // Install execution before dispatching or ending active actions.
+  void SetExec(Exec exec);
 
   void Start(ActionReference reference,
              int duration,
              bool real_time,
-             serilang::Value callback,
-             std::vector<FrameActionArgument> arguments);
+             FrameAction::Target target,
+             std::vector<FrameAction::Argument> arguments);
   void End(ActionReference reference);
-  void StartConfiguredButton(Loader& loader,
-                             ActionOwner owner,
-                             const MwndConfig::CallTarget& target);
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
                           std::chrono::milliseconds game_delta);
   void CancelGlobals();
 
  private:
-  std::vector<serilang::Value> MakeCallbackArguments(
-      const FrameAction& action,
-      const ActionReference& reference);
   void RunFinal(const ActionReference& reference);
 
-  serilang::VM& vm_;
   Stage& stage_;
-  LocalConfig& local_config_;
+  LocalConfig&
+      local_config_;  // time_stop, frame_action_time_stop, stage_time_stop
   std::shared_ptr<FrameAction> global_action_;
   FrameActionList global_channels_;
-  serilang::NativeClass* action_class_ = nullptr;
-  serilang::NativeClass* list_class_ = nullptr;
-  ObjectFactory object_factory_;
+  Exec exec_;
 };
-
-}  // namespace libsiglus::binding

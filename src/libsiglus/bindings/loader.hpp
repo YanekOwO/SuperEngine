@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/frame_action.hpp"
 #include "libsiglus/types.hpp"
 #include "vm/object.hpp"
 #include "vm/vm.hpp"
@@ -39,6 +40,7 @@ namespace binding {
 struct UserCommand {
   serilang::Value function;
   std::vector<Type> args;
+  FrameAction::Target target;
 };
 
 class Loader {
@@ -48,6 +50,7 @@ class Loader {
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);
+  serilang::Value ResolveUserCommandTarget(const FrameAction::Target& target);
 
   const UserCommand& ResolveUserCommand(serilang::Fiber& fiber,
                                         std::string_view command_name);

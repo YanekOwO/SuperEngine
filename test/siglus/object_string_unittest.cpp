@@ -23,15 +23,20 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <initializer_list>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/frame_action_manager.hpp"
 #include "core/object_internal/drawer/string.hpp"
-#include "libsiglus/bindings/frame_action.hpp"
+#include "libsiglus/archive.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/intern_name.hpp"
+#include "siglus/fake_scene.hpp"
 #include "vm/exception.hpp"
 #include "vm/string.hpp"
 
@@ -39,11 +44,15 @@ namespace libsiglus::binding {
 
 class SiglusObjectStringTest : public ::testing::Test {
  protected:
+  std::string pack_data = std::string(sizeof(Pack_hdr), '\0');
+  xorkey_t key{};
+  Archive archive{pack_data, key};
   SiglusMachine runtime;
 
   void SetUp() override {
     runtime.vm = std::make_unique<serilang::VM>(
         std::make_shared<serilang::GarbageCollector>());
+    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
     runtime.stage = std::make_unique<Stage>(3);
     runtime.gameexe = std::make_shared<Gameexe>();
     runtime.gameexe->SetIntAt("MWND.MOJI_COLOR", 0);
@@ -51,7 +60,7 @@ class SiglusObjectStringTest : public ::testing::Test {
     runtime.gameexe->SetIntAt("MWND.FUCHI_COLOR", 1);
     runtime.counter_list = std::make_shared<CounterList>(0);
     runtime.frame_action_manager = std::make_shared<FrameActionManager>(
-        *runtime.vm, *runtime.stage, runtime.local_config, 0);
+        *runtime.stage, runtime.local_config, 0);
     for (const auto* key :
          {"0_memory", "1_counter", "1_frame_action", "1_object"}) {
       auto* bind = SiglusBindingRegistry::Find(key);
@@ -105,6 +114,59 @@ class SiglusObjectStringTest : public ::testing::Test {
     }
   }
 };
+
+TEST_F(SiglusObjectStringTest,
+       FrameActionPropertyReferencesOwningObjectAction) {
+  // Read a child's action through its binding; its counter aliases native
+  // state.
+  Run("action = label.frame_action; action.counter.set(29);");
+  EXPECT_EQ(Label().GetFrameAction()->GetCounter()->Get(), 29);
+  EXPECT_EQ(Object().frame_action_, nullptr);
+}
+
+TEST_F(SiglusObjectStringTest, FrameActionChannelHandleSurvivesListResize) {
+  // Retain a channel across list shrink and collection; its handle stays
+  // usable.
+  Run("channels = label.frame_action_ch; channels.resize(2); "
+      "action = channels[1];");
+  auto retained = Label().GetFrameAction(1);
+  Run("channels.resize(0);");
+  runtime.vm->CollectGarbage();
+
+  Run("action.counter.set(37);");
+
+  EXPECT_TRUE(Label().frame_action_list_.empty());
+  EXPECT_EQ(retained->GetCounter()->Get(), 37);
+}
+
+TEST_F(SiglusObjectStringTest, FrameActionCallbackReceivesBoundOwner) {
+  // Dispatch a child action after collection; its owner wrapper targets the
+  // child.
+  const int scene_id = FakeScene{.scene_name = "animation",
+                                 .command_name = "animate",
+                                 .args = {Type::FrameAction, Type::Object}}
+                           .AddTo(archive);
+  Run(R"(
+    fn animate(action, object) {
+      object.set_pos(29, 31);
+      action.counter.set(7);
+    }
+  )");
+  (*runtime.loader->Load(scene_id)->globals)[GetUsercmdId(5)] =
+      runtime.vm->globals_->at("animate");
+  runtime.vm->globals_->erase("animate");
+  auto child = Object().GetChildren()[0];
+  runtime.frame_action_manager->Start({child->GetFrameAction(), child}, -1,
+                                      false, {scene_id, 5}, {});
+  runtime.vm->CollectGarbage();
+
+  runtime.frame_action_manager->AdvanceAndDispatch(
+      std::chrono::milliseconds(1), std::chrono::milliseconds(1));
+
+  EXPECT_EQ(Label().Param().x(), 29);
+  EXPECT_EQ(Label().Param().y(), 31);
+  EXPECT_EQ(Label().GetFrameAction()->counter->Get(), 7);
+}
 
 TEST_F(SiglusObjectStringTest, SupportsAllCreateFormsAndDefaults) {
   Run(R"(

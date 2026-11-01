@@ -33,7 +33,7 @@ std::shared_ptr<FrameAction> TouchFrameAction(
 }
 
 FrameAction::FrameAction(const FrameAction& source)
-    : function(source.function),
+    : target(source.target),
       arguments(source.arguments),
       counter(source.counter ? std::make_shared<Counter>(*source.counter)
                              : nullptr),
@@ -42,7 +42,7 @@ FrameAction::FrameAction(const FrameAction& source)
 FrameAction& FrameAction::operator=(const FrameAction& source) {
   if (this == &source)
     return *this;
-  function = source.function;
+  target = source.target;
   arguments = source.arguments;
   if (source.counter)
     *GetCounter() = *source.counter;
@@ -54,7 +54,7 @@ FrameAction& FrameAction::operator=(const FrameAction& source) {
 }
 
 FrameAction::FrameAction(FrameAction&& source) noexcept
-    : function(std::exchange(source.function, serilang::nil)),
+    : target(std::exchange(source.target, std::nullopt)),
       arguments(std::move(source.arguments)),
       counter(std::move(source.counter)),
       end_time(std::exchange(source.end_time, 0)),
@@ -65,7 +65,7 @@ FrameAction::FrameAction(FrameAction&& source) noexcept
 FrameAction& FrameAction::operator=(FrameAction&& source) noexcept {
   if (this == &source)
     return *this;
-  function = std::exchange(source.function, serilang::nil);
+  target = std::exchange(source.target, std::nullopt);
   arguments = std::move(source.arguments);
   source.arguments.clear();
   counter = std::move(source.counter);
@@ -81,7 +81,7 @@ std::shared_ptr<Counter> FrameAction::GetCounter() {
 }
 
 void FrameAction::Reset() {
-  function = serilang::nil;
+  target.reset();
   arguments.clear();
   end_time = 0;
   end_action = false;

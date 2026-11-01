@@ -39,6 +39,8 @@ Describe behavior and symbols in production/test comments and diagnostics. Keep 
 
 Tests use GoogleTest and GoogleMock. Name test files `*_unittest.cpp` and cases `TEST_F(Fixture, DescriptiveBehavior)`. Add deterministic regression coverage for changed behavior and edge cases.
 
+Test fixtures must inherit directly and only from `::testing::Test`. Do not reuse code through fixture inheritance. Extract reusable helper classes used through composition, or reusable functions.
+
 Each unit test case must test exactly one behavior. Add brief code comments in every case describing the test setup, the behavior under test, and the expected outcome.
 
 Run focused tests from the debug build directory:

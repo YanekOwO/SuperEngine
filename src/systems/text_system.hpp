@@ -176,8 +176,6 @@ class TextSystem final : public EventListener {
       const MwndConfig::Button& button,
       bool has_script_call = false) const;
   void ExecuteMwndButton(const MwndConfig::Button& button);
-  void PlayMwndButtonSound(const MwndConfig::Button& button,
-                           MwndButtonSound event);
 
   void set_in_pause_state(bool in) { in_pause_state_ = in; }
 

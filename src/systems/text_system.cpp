@@ -294,15 +294,18 @@ std::shared_ptr<TextWindow> TextSystem::CreateWindow(int window_id,
                                          params, history);
 
   TextFactory waku_factory(mwnd_config_);
+  // textbox waku
   const auto& textbox = tw->GetTextboxConfig();
-  tw->SetTextboxWaku(textbox.waku_set, waku_factory.CreateWaku(
-                                           system_, *tw, textbox.waku_set, 0));
+  std::unique_ptr<TextWaku> text_waku =
+      waku_factory.CreateWaku(system_, *tw, textbox.waku_set, 0);
+  tw->SetTextboxWaku(textbox.waku_set, std::move(text_waku));
+  // namebox waku
   const auto& namebox = tw->GetNameboxConfig();
   if (tw->Layout().GetNameMode() == TextLayout::NameMode::SeparateWindow &&
       namebox.has_waku) {
-    tw->SetNameboxWaku(
-        namebox.waku_set,
-        waku_factory.CreateWaku(system_, *tw, namebox.waku_set, 0));
+    std::unique_ptr<TextWaku> name_waku =
+        waku_factory.CreateWaku(system_, *tw, namebox.waku_set, 0);
+    tw->SetNameboxWaku(namebox.waku_set, std::move(name_waku));
   }
 
   const auto& waku = mwnd_config_.GetWaku(textbox.waku_set);
@@ -425,6 +428,7 @@ TextSystem::MwndButtonPresentation TextSystem::GetMwndButtonPresentation(
 
 void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
   if (button.call) {
+    // button call action, either RealliveFarcall or Siglus Usrcmd
     if (button.action == MwndConfig::ButtonAction::RealliveFarcall &&
         system_.machine_ && button.call->entrypoint) {
       try {
@@ -468,28 +472,6 @@ void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
     default:
       break;
   }
-}
-
-void TextSystem::PlayMwndButtonSound(const MwndConfig::Button& button,
-                                     MwndButtonSound event) {
-  const MwndConfig::ButtonSound* sounds =
-      mwnd_config_.GetButtonSound(button.se_no);
-  if (!sounds)
-    return;
-  int sound = -1;
-  switch (event) {
-    case MwndButtonSound::Hit:
-      sound = sounds->hit;
-      break;
-    case MwndButtonSound::Push:
-      sound = sounds->push;
-      break;
-    case MwndButtonSound::Decide:
-      sound = sounds->decide;
-      break;
-  }
-  if (sound >= 0)
-    system_.sound().PlaySe(sound);
 }
 
 void TextSystem::ExpireOldPages() {
