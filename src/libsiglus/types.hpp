@@ -77,6 +77,8 @@ enum class Type : uint32_t {
   PcmchList,
   PcmEventList,
   Wipe,
+  G00bufList,
+  G00buf,
   Database = 0x2000000e,
   DatabaseList = 0x2000000f,
 

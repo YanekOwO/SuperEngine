@@ -29,6 +29,10 @@ namespace libsiglus {
 
 std::string ToString(Type type) {
   switch (type) {
+    case Type::G00bufList:
+      return "g00buf[]";
+    case Type::G00buf:
+      return "g00buf";
     case Type::Database:
       return "database";
     case Type::DatabaseList:

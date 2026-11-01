@@ -607,6 +607,9 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
     case 135:  // MASK
       return make_sym_chain(Type::MaskList, "mask", elm, 1);
 
+    case 124:  // G00BUF
+      return make_sym_chain(Type::G00bufList, "g00buf", elm, 1);
+
     case 63:  // SYSCOM
       if (elm.code.size() == 2 && elm.At<int>(1) == 236) {
         elm.code.front() = Integer{5};
@@ -3594,6 +3597,33 @@ AccessChain ElementParser::make_chain(AccessChain result,
             continue;
           case 60:
             append_callable("clear_button_call", Type::None);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::G00bufList:
+        switch (key) {
+          case -1:
+            parse_index(Type::G00buf);
+            continue;
+          case 0:
+            append_callable("free_all");
+            continue;
+          case 2:
+            append_callable("size", Type::Int);
+            continue;
+          default:
+            break;
+        }
+        break;
+      case Type::G00buf:
+        switch (key) {
+          case 0:
+            append_callable("load");
+            continue;
+          case 1:
+            append_callable("free");
             continue;
           default:
             break;

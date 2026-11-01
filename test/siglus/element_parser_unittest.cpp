@@ -1409,6 +1409,38 @@ TEST_F(ElementParserTest, PcmchWaitCallsAreAwaitable) {
   }
 }
 
+TEST_F(ElementParserTest, G00bufLoadPreservesDynamicIndexAndFilename) {
+  // A computed buffer index loads a filename; parsing must retain both inputs.
+  ElementCode element{124, -1, 0, 0};
+  element.code[2] = Variable{Type::Int, 3};
+  element.ForceBind({0, {String{"line"}}, Type::None});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed, "g00buf[t3].load(str:line)");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, G00bufFreeIsAnImplicitVoidCall) {
+  // An unbound slot free has no arguments; parsing supplies a void call.
+  auto parsed = chain(124, -1, 0, 1);
+  EXPECT_EQ(parsed, "g00buf[int:0].free()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+}
+
+TEST_F(ElementParserTest, G00bufListSizeReturnsAnInteger) {
+  // List member two queries configured capacity and must return an integer.
+  auto parsed = chain(124, 2);
+  EXPECT_EQ(parsed, "g00buf.size()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+}
+
+TEST_F(ElementParserTest, G00bufFreeAllIsAnImplicitVoidCall) {
+  // List member zero releases all preloads and must return no value.
+  auto parsed = chain(124, 0);
+  EXPECT_EQ(parsed, "g00buf.free_all()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+}
+
 TEST_F(ElementParserTest, UsrcmdGlobal) {
   global_commands = {Command{.scene_id = 1, .offset = 2, .name = "$$cmd"}};
   ResetParser();
