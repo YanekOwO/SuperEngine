@@ -76,6 +76,11 @@ rlvm --engine siglus --hook hooks.sr /path/to/GameDirectory/
 The hook's globals, state changes, and debug registrations remain available to
 the game. Hook errors stop startup.
 
+Siglus exposes the startup arguments as VM globals before running the hook:
+`__debug` is a boolean (default `false`), and `__scene` is the integer passed to
+`--scene`, or `nil` when omitted. These values are available without a hook too;
+assigning to them does not change the engine's startup settings.
+
 rlvm uses Boost.Serialization text archives for save files and other persistent
 metadata. Compatibility with the original RealLive and Siglus serialization
 formats is outside the scope of this project and will not be supported.

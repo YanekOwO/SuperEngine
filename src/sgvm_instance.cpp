@@ -49,6 +49,9 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
     SiglusMachine& rt = *machine;
 
     sr::VM& vm = *rt.vm;
+    (*vm.globals_)["__debug"] = debug_;
+    (*vm.globals_)["__scene"] =
+        start_scene_ ? sr::Value(*start_scene_) : sr::nil;
 
     if (hook_path_) {  // inject custom script
       const std::filesystem::path& path = *hook_path_;
