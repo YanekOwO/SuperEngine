@@ -128,6 +128,10 @@ class SDLSurface {
 
   [[nodiscard]] RGBAColour GetPixelAt(Point pos) const;
 
+  // Queries stored cut pixels independently of the displayed object geometry.
+  [[nodiscard]] std::optional<PixelRegion> GetPixelRegion(int cut_no) const;
+  [[nodiscard]] RGBAColour GetPixelColor(Point pos, int cut_no) const;
+
   std::shared_ptr<SDLSurface> ClipAsColorMask(const Rect& clip_rect,
                                               int r,
                                               int g,

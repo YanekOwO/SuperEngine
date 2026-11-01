@@ -91,6 +91,11 @@ std::unique_ptr<GraphicsObjectData> ObjectMovieData::Clone() const {
   return cloned;
 }
 
+RGBAColour ObjectMovieData::GetPixelColor(Point point, int cut_no) const {
+  return surface_ ? surface_->GetPixelColor(point, cut_no)
+                  : RGBAColour::Clear();
+}
+
 void ObjectMovieData::Execute() {
   if (!decoder_ || !surface_)
     return;

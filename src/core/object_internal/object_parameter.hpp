@@ -181,6 +181,7 @@ struct ObjectParameter {
   int adjustment_vertical = 0;
   int origin_x = 0;
   int origin_y = 0;
+  int origin_z = 0;
   int repetition_origin_x = 0;
   int repetition_origin_y = 0;
   int scale_x_percent = 100;
@@ -252,6 +253,8 @@ struct ObjectParameter {
   void SetOriginX(int in) { origin_x = in; }
 
   void SetOriginY(int in) { origin_y = in; }
+
+  void SetOriginZ(int in) { origin_z = in; }
 
   int rep_origin_x() const { return repetition_origin_x; }
   void SetRepOriginX(int in) { repetition_origin_x = in; }
@@ -534,7 +537,7 @@ struct ObjectParameter {
   void serialize(Archive& ar, const unsigned int version) {
     ar & is_visible & position_x & position_y & adjustment_offsets_x &
         adjustment_offsets_y & adjustment_vertical & origin_x & origin_y &
-        repetition_origin_x & repetition_origin_y & scale_x_percent &
+        origin_z & repetition_origin_x & repetition_origin_y & scale_x_percent &
         scale_y_percent & high_quality_scale_x_percent &
         high_quality_scale_y_percent & rotation_div10 & pattern_number &
         alpha_source & adjustment_alphas & clipping_region &

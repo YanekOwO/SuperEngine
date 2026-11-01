@@ -112,20 +112,44 @@ ImageDecoder::ImageDecoder(std::string_view sv) {
   height = conv->Height();
   width = conv->Width();
 
+  mem.resize(width * height * 4);
+  if (!conv->Read(mem.data()))
+    throw std::runtime_error("xclannad converter failed.");
+
   if (!conv->region_table.empty()) {
     region_table.reserve(conv->region_table.size());
+
     auto xclannadRegionConverter = [](const IConverter::Region& region) {
-      return GrpRect{.rect = Rect(Point(region.x1, region.y1),
+      GrpRect result{.rect = Rect(Point(region.x1, region.y1),
                                   Point(region.x2 + 1, region.y2 + 1)),
                      .originX = region.origin_x,
                      .originY = region.origin_y};
+      if (region.pixel_region) {
+        const auto& pixel = *region.pixel_region;
+
+        auto checked_int = [](std::int64_t value) {
+          if (value < std::numeric_limits<int>::min() ||
+              value > std::numeric_limits<int>::max())
+            throw std::runtime_error(
+                "Image cut coordinates exceed integer range");
+          return static_cast<int>(value);
+        };
+
+        const auto x = static_cast<std::int64_t>(region.x1) + pixel.x;
+        const auto y = static_cast<std::int64_t>(region.y1) + pixel.y;
+        result.pixel_region = PixelRegion{
+            Rect::GRP(checked_int(x), checked_int(y),
+                      checked_int(x + pixel.width),
+                      checked_int(y + pixel.height)),
+            Point(checked_int(static_cast<std::int64_t>(pixel.origin_x) -
+                              pixel.x),
+                  checked_int(static_cast<std::int64_t>(pixel.origin_y) -
+                              pixel.y))};
+      }
+      return result;
     };
 
     std::transform(conv->region_table.cbegin(), conv->region_table.cend(),
                    std::back_inserter(region_table), xclannadRegionConverter);
   }
-
-  mem.resize(width * height * 4);
-  if (!conv->Read(mem.data()))
-    throw std::runtime_error("Xclannad converter failed.");
 }

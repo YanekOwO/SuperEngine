@@ -55,6 +55,8 @@ class GanGraphicsObjectData : public GraphicsObjectData {
   virtual int PixelWidth(const GraphicsObject& rendering_properties) override;
   virtual int PixelHeight(const GraphicsObject& rendering_properties) override;
 
+  RGBAColour GetPixelColor(Point point, int cut_no) const override;
+
   virtual std::unique_ptr<GraphicsObjectData> Clone() const override;
   virtual void Execute() override;
 

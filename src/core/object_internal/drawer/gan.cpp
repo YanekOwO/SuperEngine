@@ -106,6 +106,10 @@ std::unique_ptr<GraphicsObjectData> GanGraphicsObjectData::Clone() const {
   return std::make_unique<GanGraphicsObjectData>(*this);
 }
 
+RGBAColour GanGraphicsObjectData::GetPixelColor(Point point, int cut_no) const {
+  return image_ ? image_->GetPixelColor(point, cut_no) : RGBAColour::Clear();
+}
+
 void GanGraphicsObjectData::Execute() {
   // obtain delta time first to avoid adding up when paused
   unsigned int deltaTime = static_cast<unsigned int>(
@@ -121,12 +125,10 @@ void GanGraphicsObjectData::Execute() {
     const std::vector<Frame>& current_set = animation_sets.at(current_set_);
     const auto total_frames = current_set.size();
 
-    while (delta_time_ >=
-           static_cast<unsigned int>(std::max(current_set[current_frame_].time,
-                                              1))) {
-      delta_time_ -=
-          static_cast<unsigned int>(std::max(current_set[current_frame_].time,
-                                             1));
+    while (delta_time_ >= static_cast<unsigned int>(
+                              std::max(current_set[current_frame_].time, 1))) {
+      delta_time_ -= static_cast<unsigned int>(
+          std::max(current_set[current_frame_].time, 1));
       ++current_frame_;
 
       if (current_frame_ >= total_frames) {

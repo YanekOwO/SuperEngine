@@ -649,6 +649,36 @@ RGBAColour SDLSurface::GetPixelAt(Point pos) const {
   return RGBAColour(r, g, b, a);
 }
 
+std::optional<PixelRegion> SDLSurface::GetPixelRegion(int cut_no) const {
+  if (!surface_ || cut_no < 0 || cut_no >= GetNumPatterns())
+    return std::nullopt;
+  const auto& pattern = region_table_[cut_no];
+  return pattern.pixel_region.value_or(
+      PixelRegion{pattern.rect, Point(pattern.originX, pattern.originY)});
+}
+
+RGBAColour SDLSurface::GetPixelColor(Point pos, int cut_no) const {
+  const auto region = GetPixelRegion(cut_no);
+  if (!region || !region->Contains(pos))
+    return RGBAColour::Clear();
+
+  const auto x = static_cast<std::int64_t>(region->rect.x()) + pos.x() +
+                 region->origin.x();
+  const auto y = static_cast<std::int64_t>(region->rect.y()) + pos.y() +
+                 region->origin.y();
+  if (x < 0 || x >= surface_->w || y < 0 || y >= surface_->h)
+    return RGBAColour::Clear();
+
+  const bool lock = SDL_MUSTLOCK(surface_);
+  if (lock && !SDL_LockSurface(surface_))
+    return RGBAColour::Clear();
+  const auto color =
+      GetPixelAt(Point(static_cast<int>(x), static_cast<int>(y)));
+  if (lock)
+    SDL_UnlockSurface(surface_);
+  return color;
+}
+
 std::vector<char> SDLSurface::Dump(Rect region) const {
   auto x = region.x(), y = region.y();
   auto w = region.width(), h = region.height();

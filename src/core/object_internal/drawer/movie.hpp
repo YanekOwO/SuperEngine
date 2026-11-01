@@ -47,6 +47,7 @@ class ObjectMovieData : public GraphicsObjectData {
 
   int PixelWidth(const GraphicsObject& go) override;
   int PixelHeight(const GraphicsObject& go) override;
+  RGBAColour GetPixelColor(Point point, int cut_no) const override;
   std::unique_ptr<GraphicsObjectData> Clone() const override;
   void Execute() override;
 

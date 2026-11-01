@@ -26,10 +26,28 @@
 
 #include "core/rect.hpp"
 
+#include <cstdint>
+#include <optional>
+
+// A stored image cut, with its origin relative to the cropped pixel rectangle.
+struct PixelRegion {
+  Rect rect;
+  Point origin;
+
+  bool Contains(Point point) const {
+    const auto x = static_cast<std::int64_t>(point.x()) + origin.x();
+    const auto y = static_cast<std::int64_t>(point.y()) + origin.y();
+    return x >= 0 && x < rect.width() && y >= 0 && y < rect.height();
+  }
+};
+
 struct GrpRect {
   Rect rect;
 
   // Describes an offset to rect. Why VisualArts threw this in is
   // unknown.
   int originX = 0, originY = 0;
+
+  // Sampling metadata can differ from the rectangle used for rendering.
+  std::optional<PixelRegion> pixel_region;
 };

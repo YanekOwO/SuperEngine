@@ -26,6 +26,7 @@
 
 #include <boost/serialization/access.hpp>
 
+#include "core/colour.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/object_mask.hpp"
 #include "core/rect.hpp"
@@ -67,6 +68,12 @@ class GraphicsObjectData {
 
   virtual int PixelWidth(const GraphicsObject& rendering_properties) = 0;
   virtual int PixelHeight(const GraphicsObject& rendering_properties) = 0;
+
+  // Object-local album sampling; drawers without a picture album return Clear.
+  virtual RGBAColour GetPixelColor(Point point, int cut_no) const {
+    return RGBAColour::Clear();
+  }
+
   // Returns the destination rectangle on the screen to draw srcRect()
   // to. Override to return custom rectangles in the case of a custom animation
   // format.

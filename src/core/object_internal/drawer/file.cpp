@@ -32,13 +32,31 @@
 #include "utilities/clock.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace {
+
+RGBAColour ComposePixel(RGBAColour dst, RGBAColour src) {
+  if (src.a() == 0)
+    return dst;
+  if (src.a() == 255 || dst.a() == 0)
+    return src;
+
+  // Preserve Siglus's integer alpha and channel rounding.
+  const int alpha = src.a() + dst.a() - src.a() * dst.a() / 255;
+  const int dst_weight = (255 - src.a()) * dst.a();
+  auto channel = [&](int d, int s) {
+    return ((255 * src.a() * s + dst_weight * d) >> 8) / alpha;
+  };
+  return RGBAColour(channel(dst.r(), src.r()), channel(dst.g(), src.g()),
+                    channel(dst.b(), src.b()), alpha);
+}
 
 Rect LayerLocalRect(const CompositeGraphicsObjectLayer& layer) {
   const GrpRect& pattern = layer.surface->GetPattern(layer.cut_no);
@@ -144,6 +162,11 @@ int GraphicsObjectOfFile::PixelHeight(const GraphicsObject& rp) {
 
 std::unique_ptr<GraphicsObjectData> GraphicsObjectOfFile::Clone() const {
   return std::make_unique<GraphicsObjectOfFile>(*this);
+}
+
+RGBAColour GraphicsObjectOfFile::GetPixelColor(Point point, int cut_no) const {
+  return surface_ ? surface_->GetPixelColor(point, cut_no)
+                  : RGBAColour::Clear();
 }
 
 void GraphicsObjectOfFile::Execute() {
@@ -277,6 +300,39 @@ int CompositeGraphicsObject::PixelHeight(const GraphicsObject& rp) {
 
 std::unique_ptr<GraphicsObjectData> CompositeGraphicsObject::Clone() const {
   return std::make_unique<CompositeGraphicsObject>(*this);
+}
+
+RGBAColour CompositeGraphicsObject::GetPixelColor(Point point,
+                                                  int cut_no) const {
+  if (cut_no != 0)
+    return RGBAColour::Clear();
+
+  auto cut = [](const CompositeGraphicsObjectLayer& layer) {
+    return std::clamp(layer.cut_no, 0,
+                      std::max(0, layer.surface->GetNumPatterns() - 1));
+  };
+  // The first cut fixes the canvas; its placement offset does not apply.
+  const auto& base = layers_.front();
+  const auto region = base.surface->GetPixelRegion(cut(base));
+  if (!region || !region->Contains(point))
+    return RGBAColour::Clear();
+
+  auto color = base.surface->GetPixelColor(point, cut(base));
+  for (std::size_t i = 1; i < layers_.size(); ++i) {
+    const auto& layer = layers_[i];
+    const auto x = static_cast<std::int64_t>(point.x()) - layer.offset.x();
+    const auto y = static_cast<std::int64_t>(point.y()) - layer.offset.y();
+    if (x < std::numeric_limits<int>::min() ||
+        x > std::numeric_limits<int>::max() ||
+        y < std::numeric_limits<int>::min() ||
+        y > std::numeric_limits<int>::max())
+      continue;
+    color = ComposePixel(
+        color,
+        layer.surface->GetPixelColor(
+            Point(static_cast<int>(x), static_cast<int>(y)), cut(layer)));
+  }
+  return color;
 }
 
 bool CompositeGraphicsObject::HitTestAtSource(const GraphicsObject& go,

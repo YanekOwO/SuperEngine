@@ -21,6 +21,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 class ArchiveInfo {
@@ -31,9 +32,15 @@ class ArchiveInfo {
 
 class IConverter {
  public:
+  struct PixelRegion {
+    int x = 0, y = 0, width = 0, height = 0;
+    int origin_x = 0, origin_y = 0;
+  };
+
   struct Region {
     int x1, y1, x2, y2;
     int origin_x, origin_y;
+    std::optional<PixelRegion> pixel_region;
     int Width() { return x2 - x1; }
     int Height() { return y2 - y1; }
     void FixVar(int& v, int& w) {

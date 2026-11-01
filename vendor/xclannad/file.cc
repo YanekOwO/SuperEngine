@@ -658,7 +658,11 @@ bool G00Converter::Read_Type2(char* image) {
 
   // 展開
   int uncompress_size = read_little_endian_int(head + 4);
-  char* uncompress_data = new char[uncompress_size + 1024];
+  if (uncompress_size < 4)
+    return false;
+  auto storage = std::make_unique<char[]>(
+      static_cast<std::size_t>(uncompress_size) + 1024);
+  char* uncompress_data = storage.get();
 
   const char* src = head + 8;
   const char* srcend = data + datalen;
@@ -670,15 +674,39 @@ bool G00Converter::Read_Type2(char* image) {
 
   /* region_deal2 == region_deal のはず……*/
   int region_deal2 = read_little_endian_int(uncompress_data);
+  if (region_deal2 < 0 || region_deal2 > (uncompress_size - 4) / 8)
+    return false;
   if (region_deal > region_deal2)
     region_deal = region_deal2;
+
+  for (auto& region : region_table)
+    region.pixel_region = PixelRegion{};
 
   for (int i = 0; i < region_deal; i++) {
     int offset = read_little_endian_int(uncompress_data + i * 8 + 4);
     int length = read_little_endian_int(uncompress_data + i * 8 + 8);
+    if (offset == 0 || length == 0)
+      continue;
+    if (offset < 0 || offset > uncompress_size - 0x74 ||
+        (length > 0 && (length < 0x74 || length > uncompress_size - offset)))
+      return false;
+    const char* cut_header = uncompress_data + offset;
+    auto& pixel = region_table[i].pixel_region.emplace();
+    pixel.x = read_little_endian_int(cut_header + 4);
+    pixel.y = read_little_endian_int(cut_header + 8);
+    pixel.width = read_little_endian_int(cut_header + 12);
+    pixel.height = read_little_endian_int(cut_header + 16);
+    pixel.origin_x = read_little_endian_int(cut_header + 20);
+    pixel.origin_y = read_little_endian_int(cut_header + 24);
+    if (pixel.width < 0 || pixel.height < 0)
+      return false;
     src = (const char*)(uncompress_data + offset + 0x74);
-    srcend = (const char*)(uncompress_data + offset + length);
-    while (src < srcend) {
+    // Linked cuts have negative lengths; the header still lists their chips.
+    srcend = uncompress_data + (length > 0 ? offset + length : uncompress_size);
+    const int chip_count = read_little_endian_short(cut_header + 2);
+    for (int chip = 0; chip < chip_count; ++chip) {
+      if (srcend - src < 0x5c)
+        return false;
       int x, y, w, h;
       /* コピーする領域を得る */
       x = read_little_endian_short(src);
@@ -686,6 +714,10 @@ bool G00Converter::Read_Type2(char* image) {
       w = read_little_endian_short(src + 6);
       h = read_little_endian_short(src + 8);
       src += 0x5c;
+      if (w < 0 || h < 0 ||
+          static_cast<std::size_t>(w) * h * 4 >
+              static_cast<std::size_t>(srcend - src))
+        return false;
 
       x += region_table[i].x1;
       y += region_table[i].y1;
@@ -695,7 +727,6 @@ bool G00Converter::Read_Type2(char* image) {
       src += w * h * 4;
     }
   }
-  delete[] uncompress_data;
   return true;
 }
 

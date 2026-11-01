@@ -444,6 +444,7 @@ struct DirectObjectPropertyBinder {
     Member<&ObjectParameter::z_depth>("z");
     Member<&ObjectParameter::origin_x>("center_x");
     Member<&ObjectParameter::origin_y>("center_y");
+    Member<&ObjectParameter::origin_z>("center_z");
     Member<&ObjectParameter::repetition_origin_x>("center_rep_x");
     Member<&ObjectParameter::repetition_origin_y>("center_rep_y");
     Member<&ObjectParameter::high_quality_scale_x_percent>("scale_x");
@@ -1127,6 +1128,44 @@ void BindObject(SiglusMachine& runtime) {
       sb::vararg);
   object.def("exist_type",
              [](ObjectHandle* h) { return h->object->HasDrawer() ? 1 : 0; });
+
+  object.def(
+      "get_pixel_color_r",
+      [](const ObjectHandle* h, int x, int y, int cut_no) {
+        const auto* drawer = h->object->GetDrawer<>();
+        const auto color = drawer ? drawer->GetPixelColor(Point(x, y), cut_no)
+                                  : RGBAColour::Clear();
+        return color.r();
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("cut_no") = 0);
+  object.def(
+      "get_pixel_color_g",
+      [](const ObjectHandle* h, int x, int y, int cut_no) {
+        const auto* drawer = h->object->GetDrawer<>();
+        const auto color = drawer ? drawer->GetPixelColor(Point(x, y), cut_no)
+                                  : RGBAColour::Clear();
+        return color.g();
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("cut_no") = 0);
+  object.def(
+      "get_pixel_color_b",
+      [](const ObjectHandle* h, int x, int y, int cut_no) {
+        const auto* drawer = h->object->GetDrawer<>();
+        const auto color = drawer ? drawer->GetPixelColor(Point(x, y), cut_no)
+                                  : RGBAColour::Clear();
+        return color.b();
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("cut_no") = 0);
+  object.def(
+      "get_pixel_color_a",
+      [](const ObjectHandle* h, int x, int y, int cut_no) {
+        const auto* drawer = h->object->GetDrawer<>();
+        const auto color = drawer ? drawer->GetPixelColor(Point(x, y), cut_no)
+                                  : RGBAColour::Clear();
+        return color.a();
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("cut_no") = 0);
+
   object.def(
       "get_size_x",
       [](const ObjectHandle* h, int cut_no) { return h->object->PixelWidth(); },
@@ -1155,6 +1194,25 @@ void BindObject(SiglusMachine& runtime) {
     else
       h->object->Param().ClearOwnClipRect();
   });
+
+  object.def(
+      "set_center",
+      [](ObjectHandle* h, std::vector<sr::Value> args) {
+        if (args.size() != 2 && args.size() != 3)
+          throw sr::RuntimeError("Object.set_center expects 2 or 3 arguments");
+        const int x = sb::from_value<int>(args[0]);
+        const int y = sb::from_value<int>(args[1]);
+        std::optional<int> z;
+        if (args.size() == 3)
+          z = sb::from_value<int>(args[2]);
+
+        auto& param = h->object->Param();
+        param.SetOriginX(x);
+        param.SetOriginY(y);
+        if (z)
+          param.SetOriginZ(*z);
+      },
+      sb::vararg);
   object.def("set_center_rep", [](ObjectHandle* h, int x, int y) {
     h->object->Param().SetRepOriginX(x);
     h->object->Param().SetRepOriginY(y);
