@@ -162,15 +162,19 @@ void LoadGan(GraphicsObject& object,
   }
 
   GanDecoder decoder(LoadFile(*gan_path));
-  const std::string image_name =
-      decoder.raw_file_name.empty() ? filename : decoder.raw_file_name;
+  // Siglus animates the image already assigned to the object. The GAN's
+  // embedded image name is editor metadata and may not exist in the game.
+  std::string image_name = object.FilePath();
+  if (image_name.empty()) {
+    image_name =
+        decoder.raw_file_name.empty() ? filename : decoder.raw_file_name;
+  }
   auto image = images->GetSurfaceNamed(image_name);
   auto data = std::make_unique<GanGraphicsObjectData>(
       image, std::move(decoder.animation_sets),
       event ? event->GetClock() : std::make_shared<Clock>());
   if (data->HasSet(0))
     data->PrimeSet(0);
-  object.ResetChildren();
   object.SetDrawer(std::move(data));
 }
 
