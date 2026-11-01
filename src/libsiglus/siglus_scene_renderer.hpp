@@ -44,6 +44,12 @@ struct ScreenCanvas;
 
 namespace libsiglus {
 
+// Renders a parent and its descendants with inherited transforms and masks.
+void RenderSiglusObjectTree(
+    GraphicsObject& object,
+    const MaskList* mask_list,
+    std::optional<ParentObjState> parent = std::nullopt);
+
 class SiglusSceneRenderer final : public ISceneRenderer {
  public:
   SiglusSceneRenderer(::Stage& stage,

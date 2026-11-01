@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace libsiglus {
 namespace {
@@ -273,6 +274,12 @@ void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
                                        std::optional<ParentObjState> parent) {
   if (!mask_list)
     mask_list = mask_list_.get();
+  RenderSiglusObjectTree(root, mask_list, std::move(parent));
+}
+
+void RenderSiglusObjectTree(GraphicsObject& root,
+                            const MaskList* mask_list,
+                            std::optional<ParentObjState> parent) {
   const auto resolve_mask =
       [mask_list](int index) -> std::optional<ObjectMask> {
     if (!mask_list)
@@ -288,10 +295,9 @@ void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
     }
   };
 
-  const auto render_object =
-      [&](const auto& self, GraphicsObject& object,
-          std::optional<ParentObjState> parent,
-          std::optional<ObjectMask> inherited_mask) -> void {
+  const auto dfs = [&](const auto& dfs, GraphicsObject& object,
+                       std::optional<ParentObjState> parent,
+                       std::optional<ObjectMask> inherited_mask) -> void {
     if (!object.Param().visible() || !object.Param().button.visible)
       return;
 
@@ -311,13 +317,28 @@ void SiglusSceneRenderer::RenderObject(GraphicsObject& root,
       transformed_parent.render_state = RenderState::Fold(
           transformed_parent.render_state, parent->render_state);
     }
-    for (auto& child : object.GetChildren()) {
+
+    // Sort siblings by their sorter without changing script-visible
+    // indices. Equal sorters retain child index order, independent of depth.
+    std::vector<GraphicsObject*> children;
+    children.reserve(object.GetChildren().size());
+    for (const auto& child : object.GetChildren()) {
       if (child)
-        self(self, *child, transformed_parent, mask);
+        children.push_back(child.get());
     }
+    std::stable_sort(children.begin(), children.end(),
+                     [](const GraphicsObject* lhs, const GraphicsObject* rhs) {
+                       const auto& a = lhs->Param();
+                       const auto& b = rhs->Param();
+                       return std::tie(a.z_order, a.z_layer) <
+                              std::tie(b.z_order, b.z_layer);
+                     });
+
+    for (auto* child : children)
+      dfs(dfs, *child, transformed_parent, mask);
   };
 
-  render_object(render_object, root, std::move(parent), std::nullopt);
+  dfs(dfs, root, std::move(parent), std::nullopt);
 }
 
 }  // namespace libsiglus
