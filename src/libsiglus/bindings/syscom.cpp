@@ -183,6 +183,22 @@ void BindSyscom(SiglusMachine& runtime) {
   m.def("set_autoskip",
         [sys](int value) { sys->text().SetAutoSkipMode(value != 0); });
   m.def("get_autoskip", [sys] { return sys->text().auto_skip_mode() ? 1 : 0; });
+  m.def("set_enable_autoskip", [local_config](int value) {
+    local_config->syscommenu.auto_skip.enable = value != 0;
+  });
+  m.def("get_enable_autoskip", [local_config] {
+    return local_config->syscommenu.auto_skip.enable ? 1 : 0;
+  });
+  m.def("set_exist_autoskip", [local_config](int value) {
+    local_config->syscommenu.auto_skip.exist = value != 0;
+  });
+  m.def("get_exist_autoskip", [local_config] {
+    return local_config->syscommenu.auto_skip.exist ? 1 : 0;
+  });
+  m.def("is_autoskip_enable", [local_config] {
+    const auto& entry = local_config->syscommenu.auto_skip;
+    return entry.exist && entry.enable ? 1 : 0;
+  });
 
   m.def("get_automode", [local_config, global_config] {
     return EffectiveAutoMode(*local_config, *global_config) ? 1 : 0;
@@ -364,6 +380,56 @@ void BindSyscom(SiglusMachine& runtime) {
     return false;
   });
 
+  // Storage is intentionally unavailable; metadata describes an empty slot.
+  m.def("open_load", [] {});
+  m.def("load", [](int, int, int, int) {});
+  m.def("qload", [](int, int, int, int) {});
+  m.def("delete_save", [](int) { return 0; });
+  m.def("change_save", [](int, int) { return 0; });
+  m.def("copy_save", [](int, int) { return 0; });
+  for (const auto* name :
+       {"get_save_year", "get_save_month", "get_save_day", "get_save_hour",
+        "get_save_minute", "get_save_second", "get_save_millisecond"})
+    m.def(name, [](int) { return 0; });
+  m.def("get_save_title", [](int) { return std::string(); });
+  m.def("get_save_message", [](int) { return std::string(); });
+  m.def("get_save_value", [](int, Value, int, int) {});
+  m.def("set_save_value", [](int, Value, int, int) {});
+  // The twitter account and posting dialog is intentionally unavailable.
+  m.def("twitter", [] {});
+
+  const auto bind_menu_flag = [&](std::string_view name,
+                                  MenuEntryConfig SyscomMenuConfig::* entry,
+                                  bool MenuEntryConfig::* field) {
+    m.def(name, [local_config, entry, field](int value) {
+      (local_config->syscommenu.*entry).*field = value != 0;
+    });
+  };
+  bind_menu_flag("set_enable_msgback", &SyscomMenuConfig::msg_back,
+                 &MenuEntryConfig::enable);
+  bind_menu_flag("set_exist_msgback", &SyscomMenuConfig::msg_back,
+                 &MenuEntryConfig::exist);
+  bind_menu_flag("set_exist_hidemwnd", &SyscomMenuConfig::hide_mwnd,
+                 &MenuEntryConfig::exist);
+  bind_menu_flag("set_exist_retmenu", &SyscomMenuConfig::return_to_menu,
+                 &MenuEntryConfig::exist);
+  bind_menu_flag("set_exist_save", &SyscomMenuConfig::save,
+                 &MenuEntryConfig::exist);
+
+  m.def("end_game", [sys, &runtime, gameexe](int warning) {
+    if (warning && runtime.platform_implementor) {
+      const std::string prompt =
+          gameexe ? (*gameexe)("WARNINGINFO.GAMEEND_WARNING_STR")
+                        .Str()
+                        .value_or("Quit the game?")
+                  : "Quit the game?";
+      if (!runtime.platform_implementor->AskUserPrompt(prompt, "", "Yes", "No"))
+        return;
+    }
+    sys->RequestQuit();
+    runtime.vm->RequestStop();
+  });
+
   m.def("set_enable_hidemwnd", [local_config](bool value) {
     local_config->syscommenu.hide_mwnd.enable = value;
   });
@@ -380,6 +446,9 @@ void BindSyscom(SiglusMachine& runtime) {
           return global_config->system.*field ? 1 : 0;
         });
       };
+  add_global_bool(
+      &GlobalSystemConfig::alert_saveload, "set_saveload_alert_onoff",
+      "set_saveload_alert_onoff_default", "get_saveload_alert_onoff");
   add_global_bool(&GlobalSystemConfig::disable_wipe_anime,
                   "set_no_wipe_anime_onoff", "set_no_wipe_anime_onoff_default",
                   "get_no_wipe_anime_onoff");

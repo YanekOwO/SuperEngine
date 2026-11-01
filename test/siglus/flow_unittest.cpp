@@ -25,6 +25,7 @@
 
 #include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
+#include "core/input.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
@@ -309,12 +310,13 @@ class SiglusCallMemoryTest : public ::testing::Test {
         .dst = Variable{.type = Type::String, .id = 0}};
   }
 
-  static token::Command FarCall(std::string scene) {
+  static token::Command FarCall(std::string scene, bool extended = false) {
     elm::Farcall call;
     call.scn_name = String(std::move(scene));
     call.zlabel = Integer(0);
     call.intargs = {Integer(7)};
     call.strargs = {String("farcall")};
+    call.extended = extended;
     return token::Command{
         .chain = elm::AccessChain{.root = elm::Root(Type::String, call)},
         .dst = Variable{.type = Type::String, .id = 0}};
@@ -701,6 +703,52 @@ TEST_F(SiglusCallMemoryTest, SuspendedFarcallKeepsBanksUntilResumed) {
   EXPECT_EQ(observations[1].string, "farcall");
   EXPECT_EQ(observations[2].integer, 42);
   EXPECT_EQ(observations[2].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedCallRestoresBanksAndClearsInput) {
+  // Return from an extended call; restore caller banks and clear pending input.
+  runtime.script_input = std::make_shared<ScriptInput>();
+  runtime.script_input->OnEvent(
+      std::make_shared<Event>(KeyDown{KeyCode::SPACE}));
+  EXPECT_TRUE(runtime.script_input->Get(ScriptInput::Source::Decide).on_down);
+  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  InstallTokens({FarCall("far", true), token::Eof{}});
+  Run("L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].string, "farcall");
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].string, "root");
+  EXPECT_EQ(observations[1].depth, 1);
+  EXPECT_FALSE(runtime.script_input->Get(ScriptInput::Source::Decide).on_down);
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedCallCleansUpAfterException) {
+  // Throw inside an extended call; restore the original bank stack on unwind.
+  AddFarcallProbe("L[0] = 99; throw \"failure\";");
+  InstallTokens({FarCall("far", true), token::Eof{}});
+  Run("L[0] = 42; try { entry(); } catch (e) {} observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedCallRetainsBanksDuringSuspension) {
+  // Suspend an extended call; resume in its banks before restoring the caller.
+  AddFarcallProbe("observe(L[0], K[0]); await gate; return n;");
+  InstallTokens({FarCall("far", true), token::Eof{}});
+  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
+  Run("fn start() { L[0] = 42; entry(); observe(L[0], K[0]); }");
+  runtime.vm->InvokeUntilBlocked(runtime.vm->globals_->at("start"), {});
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].depth, 2);
+  gate->completion_promise->Resolve(sr::nil);
+  runtime.vm->Run();
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].depth, 1);
 }
 
 TEST_F(SiglusCallMemoryTest, CommandArgumentCountFailureDoesNotAcquireBanks) {

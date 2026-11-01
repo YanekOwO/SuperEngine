@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "core/input.hpp"
 #include "core/memory_internal/facade.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -318,9 +319,10 @@ void BindMemory(SiglusMachine& rt) {
           throw RuntimeError(
               "scene entry received an incorrect argument count");
         if (kind < static_cast<int>(SceneCallKind::Scene) ||
-            kind > static_cast<int>(SceneCallKind::Farcall))
+            kind > static_cast<int>(SceneCallKind::Extended))
           throw RuntimeError("invalid scene call kind");
-        if (kind == static_cast<int>(SceneCallKind::Farcall)) {
+        if (kind == static_cast<int>(SceneCallKind::Farcall) ||
+            kind == static_cast<int>(SceneCallKind::Extended)) {
           if (args->items.size() != 2)
             throw RuntimeError("farcall requires L and K argument lists");
           const auto* integers =
@@ -342,12 +344,24 @@ void BindMemory(SiglusMachine& rt) {
         return false;
       });
 
-  m.def("__builtin_pop_frame", [&memory](Fiber& fiber) {
-    MemoryHandle& handle = GetFiberMemory(fiber, memory);
-    if (handle.StackDepth() <= 1)
-      throw RuntimeError("Siglus call frame stack underflow");
-    handle.PopStackFrame();
-  });
+  m.def(
+      "__builtin_pop_frame",
+      [&memory, &rt](Fiber& fiber, Value entry) {
+        MemoryHandle& handle = GetFiberMemory(fiber, memory);
+        if (handle.StackDepth() <= 1)
+          throw RuntimeError("Siglus call frame stack underflow");
+        handle.PopStackFrame();
+        const auto* descriptor = entry.Get_if<List>();
+        if (descriptor && descriptor->items.size() == 3 &&
+            descriptor->items[2] ==
+                Value(static_cast<int>(SceneCallKind::Extended))) {
+          if (rt.script_input)
+            rt.script_input->Clear();
+          if (rt.input_event_listener)
+            rt.input_event_listener->ClearState();
+        }
+      },
+      sb::arg("entry") = nil);
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_memory", BindMemory)

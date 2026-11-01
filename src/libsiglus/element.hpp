@@ -71,6 +71,7 @@ struct Farcall {
   Value zlabel = Integer(0);   // Target label; encoded as an integer value.
   std::vector<Value> intargs;  // Positional integer argument block.
   std::vector<Value> strargs;  // Positional string argument block.
+  bool extended = false;
 
   std::string ToDebugString() const;
   bool operator==(const Farcall&) const = default;

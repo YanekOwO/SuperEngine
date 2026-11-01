@@ -679,7 +679,8 @@ void Recompiler::Finish() {
     const auto skip = code_size();
     emit(sr::JumpIfFalse{0});
     emit_load_global("__builtin_pop_frame");
-    emit(sr::Call{});
+    emit(sr::LoadFast{1});
+    emit(sr::Call{.argcnt = 1});
     emit(sr::Pop{});
     patch(skip, code_size());
   };
@@ -1086,7 +1087,10 @@ void Recompiler::emit_elm_root(const elm::Arg& r) {
 void Recompiler::emit_elm_root(const elm::Farcall& r) {
   emit_load_global("__builtin_farcall");
   emit_val(r.scn_name), emit_val(r.zlabel);
-  emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
+  if (r.extended)
+    emit_const(1);
+  emit(sr::Call{.argcnt = static_cast<uint8_t>(r.extended ? 3 : 2),
+                .kwargcnt = 0});
   // (farcall, scn, z) -> (fn)
 
   for (auto const& it : r.intargs)

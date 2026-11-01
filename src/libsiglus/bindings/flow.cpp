@@ -177,24 +177,27 @@ void BindFlow(SiglusMachine& rt) {
           return it->second;
         });
 
-  m.def("__builtin_farcall",
-        [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scn,
-                                                      int zlabel) -> sr::Value {
-          const std::string dbgname = std::format("SCENE{}@{}", scn, zlabel);
-          sr::Module* mod = loader->Load(NormalizeSceneName(std::move(scn)));
+  m.def(
+      "__builtin_farcall",
+      [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scn, int zlabel,
+                                                    int extended) -> sr::Value {
+        const std::string dbgname = std::format("SCENE{}@{}", scn, zlabel);
+        sr::Module* mod = loader->Load(NormalizeSceneName(std::move(scn)));
 
-          if (!mod)
-            throw sr::RuntimeError(
-                std::format("Farcall {} could not load scene", dbgname));
+        if (!mod)
+          throw sr::RuntimeError(
+              std::format("Farcall {} could not load scene", dbgname));
 
-          const sr::Value entry = ResolveZlabelEntry(*mod, zlabel);
-          const auto* bound = entry.Get_if<sr::BoundMethod>();
-          const auto* descriptor =
-              bound->additional_args.front().Get_if<sr::List>();
-          return MakeSceneEntry(
-              *gc, mod->globals->at("%%dispatch").Get_if<sr::Function>(),
-              descriptor->items.front().Get<int>(), 2, SceneCallKind::Farcall);
-        });
+        const sr::Value entry = ResolveZlabelEntry(*mod, zlabel);
+        const auto* bound = entry.Get_if<sr::BoundMethod>();
+        const auto* descriptor =
+            bound->additional_args.front().Get_if<sr::List>();
+        return MakeSceneEntry(
+            *gc, mod->globals->at("%%dispatch").Get_if<sr::Function>(),
+            descriptor->items.front().Get<int>(), 2,
+            extended ? SceneCallKind::Extended : SceneCallKind::Farcall);
+      },
+      sb::arg("scene"), sb::arg("zlabel"), sb::arg("extended") = 0);
 
   m.def("__builtin_load_scn",
         [loader = rt.loader.get()](int scnid) -> sr::Value {

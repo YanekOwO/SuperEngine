@@ -34,7 +34,7 @@ namespace libsiglus {
 inline constexpr uint16_t kSceneArgumentSlot = 4;
 inline constexpr uint16_t kSceneOwnedBankSlot = 3;
 
-enum class SceneCallKind { Scene, Command, Gosub, Farcall };
+enum class SceneCallKind { Scene, Command, Gosub, Farcall, Extended };
 
 // Descriptors are immutable lists containing target, arity, and call kind.
 inline serilang::Value MakeSceneEntry(serilang::GarbageCollector& gc,
