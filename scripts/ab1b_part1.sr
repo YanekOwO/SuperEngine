@@ -4,6 +4,13 @@ fn register_choices(){
 try{ if (__debug == false) return; }
 catch(e){ return; }
 
+// Direct scene launches skip the story's one-time setup. Use the game's own
+// initializer so outfit defaults and other shared state are valid.
+if (__scene != nil && __globalprop[509] == 0) {
+  __builtin_usrcmd(162, 15, "$sys_set_gsd")();
+  __globalprop[509] = 1; // $first_gameset
+}
+
 fn que(scene, choice) {
   try{
     if (__scene == nil || __scene == scene)

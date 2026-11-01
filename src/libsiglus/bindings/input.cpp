@@ -35,50 +35,46 @@ namespace sb = srbind;
 
 void BindInput(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
-  sb::module_ mm(vm.gc_.get(), vm.globals_.get());
-
   sb::module_ m(vm, "input");
 
   std::shared_ptr<InputListener> listener = std::make_shared<InputListener>();
   runtime.input_event_listener = listener;
   runtime.system->event().AddListener(19, listener);
 
-  m.def("next", [listener] { listener->ResetState(); });
-  m.def("clear", [listener] { listener->ClearState(); });
+  auto script = std::make_shared<ScriptInput>();
+  runtime.script_input = script;
+  runtime.system->event().AddListener(19, script);
+  runtime.reset_local_memory.emplace_back(
+      [listener, script, events = &runtime.system->event()] {
+        listener->ReleaseAll();
+        script->ReleaseAll();
+        events->DiscardDeferredInput();
+      });
+
+  m.def("next", [script] { script->Next(); });
+  m.def("clear", [script] { script->Clear(); });
 
   sb::module_ mouse(vm, "mouse");
-  mouse.def("next", [listener] { listener->NextMouse(); });
-  mouse.def("clear", [listener] { listener->ClearMouse(); });
-  mouse.def("pos_x", [listener] { return listener->mouse_pos.x(); });
-  mouse.def("pos_y", [listener] { return listener->mouse_pos.y(); });
-  mouse.def("get_pos_x", [listener] { return listener->mouse_pos.x(); });
-  mouse.def("get_pos_y", [listener] { return listener->mouse_pos.y(); });
+  mouse.def("next", [script] { script->NextMouse(); });
+  mouse.def("clear", [script] { script->ClearMouse(); });
+  mouse.def("pos_x", [script] { return script->MousePosition().x(); });
+  mouse.def("pos_y", [script] { return script->MousePosition().y(); });
+  mouse.def("get_pos_x", [script] { return script->MousePosition().x(); });
+  mouse.def("get_pos_y", [script] { return script->MousePosition().y(); });
 
   // TODO: mouse.get_pos(x_ref, y_ref) needs writable output references. The
   // current argument lowering reads their values and loses the destinations.
 
-  mouse.def("wheel", [listener] { return listener->mouse_wheel; });
+  mouse.def("wheel", [script] { return script->MouseWheel(); });
   mouse.def("set_pos", [&runtime](int x, int y) {
     runtime.presenter->WarpMouse(Point(x, y));
   });
 
-  enum class Source { Decide, Cancel, Left, Right };
+  using Source = ScriptInput::Source;
   struct InputButton {
     Source source;
-    std::shared_ptr<InputListener> listener;
-    InputListener::State Get() {
-      switch (source) {
-        case Source::Decide:
-          return listener->decide;
-        case Source::Cancel:
-          return listener->cancel;
-        case Source::Left:
-          return listener->mouse_left;
-        case Source::Right:
-          return listener->mouse_right;
-      }
-      return {};
-    }
+    std::shared_ptr<ScriptInput> input;
+    InputListener::State Get() { return input->Get(source); }
   };
   sb::class_<InputButton> key(m, "InputButton", false);
   key.def("on_down", [](InputButton* ref) -> int {
@@ -106,10 +102,10 @@ void BindInput(SiglusMachine& runtime) {
   key.def("get_flick_pixel", [](InputButton* ref) -> int { return 0; });
   key.def("get_flick_mm", [](InputButton* ref) -> int { return 0; });
 
-  key.inst("decide", Source::Decide, listener);
-  key.inst("cancel", Source::Cancel, listener);
-  (*mouse.dict())["left"] = sr::Value(key.make_inst(Source::Left, listener));
-  (*mouse.dict())["right"] = sr::Value(key.make_inst(Source::Right, listener));
+  key.inst("decide", Source::Decide, script);
+  key.inst("cancel", Source::Cancel, script);
+  (*mouse.dict())["left"] = sr::Value(key.make_inst(Source::Left, script));
+  (*mouse.dict())["right"] = sr::Value(key.make_inst(Source::Right, script));
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_input", BindInput)

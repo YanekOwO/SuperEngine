@@ -25,7 +25,7 @@
 #include <gtest/gtest.h>
 
 #include "mock_clock.hpp"
-
+#include "poller_helpers.hpp"
 #include "vm/dict.hpp"
 #include "vm/function.hpp"
 #include "vm/future.hpp"
@@ -49,6 +49,28 @@ class VMTest : public ::testing::Test {
   std::shared_ptr<GarbageCollector> gc;
   VM vm;
   VMTest() : gc(std::make_shared<GarbageCollector>()), vm(gc) {}
+
+  MockClock& UseNonWaitingClock() {
+    struct RejectWait : IPoller {
+      void Wait(std::chrono::milliseconds) override {
+        throw std::logic_error("Ready execution must not wait");
+      }
+    };
+    auto owner = std::make_unique<MockClock>();
+    auto& clock = *owner;
+    vm.scheduler_ = Scheduler(std::make_unique<RejectWait>(), std::move(owner));
+    return clock;
+  }
+
+  Code* LoopCalling(NativeFunction* callback) {
+    auto* code = gc->Allocate<Code>();
+    code->const_pool = value_vector(callback);
+    append_ins(code, {Push{0}, Call{0, 0}, Pop{}});
+    const auto offset =
+        -static_cast<int32_t>(code->code.size() + 1 + sizeof(Jump));
+    code->Append(Jump{offset});
+    return code;
+  }
 
   template <typename T>
     requires std::constructible_from<Value, T>
@@ -385,7 +407,7 @@ TEST_F(VMTest, SuspendedSetterDiscardsResultAfterResuming) {
   auto* fiber = vm.AddFiber(code);
   auto completion = fiber->completion_promise;
 
-  EXPECT_EQ(vm.Run(std::chrono::milliseconds(1)), nil);
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), nil);
   ASSERT_EQ(fiber->state, FiberState::Suspended);
   EXPECT_FALSE(completion->HasResult());
   vm.CollectGarbage();
@@ -503,6 +525,189 @@ TEST_F(VMTest, NativePropertyRootsTemporaryReceiverDuringGc) {
   EXPECT_EQ(run_and_get(code), 42);
   vm.CollectGarbage();
   EXPECT_TRUE(*destroyed);
+}
+
+TEST_F(VMTest, EmptyReadyDrainDoesNotWait) {
+  // An unused VM has no ready work and returns immediately without polling.
+  UseNonWaitingClock();
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), nil);
+}
+
+TEST_F(VMTest, ReadyDrainSeedsUnqueuedNewFiber) {
+  // A new owned fiber has not entered the scheduler yet; it must still count
+  // as ready and execute to completion without an existing queue entry.
+  UseNonWaitingClock();
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(42);
+  append_ins(code, {Push{0}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  ASSERT_EQ(vm.scheduler_.NextTask(), fiber);
+  fiber->state = FiberState::New;
+
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), 42);
+  EXPECT_FALSE(vm.HasPendingWork());
+}
+
+TEST_F(VMTest, ReadyDrainCompletesWorkAcrossManyQuanta) {
+  // A script spans many interpreter quanta; draining must finish it without
+  // returning early or waiting on the host.
+  UseNonWaitingClock();
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(43);
+  for (int i = 0; i < 4096; ++i)
+    code->Append(Nop{});
+  append_ins(code, {Push{0}, Return{}});
+  vm.AddFiber(code);
+
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), 43);
+  EXPECT_FALSE(vm.HasPendingWork());
+}
+
+TEST_F(VMTest, ReadyDrainExecutesMicrotasks) {
+  // A script queued only as a microtask must execute in the ready drain.
+  UseNonWaitingClock();
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(44);
+  append_ins(code, {Push{0}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  ASSERT_EQ(vm.scheduler_.NextTask(), fiber);
+  vm.scheduler_.PushMicroTask(fiber);
+
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), 44);
+}
+
+TEST_F(VMTest, ReadyDrainReturnsWithAnUnresolvedFuture) {
+  // A callback suspended on an unresolved future keeps the VM alive without
+  // making the ready drain wait; resolving it permits the next drain to finish.
+  UseNonWaitingClock();
+  auto* future = gc->Allocate<Future>();
+  auto promise = future->promise;
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(future);
+  append_ins(code, {Push{0}, Await{}, Return{}});
+  vm.AddFiber(code);
+
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), nil);
+  EXPECT_TRUE(vm.HasPendingWork());
+  promise->Resolve(45);
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), 45);
+}
+
+TEST_F(VMTest, ReadyDrainDoesNotWaitForFutureTimers) {
+  // A timer retains pending work but does not execute until the clock reaches
+  // its deadline; neither drain may wait internally.
+  auto& clock = UseNonWaitingClock();
+  auto promise = std::make_shared<Promise>();
+  vm.TrackPendingPromise(promise);
+  vm.scheduler_.PushCallbackAfter([promise] { promise->Resolve(nil); },
+                                  std::chrono::milliseconds(1000));
+
+  vm.RunReadyUntilBlocked();
+  EXPECT_TRUE(vm.HasPendingWork());
+  EXPECT_FALSE(promise->HasResult());
+  clock.AdvanceTime(std::chrono::milliseconds(1000));
+  vm.RunReadyUntilBlocked();
+  EXPECT_TRUE(promise->HasResult());
+  EXPECT_FALSE(vm.HasPendingWork());
+}
+
+TEST_F(VMTest, ReadyDrainRunsDueTimersWithoutLifetimeWork) {
+  // Due callbacks are executable even without tracked promises or fibers;
+  // callbacks added by callbacks must be drained too.
+  UseNonWaitingClock();
+  int calls = 0;
+  vm.scheduler_.PushCallbackAfter(
+      [&] {
+        ++calls;
+        vm.scheduler_.PushCallbackAfter([&] { ++calls; },
+                                        std::chrono::milliseconds(0));
+      },
+      std::chrono::milliseconds(0));
+
+  vm.RunReadyUntilBlocked();
+
+  EXPECT_EQ(calls, 2);
+}
+
+TEST_F(VMTest, ReadyDrainDoesNotStarveFibersWithDueTimerChains) {
+  // A timer continually reschedules itself; an already queued script must
+  // still run and stop the VM rather than being starved by timer draining.
+  UseNonWaitingClock();
+  int timer_calls = 0;
+  std::function<void()> timer = [&] {
+    ++timer_calls;
+    if (timer_calls < 100)
+      vm.scheduler_.PushCallbackAfter(timer, std::chrono::milliseconds(0));
+  };
+  vm.scheduler_.PushCallbackAfter(timer, std::chrono::milliseconds(0));
+  auto* stop = gc->Allocate<NativeFunction>(
+      "stop", [](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
+        vm.RequestStop();
+        return nil;
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(stop);
+  append_ins(code, {Push{0}, Call{0, 0}, Return{}});
+  vm.AddFiber(code);
+
+  vm.RunReadyUntilBlocked();
+
+  EXPECT_EQ(timer_calls, 1);
+}
+
+TEST_F(VMTest, WatchdogCanCancelAnInfiniteScript) {
+  // An infinite script advances a fake clock; host servicing must remain
+  // available to cancel execution without sleeping or a CPU budget return.
+  auto& clock = UseNonWaitingClock();
+  auto* tick = gc->Allocate<NativeFunction>(
+      "tick", [&](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        clock.AdvanceTime(std::chrono::milliseconds(1));
+        return nil;
+      });
+  int pumps = 0;
+  vm.SetHostEventPump([&] {
+    if (++pumps == 2)
+      vm.RequestStop();
+  });
+  vm.AddFiber(LoopCalling(tick));
+
+  EXPECT_NO_THROW(vm.RunReadyUntilBlocked());
+
+  EXPECT_EQ(pumps, 2);
+  EXPECT_TRUE(vm.IsStopRequested());
+}
+
+TEST_F(VMTest, WatchdogCanCancelAnInfiniteInlineCallback) {
+  // An isolated callback never suspends; it must share the cooperative host
+  // servicing path even though it bypasses the ready scheduler.
+  auto& clock = UseNonWaitingClock();
+  auto* tick = gc->Allocate<NativeFunction>(
+      "tick", [&](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        clock.AdvanceTime(std::chrono::milliseconds(1));
+        return nil;
+      });
+  vm.SetHostEventPump([&] { vm.RequestStop(); });
+  auto* callback = gc->Allocate<Function>(LoopCalling(tick));
+
+  EXPECT_NO_THROW(vm.InvokeUntilBlocked(*callback, {}));
+
+  EXPECT_TRUE(vm.IsStopRequested());
+}
+
+TEST_F(VMTest, WatchdogCanCancelAnImmediateTimerLoop) {
+  // A zero-delay timer never exhausts its ready work; watchdog checks between
+  // callbacks must still service cancellation.
+  auto& clock = UseNonWaitingClock();
+  std::function<void()> timer = [&] {
+    clock.AdvanceTime(std::chrono::milliseconds(1));
+    vm.scheduler_.PushCallbackAfter(timer, std::chrono::milliseconds(0));
+  };
+  vm.scheduler_.PushCallbackAfter(timer, std::chrono::milliseconds(0));
+  vm.SetHostEventPump([&] { vm.RequestStop(); });
+
+  EXPECT_NO_THROW(vm.RunReadyUntilBlocked());
+
+  EXPECT_TRUE(vm.IsStopRequested());
 }
 
 TEST_F(VMTest, InlineCallbackCompletesFullPrefixWithoutRunningOtherFibers) {
@@ -685,18 +890,8 @@ TEST_F(VMTest, SuspendedCallbackFailureRemainsReportable) {
 }
 
 TEST_F(VMTest, RejectedCallbackReportsBeforeDeadFiberBatchThreshold) {
-  struct AdvancingPoller : IPoller {
-    explicit AdvancingPoller(MockClock* clock) : clock(clock) {}
-
-    void Wait(std::chrono::milliseconds timeout) override {
-      clock->AdvanceTime(timeout.count() > 0 ? timeout
-                                             : std::chrono::milliseconds(1));
-    }
-
-    MockClock* clock;
-  };
   auto clock = std::make_unique<MockClock>();
-  auto poller = std::make_unique<AdvancingPoller>(clock.get());
+  auto poller = std::make_unique<AdvancingPoller>(*clock);
   vm.scheduler_ = Scheduler(std::move(poller), std::move(clock));
 
   auto* waiting = gc->Allocate<Future>();
@@ -758,16 +953,6 @@ TEST_F(VMTest, RequestStopInterruptsRunningFiber) {
 }
 
 TEST_F(VMTest, RequestStopFromTimerDoesNotWaitForLaterTimers) {
-  struct RecordingPoller : IPoller {
-    void Wait(std::chrono::milliseconds timeout) override {
-      ++wait_calls;
-      last_timeout = timeout;
-    }
-
-    int wait_calls = 0;
-    std::chrono::milliseconds last_timeout{};
-  };
-
   auto poller = std::make_unique<RecordingPoller>();
   auto clock = std::make_unique<MockClock>();
   auto* poller_ptr = poller.get();
@@ -795,18 +980,8 @@ TEST_F(VMTest, RequestStopFromTimerDoesNotWaitForLaterTimers) {
 }
 
 TEST_F(VMTest, TrackedTimerStartsNextSceneAfterLastFiberFinishes) {
-  struct AdvancingPoller : IPoller {
-    explicit AdvancingPoller(MockClock* clock) : clock(clock) {}
-
-    void Wait(std::chrono::milliseconds timeout) override {
-      clock->AdvanceTime(timeout.count() > 0 ? timeout
-                                             : std::chrono::milliseconds(1));
-    }
-
-    MockClock* clock;
-  };
   auto clock = std::make_unique<MockClock>();
-  auto poller = std::make_unique<AdvancingPoller>(clock.get());
+  auto poller = std::make_unique<AdvancingPoller>(*clock);
   vm.scheduler_ = Scheduler(std::move(poller), std::move(clock));
 
   Code* initial = gc->Allocate<Code>();

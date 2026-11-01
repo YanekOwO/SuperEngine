@@ -24,6 +24,7 @@
 
 #include "vm/vm.hpp"
 
+#include "log/domain_logger.hpp"
 #include "machine/op.hpp"
 #include "utilities/expected.hpp"
 #include "vm/call_frame.hpp"
@@ -193,6 +194,23 @@ ScriptDispatchResult TryDispatchBinaryMagic(VM& vm,
 
 }  // namespace
 
+// ------------------------------------------------------------------------------
+
+class VM::ExecutionScope {
+ public:
+  explicit ExecutionScope(VM& vm) : vm_(vm) {
+    if (vm_.execution_depth_++ == 0) {
+      vm_.execution_started_ = vm_.last_host_service_ =
+          vm_.scheduler_.GetTime();
+      vm_.execution_warned_ = false;
+    }
+  }
+  ~ExecutionScope() { --vm_.execution_depth_; }
+
+ private:
+  VM& vm_;
+};
+
 // -----------------------------------------------------------------------
 // class VM
 VM::VM(std::shared_ptr<GarbageCollector> gc)
@@ -263,13 +281,19 @@ void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
 }
 
 void VM::InvokeUntilBlocked(Value callback, std::vector<Value> arguments) {
+  ExecutionScope execution(*this);
   Fiber* fiber = MakeInvocation(std::move(callback), std::move(arguments));
   fiber->discard_result = true;
   try {
     if (fiber->state == FiberState::New)
       fiber->state = FiberState::Running;
-    while (!stop_requested_ && fiber->IsRunning())
+    while (!stop_requested_ && fiber->IsRunning()) {
+      CheckExecutionWatchdog(fiber);
+      if (stop_requested_)
+        break;
       ExecuteFiber(fiber);
+    }
+    CheckExecutionWatchdog(fiber);
   } catch (const RuntimeError& error) {
     if (fiber->state == FiberState::Dead)
       throw;
@@ -324,39 +348,50 @@ void VM::CollectGarbage() {
 
 Value VM::AddTrack(TempValue&& t) { return gc_->TrackValue(std::move(t)); }
 
-Value VM::Run() { return RunUntil(std::nullopt); }
-
-Value VM::Run(std::chrono::steady_clock::duration budget) {
-  const auto now = scheduler_.GetTime();
-  budget = std::max(budget, std::chrono::steady_clock::duration::zero());
-  const auto remaining = Clock::timepoint_t::max() - now;
-  return RunUntil(now + std::min(budget, remaining));
+Value VM::Run() {
+  while (!stop_requested_ && HasPendingWork()) {
+    RunReadyUntilBlocked();
+    if (stop_requested_ || !HasPendingWork())
+      break;
+    if (auto pump = host_event_pump_)
+      pump();
+    if (stop_requested_)
+      break;
+    scheduler_.WaitForNext(scheduler_.GetTime() +
+                           std::chrono::milliseconds(16));
+  }
+  return last_;
 }
 
-bool VM::HasPendingWork() {
-  return !scheduler_.IsIdle() || CountPendingPromises() > 0 ||
+bool VM::HasRunnableWork() const {
+  return !scheduler_.IsIdle() ||
          std::ranges::any_of(fibres_, [](const Fiber* fiber) {
            return fiber->state == FiberState::New;
          });
 }
 
-Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
-  // Seed: enqueue any New fibers so they can be processed.
+bool VM::HasPendingWork() {
+  return HasRunnableWork() || CountPendingPromises() > 0;
+}
+
+void VM::SeedNewFibres() {
   for (auto* f : fibres_)
     if (f->state == FiberState::New)
       scheduler_.PushTask(f);
+}
 
-  const auto should_pause = [this, deadline] {
-    return stop_requested_ || (deadline && scheduler_.GetTime() >= *deadline);
-  };
-  while (HasPendingWork()) {
-    if (should_pause())
+Value VM::RunReadyUntilBlocked() {
+  ExecutionScope execution(*this);
+  SeedNewFibres();
+  while (!stop_requested_) {
+    CheckExecutionWatchdog();
+    if (stop_requested_)
       break;
-    if (deadline)
-      scheduler_.DrainExpiredTimers(*deadline);
-    else
-      scheduler_.DrainExpiredTimers();
-    if (should_pause() || !HasPendingWork())
+
+    // Interleave timer callbacks with fiber quanta so a zero-delay timer chain
+    // cannot monopolize execution or prevent watchdog cancellation checks.
+    const bool timer_ran = scheduler_.RunOneDueTimer();
+    if (stop_requested_)
       break;
 
     if (Fiber* next = scheduler_.NextTask()) {
@@ -365,6 +400,7 @@ Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
         next->state = FiberState::Running;
         try {
           ExecuteFiber(next);
+          CheckExecutionWatchdog(next);
         } catch (const RuntimeError& e) {
           if (next->state == FiberState::Dead)
             throw;
@@ -379,11 +415,10 @@ Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
         if (next->state == FiberState::Dead)
           ++dead_fibre_count_;
       }
-    } else {
-      if (deadline)
-        scheduler_.WaitForNext(*deadline);
-      else
-        scheduler_.WaitForNext();
+    } else if (!timer_ran) {
+      SeedNewFibres();
+      if (scheduler_.IsIdle())
+        break;
     }
 
     // run garbage collector periodically
@@ -391,7 +426,8 @@ Value VM::RunUntil(std::optional<Clock::timepoint_t> deadline) {
       CollectGarbage();
 
     // Remove dead fibers and record last result
-    MaybeSweepDeadFibres();
+    if (failed_fibre_pending_ || dead_fibre_count_ >= (fibres_.size() + 1) / 2)
+      SweepDeadFibres();
   }
 
   // Final sweep of dead fibers to update last_
@@ -1053,11 +1089,6 @@ void VM::SweepDeadFibres() {
   failed_fibre_pending_ = false;
 }
 
-void VM::MaybeSweepDeadFibres() {
-  if (failed_fibre_pending_ || dead_fibre_count_ >= (fibres_.size() + 1) / 2)
-    SweepDeadFibres();
-}
-
 std::size_t VM::CountPendingPromises() {
   std::erase_if(pending_promises_, [](std::weak_ptr<Promise> p) {
     std::shared_ptr<Promise> promise = p.lock();
@@ -1067,6 +1098,33 @@ std::size_t VM::CountPendingPromises() {
   });
 
   return pending_promises_.size();
+}
+
+void VM::SetHostEventPump(std::function<void()> pump) {
+  host_event_pump_ = std::move(pump);
+}
+
+void VM::CheckExecutionWatchdog(const Fiber* fiber) {
+  if (stop_requested_)
+    return;
+  const auto now = scheduler_.GetTime();
+  if (!execution_warned_ &&
+      now - execution_started_ >= std::chrono::seconds(10)) {
+    execution_warned_ = true;
+    static DomainLogger logger("VM");
+    auto warning = logger(Severity::Warn);
+    warning << "Execution has not suspended for 10 seconds; continuing";
+    if (fiber && !fiber->frames.empty())
+      warning << " at bytecode offset " << fiber->frames.back().ip;
+    else
+      warning << " while servicing ready tasks or timers";
+  }
+  if (now - last_host_service_ >= std::chrono::milliseconds(16)) {
+    last_host_service_ = now;
+    // Keep the callable alive if servicing events changes its registration.
+    if (auto pump = host_event_pump_)
+      pump();
+  }
 }
 
 }  // namespace serilang

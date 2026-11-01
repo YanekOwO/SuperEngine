@@ -73,6 +73,7 @@ class FrameActionManager;
 class KidokuTable;
 class IPlatformImplementor;
 class MaskList;
+class ScriptInput;
 
 namespace libsiglus {
 using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
@@ -144,7 +145,7 @@ struct SiglusMachine {
   // ------------------------------------------------------------------------------
   std::vector<std::shared_ptr<serilang::Promise>> pending_frame_requests_;
   std::vector<std::shared_ptr<serilang::Promise>> active_frame_requests_;
-  // Queue a wait for the next system frame, suppressing its presentation.
+  // Queue a wait for the next system frame while display updates continue.
   serilang::Value RequestFrame();
   // Activate only requests queued before this frame's updates begin.
   bool BeginFrameRequests();
@@ -175,6 +176,7 @@ struct SiglusMachine {
   std::shared_ptr<EventListener> system_event_listener;
   std::shared_ptr<EventListener> mwnd_button_event_listener;
   std::shared_ptr<InputListener> input_event_listener;
+  std::shared_ptr<ScriptInput> script_input;
   std::vector<std::function<void()>> reset_local_memory;
   std::shared_ptr<SiglusWipeEndHook> finish_active_wipe =
       std::make_shared<SiglusWipeEndHook>();
@@ -199,6 +201,7 @@ struct SiglusMachine {
   // Schedule the configured startup scene, or an explicit scene ID override.
   void Start(std::optional<int> start_scene = std::nullopt);
   void Run();
+  void PumpHostEvents();
 
   // Advance one frame using given deltas.
   void Update(std::chrono::milliseconds real_delta,

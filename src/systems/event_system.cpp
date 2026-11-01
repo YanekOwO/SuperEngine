@@ -30,6 +30,9 @@
 #include "core/event_listener.hpp"
 #include "systems/event_backend.hpp"
 
+#include <algorithm>
+#include <utility>
+
 // -----------------------------------------------------------------------
 // EventSystem
 // -----------------------------------------------------------------------
@@ -62,11 +65,42 @@ std::chrono::time_point<std::chrono::steady_clock> EventSystem::GetTime()
 std::shared_ptr<Clock> EventSystem::GetClock() const { return clock_; }
 
 void EventSystem::ExecuteEventSystem() {
+  while (!deferred_events_.empty()) {
+    auto event = std::move(deferred_events_.front());
+    deferred_events_.pop_front();
+    DispatchEvent(std::move(event));
+  }
   std::shared_ptr<Event> event = nullptr;
   do {
     event = event_backend_->PollEvent();
     DispatchEvent(event);
   } while (event != nullptr && !std::holds_alternative<std::monostate>(*event));
+}
+
+void EventSystem::PumpHostEvents() {
+  while (auto event = event_backend_->PollEvent()) {
+    if (std::holds_alternative<std::monostate>(*event))
+      break;
+    if (std::holds_alternative<Quit>(*event)) {
+      DiscardDeferredInput();
+      DispatchEvent(std::move(event));
+      break;
+    }
+
+    // Keep resize, focus, and pointer events in their original order so input
+    // coordinates are translated using the corresponding window geometry.
+    deferred_events_.push_back(std::move(event));
+  }
+}
+
+void EventSystem::DiscardDeferredInput() {
+  std::erase_if(deferred_events_, [](const auto& event) {
+    return std::holds_alternative<KeyDown>(*event) ||
+           std::holds_alternative<KeyUp>(*event) ||
+           std::holds_alternative<MouseDown>(*event) ||
+           std::holds_alternative<MouseUp>(*event) ||
+           std::holds_alternative<MouseMotion>(*event);
+  });
 }
 
 void EventSystem::DispatchEvent(std::shared_ptr<Event> event) {

@@ -406,6 +406,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   };
   rt.system_event_listener = std::make_shared<SystemEventListener>(vm, rt);
   rt.system->event().AddListener(30, rt.system_event_listener);
+  vm.SetHostEventPump([&rt] { rt.PumpHostEvents(); });
 
   for (auto it = binding::SiglusBindingRegistry::cbegin();
        it != binding::SiglusBindingRegistry::cend(); ++it) {

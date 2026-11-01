@@ -81,9 +81,11 @@ class VM {
   // Run the event loop until no runnable work or pending promises remain.
   // Returns the last dead fiber's result if any.
   Value Run();
-  // Run for at most this cooperative time budget, preserving unfinished work.
-  // Native calls and an execution quantum may overrun the budget.
-  Value Run(std::chrono::steady_clock::duration budget);
+  // Drain runnable fibers and due timers without waiting for pending futures.
+  Value RunReadyUntilBlocked();
+  // Called cooperatively during prolonged execution and idle lifetime waits.
+  // The pump must not reenter the VM or advance engine frames.
+  void SetHostEventPump(std::function<void()> pump);
   bool HasPendingWork();
   inline void RequestStop() noexcept { stop_requested_ = true; }
   inline bool IsStopRequested() const noexcept { return stop_requested_; }
@@ -130,21 +132,28 @@ class VM {
  private:
   //----------------------------------------------------------------
   // Execution helpers
-  Value RunUntil(std::optional<Clock::timepoint_t> deadline);
+  class ExecutionScope;
+  void CheckExecutionWatchdog(const Fiber* fiber = nullptr);
+  void SeedNewFibres();
+  bool HasRunnableWork() const;
   Fiber* MakeInvocation(Value callable, std::vector<Value> arguments);
   void Return(Fiber& f);
   std::unordered_map<std::string, Value>* GetNamespace(Fiber& f);
 
   void SweepDeadFibres();
-  void MaybeSweepDeadFibres();
 
   //----------------------------------------------------------------
   // Core interpreter loop for one fiber
   void ExecuteFiber(Fiber* fib);
 
+  bool stop_requested_ = false;
   std::size_t dead_fibre_count_ = 0;
   bool failed_fibre_pending_ = false;
-  bool stop_requested_ = false;
+
+  std::function<void()> host_event_pump_;
+  std::size_t execution_depth_ = 0;
+  Clock::timepoint_t execution_started_, last_host_service_;
+  bool execution_warned_ = false;
 };
 
 }  // namespace serilang

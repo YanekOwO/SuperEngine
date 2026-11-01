@@ -28,6 +28,7 @@
 #include "core/event.hpp"
 
 #include <chrono>
+#include <deque>
 #include <map>
 #include <memory>
 
@@ -54,6 +55,10 @@ class EventSystem {
 
   // Run once per cycle through the game loop to process events.
   void ExecuteEventSystem();
+  // Service window events during script execution without dispatching gameplay
+  // input or resuming native waits. Quit is delivered immediately.
+  void PumpHostEvents();
+  void DiscardDeferredInput();
 
   bool mouse_inside_window() const noexcept { return mouse_inside_window_; }
 
@@ -69,6 +74,7 @@ class EventSystem {
   std::shared_ptr<Clock> clock_;
 
   std::unique_ptr<IEventBackend> event_backend_;
+  std::deque<std::shared_ptr<Event>> deferred_events_;
   bool mouse_inside_window_ = false;
 
   std::map<std::weak_ptr<EventListener>,

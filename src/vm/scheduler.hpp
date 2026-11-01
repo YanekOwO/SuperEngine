@@ -59,7 +59,8 @@ class Scheduler {
   Clock::timepoint_t GetTime() const;
 
   void DrainExpiredTimers();
-  void DrainExpiredTimers(Clock::timepoint_t deadline);
+  // Runs at most one due callback or fiber timer, without waiting.
+  bool RunOneDueTimer();
   Fiber* NextTask();
   void WaitForNext();
   void WaitForNext(Clock::timepoint_t deadline);

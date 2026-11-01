@@ -25,11 +25,10 @@
 #include <gtest/gtest.h>
 
 #include "mock_clock.hpp"
-
+#include "poller_helpers.hpp"
 #include "vm/object.hpp"
 #include "vm/scheduler.hpp"
 
-#include <chrono>
 #include <memory>
 #include <stdexcept>
 
@@ -40,16 +39,6 @@ using namespace std::chrono_literals;
 
 class SchedulerTest : public ::testing::Test {
  protected:
-  struct FakePoller : IPoller {
-    void Wait(std::chrono::milliseconds timeout) override {
-      ++wait_calls;
-      last_timeout = timeout;
-    }
-
-    int wait_calls = 0;
-    std::chrono::milliseconds last_timeout{};
-  };
-
   void SetUp() override {
     auto p = std::make_unique<FakePoller>();
     auto c = std::make_unique<MockClock>();
@@ -224,7 +213,9 @@ TEST_F(SchedulerTest, DeadlineWaitsEvenWithoutTimers) {
   EXPECT_EQ(poller->last_timeout, 7ms);
 }
 
-TEST_F(SchedulerTest, DeadlinePausesSelfReschedulingTimer) {
+TEST_F(SchedulerTest, RunsOnlyOneSelfReschedulingTimerPerCall) {
+  // An immediate timer enqueues itself again; each call must return after one
+  // callback so the VM can check cancellation and run other ready work.
   const auto now = clock->GetTime();
   int calls = 0;
   std::function<void()> callback = [&] {
@@ -234,12 +225,12 @@ TEST_F(SchedulerTest, DeadlinePausesSelfReschedulingTimer) {
   };
   scheduler.PushCallbackAt(callback, now);
 
-  scheduler.DrainExpiredTimers(now + 3ms);
-  EXPECT_EQ(calls, 3);
-  EXPECT_EQ(scheduler.GetTime(), now + 3ms);
+  EXPECT_TRUE(scheduler.RunOneDueTimer());
+  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(scheduler.GetTime(), now + 1ms);
 
-  scheduler.DrainExpiredTimers(now + 5ms);
-  EXPECT_EQ(calls, 5);
+  EXPECT_TRUE(scheduler.RunOneDueTimer());
+  EXPECT_EQ(calls, 2);
 }
 
 TEST_F(SchedulerTest, ScheduleAtOffsets) {

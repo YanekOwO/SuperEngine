@@ -25,6 +25,7 @@
 
 #include <concepts>
 #include <type_traits>
+#include <utility>
 
 void InputListener::State::UpdateMouseButton(bool& pending, bool in_down) {
   if (down == in_down)
@@ -133,4 +134,175 @@ void InputListener::ReleaseAll() {
   ClearMouse();
   decide = {};
   cancel = {};
+}
+
+// ------------------------------------------------------------------------------
+
+void ScriptInput::OnEvent(std::shared_ptr<Event> event) {
+  if (!event)
+    return;
+
+  std::visit(
+      [&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::same_as<T, MouseMotion>) {
+          physical_mouse_pos_ = value.pos;
+          if (!mouse_events_.empty() &&
+              std::holds_alternative<MouseMotion>(mouse_events_.back()))
+            mouse_events_.back() = value;
+          else
+            mouse_events_.push_back(value);
+        } else if constexpr (std::same_as<T, MouseDown> ||
+                             std::same_as<T, MouseUp>) {
+          constexpr bool down = std::same_as<T, MouseDown>;
+          if (value.button == MouseButton::LEFT ||
+              value.button == MouseButton::RIGHT) {
+            bool& physical = value.button == MouseButton::LEFT
+                                 ? physical_left_
+                                 : physical_right_;
+            if (physical != down) {
+              physical = down;
+              mouse_events_.push_back(value);
+            }
+          } else if constexpr (down) {
+            if (value.button == MouseButton::WHEELUP ||
+                value.button == MouseButton::WHEELDOWN)
+              mouse_events_.push_back(value);
+          }
+        } else if constexpr (std::same_as<T, KeyDown> ||
+                             std::same_as<T, KeyUp>) {
+          if (!IsDecideKey(value.code) && !IsCancelKey(value.code))
+            return;
+          bool changed;
+          if constexpr (std::same_as<T, KeyDown>)
+            changed = physical_keys_.insert(value.code).second;
+          else
+            changed = physical_keys_.erase(value.code) != 0;
+          if (changed)
+            keyboard_events_.push_back(value);
+        }
+      },
+      *event);
+}
+
+void ScriptInput::PublishMouse() {
+  if (!std::exchange(mouse_ready_, false))
+    return;
+
+  while (!mouse_events_.empty()) {
+    auto event = std::move(mouse_events_.front());
+    mouse_events_.pop_front();
+    if (auto* motion = std::get_if<MouseMotion>(&event)) {
+      mouse_pos_ = motion->pos;
+      continue;
+    }
+    const auto* press = std::get_if<MouseDown>(&event);
+    const auto button = press ? press->button : std::get<MouseUp>(event).button;
+    if (button == MouseButton::WHEELUP) {
+      --wheel_;
+    } else if (button == MouseButton::WHEELDOWN) {
+      ++wheel_;
+    } else {
+      (button == MouseButton::LEFT ? left_ : right_).Set(press != nullptr);
+      // Expose each transition with its pointer position. A fast click must
+      // have an observable pressed snapshot before its release is delivered.
+      return;
+    }
+  }
+}
+
+void ScriptInput::PublishKeyboard() {
+  if (!std::exchange(keyboard_ready_, false) || keyboard_events_.empty())
+    return;
+
+  auto event = std::move(keyboard_events_.front());
+  keyboard_events_.pop_front();
+  if (auto* press = std::get_if<KeyDown>(&event))
+    keys_[press->code].Set(true);
+  else
+    keys_[std::get<KeyUp>(event).code].Set(false);
+}
+
+InputListener::State ScriptInput::Get(Source source) {
+  PublishMouse();
+  PublishKeyboard();
+  if (source == Source::Left)
+    return left_.state;
+  if (source == Source::Right)
+    return right_.state;
+
+  auto result = source == Source::Decide ? left_.state : right_.state;
+  for (const auto& [code, button] : keys_) {
+    if (!(source == Source::Decide ? IsDecideKey(code) : IsCancelKey(code)))
+      continue;
+    result.down |= button.state.down;
+    result.on_down |= button.state.on_down;
+    result.on_up |= button.state.on_up;
+    result.down_up |= button.state.down_up;
+  }
+  return result;
+}
+
+Point ScriptInput::MousePosition() {
+  PublishMouse();
+  PublishKeyboard();
+  return mouse_pos_;
+}
+
+int ScriptInput::MouseWheel() {
+  PublishMouse();
+  PublishKeyboard();
+  return wheel_;
+}
+
+void ScriptInput::NextMouse() {
+  left_.state.ResetEdges();
+  right_.state.ResetEdges();
+  wheel_ = 0;
+  mouse_ready_ = mouse_advanced_ = true;
+}
+
+void ScriptInput::NextKeyboard() {
+  for (auto& [code, button] : keys_)
+    button.state.ResetEdges();
+  keyboard_ready_ = keyboard_advanced_ = true;
+}
+
+void ScriptInput::Next() {
+  NextMouse();
+  NextKeyboard();
+}
+
+void ScriptInput::ClearMouse() {
+  mouse_events_.clear();
+  left_.Clear(physical_left_);
+  right_.Clear(physical_right_);
+  mouse_pos_ = physical_mouse_pos_;
+  wheel_ = 0;
+  mouse_ready_ = mouse_advanced_ = true;
+}
+
+void ScriptInput::Clear() {
+  ClearMouse();
+  keyboard_events_.clear();
+  for (auto& [code, button] : keys_)
+    button.Clear(physical_keys_.contains(code));
+  for (auto code : physical_keys_)
+    keys_[code].Clear(true);
+  keyboard_ready_ = keyboard_advanced_ = true;
+}
+
+void ScriptInput::ReleaseAll() {
+  physical_left_ = physical_right_ = false;
+  physical_keys_.clear();
+  Clear();
+  mouse_advanced_ = keyboard_advanced_ = false;
+}
+
+void ScriptInput::AdvanceFrame() {
+  if (!mouse_advanced_)
+    NextMouse();
+  if (!keyboard_advanced_)
+    NextKeyboard();
+  mouse_advanced_ = keyboard_advanced_ = false;
 }

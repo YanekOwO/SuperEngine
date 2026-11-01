@@ -27,6 +27,8 @@
 #include "core/event_listener.hpp"
 #include "core/rect.hpp"
 
+#include <deque>
+#include <map>
 #include <set>
 
 inline bool IsDecideKey(KeyCode code) {
@@ -67,4 +69,49 @@ struct InputListener : public EventListener {
   bool mouse_right_pending_ = false;
   std::set<KeyCode> decide_keys_down_;
   std::set<KeyCode> cancel_keys_down_;
+};
+
+// Script input advances at logical script boundaries, independently of live
+// input used by native controls. Reads share a stable snapshot until advanced.
+class ScriptInput final : public EventListener {
+ public:
+  enum class Source { Decide, Cancel, Left, Right };
+
+  void OnEvent(std::shared_ptr<Event> event) override;
+  InputListener::State Get(Source source);
+  Point MousePosition();
+  int MouseWheel();
+
+  void Next();
+  void NextMouse();
+  void Clear();
+  void ClearMouse();
+  void ReleaseAll();
+  // An explicit next already advances its components for this logical frame.
+  void AdvanceFrame();
+
+ private:
+  struct Button {
+    InputListener::State state;
+    bool pending = false;
+    void Set(bool down) { state.UpdateMouseButton(pending, down); }
+    void Clear(bool down) {
+      state = {.down = down};
+      pending = false;
+    }
+  };
+
+  void PublishMouse();
+  void PublishKeyboard();
+  void NextKeyboard();
+
+  std::deque<Event> mouse_events_, keyboard_events_;
+  Button left_, right_;
+  std::map<KeyCode, Button> keys_;
+  Point mouse_pos_, physical_mouse_pos_;
+  int wheel_ = 0;
+  bool physical_left_ = false, physical_right_ = false;
+  std::set<KeyCode> physical_keys_;
+  bool mouse_ready_ = true, keyboard_ready_ = true;
+  bool mouse_advanced_ = false, keyboard_advanced_ = false;
 };

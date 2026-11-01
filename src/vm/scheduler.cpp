@@ -54,23 +54,22 @@ bool Scheduler::IsIdle() const noexcept {
 Clock::timepoint_t Scheduler::GetTime() const { return clock_->GetTime(); }
 
 void Scheduler::DrainExpiredTimers() {
-  DrainExpiredTimers(Clock::timepoint_t::max());
+  while (RunOneDueTimer()) {
+  }
 }
 
-void Scheduler::DrainExpiredTimers(Clock::timepoint_t deadline) {
-  const auto now = GetTime();
-  while (!timers_.empty() && timers_.top().when <= now) {
-    if (deadline != Clock::timepoint_t::max() && GetTime() >= deadline)
-      break;
-    TimerEntry t = timers_.top();
-    timers_.pop();
+bool Scheduler::RunOneDueTimer() {
+  if (timers_.empty() || timers_.top().when > GetTime())
+    return false;
+  TimerEntry t = timers_.top();
+  timers_.pop();
 
-    if (t.callback)
-      t.callback();
+  if (t.callback)
+    t.callback();
 
-    if (t.fib && t.fib->state != FiberState::Dead)
-      PushTask(t.fib);
-  }
+  if (t.fib && t.fib->state != FiberState::Dead)
+    PushTask(t.fib);
+  return true;
 }
 
 Fiber* Scheduler::NextTask() {

@@ -24,12 +24,12 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/siglus_machine.hpp"
-#include "libsiglus/bindings/flow.hpp"
-#include "libsiglus/siglus_scene_renderer.hpp"
 
 #include "core/frame_action_manager.hpp"
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
+#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/siglus_scene_renderer.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "systems/event_system.hpp"
 #include "systems/sound_system.hpp"
@@ -94,6 +94,8 @@ bool SiglusMachine::BeginFrameRequests() {
 
 void SiglusMachine::CompleteFrameRequests() {
   auto active = std::exchange(active_frame_requests_, {});
+  if (!active.empty() && script_input)
+    script_input->AdvanceFrame();
   for (auto& promise : active)
     promise->Resolve(sr::nil);
 }
@@ -210,25 +212,28 @@ void SiglusMachine::Update(std::chrono::milliseconds real_delta,
     update_wipe_after_frame_actions();
 }
 
+void SiglusMachine::PumpHostEvents() {
+  system->event().PumpHostEvents();
+  if (system->IsQuitRequested())
+    vm->RequestStop();
+}
+
 void SiglusMachine::Run() {
   if (!vm || !system)
     throw std::logic_error("SiglusMachine::Run requires a VM and system");
 
   using FrameClock = std::chrono::steady_clock;
+  // assuming max 144 fps
   constexpr auto frame_period =
       std::chrono::duration_cast<FrameClock::duration>(
           std::chrono::seconds(1)) /
-      60;
-  constexpr auto minimum_vm_budget =
-      std::chrono::duration_cast<FrameClock::duration>(
-          std::chrono::milliseconds(1));
-  const auto frame_clock = system->event().GetClock();
-  auto last_frame_tick = frame_clock->GetTicks();
+      144;
+  auto last_frame_tick = vm->scheduler_.GetTime();
 
   while (!vm->IsStopRequested() && !system->IsQuitRequested() &&
          vm->HasPendingWork()) {
     const auto next_frame = FrameClock::now() + frame_period;
-    const bool skip_presentation = BeginFrameRequests();
+    BeginFrameRequests();
     const bool capture_frame = HasPendingCaptures();
     input_event_listener->ResetState();
 
@@ -237,10 +242,12 @@ void SiglusMachine::Run() {
 
     // Advance clock
     interaction_manager->Update();
-    const auto now = frame_clock->GetTicks();
-    const auto real_delta =
-        std::max(now - last_frame_tick, Clock::duration_t::zero());
+    const auto now = vm->scheduler_.GetTime();
+    const auto real_delta = std::max(
+        std::chrono::duration_cast<Clock::duration_t>(now - last_frame_tick),
+        Clock::duration_t::zero());
     last_frame_tick = now;
+
     const bool fast_forward = system->ShouldFastForward();
     const auto fast_forward_delta = real_delta > Clock::duration_t::max() / 32
                                         ? Clock::duration_t::max()
@@ -258,24 +265,27 @@ void SiglusMachine::Run() {
     if (vm->IsStopRequested() || system->IsQuitRequested())
       break;
 
-    if (!skip_presentation && (!capture_frame || CaptureDisplayEnabled()))
+    if (!capture_frame || CaptureDisplayEnabled())
       RenderFrame();
     if (capture_frame)
       ProcessCaptureFrame();
     CompleteFrameRequests();
 
-    vm->Run(std::max(next_frame - FrameClock::now(), minimum_vm_budget));
+    vm->RunReadyUntilBlocked();
     if (vm->IsStopRequested() || system->IsQuitRequested() ||
-        !vm->HasPendingWork())
+        !vm->HasPendingWork()) {
       break;
+    }
 
     std::this_thread::sleep_until(next_frame);
   }
 
   if (system->IsQuitRequested())
     vm->RequestStop();
-  if (vm->IsStopRequested())
+  if (vm->IsStopRequested()) {
     ResetFrameRequests();
+    system->event().DiscardDeferredInput();
+  }
 }
 
 void SiglusMachine::BindGraphics() {
@@ -367,6 +377,8 @@ void SiglusMachine::StartSelection(std::shared_ptr<Selection> s) {
   // stale presses so the input that invoked it cannot also decide a choice.
   sel->mouse_ = input_event_listener->mouse_pos;
   input_event_listener->ReleaseAll();
+  if (script_input)
+    script_input->ReleaseAll();
 
   for (const auto& w : stage->mwnd[kLayerFg]) {
     if (!w)
