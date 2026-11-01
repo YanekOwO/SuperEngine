@@ -45,19 +45,22 @@ TEST(MwndConfigTest, SiglusMessageLinesFitTheConfiguredWindow) {
 
   EXPECT_EQ(layout.GetLineHeight(), 40);
   EXPECT_EQ(layout.GetNormalSize(), Size(780, 106));
-  EXPECT_EQ(window.lower_box_padding, 42);
+  EXPECT_EQ(window.textbox.lower_box_padding, 42);
   for (int line = 0; line < 3; ++line) {
     SCOPED_TRACE(line);
-    const auto point = layout.PlaceCharacter('A', std::nullopt, {});
-    ASSERT_TRUE(point);
-    EXPECT_EQ(*point, Point(0, line * 40));
-    const int screen_y =
-        window.y_distance_from_origin + window.upper_box_padding + point->y();
-    EXPECT_LE(screen_y + layout.font_size,
-              window.y_distance_from_origin + window.upper_box_padding + 106);
+    const auto result = layout.LayoutText("A", {});
+    ASSERT_EQ(result.glyphs.size(), 1U);
+    EXPECT_EQ(result.glyphs[0].position,
+              Point(0, line * 40 + layout.GetRubyTopPadding()));
+    const int screen_y = window.textbox.y_distance_from_origin +
+                         window.textbox.upper_box_padding +
+                         layout.GetInsertionPoint().y();
+    EXPECT_LE(screen_y + layout.GetFontSize(),
+              window.textbox.y_distance_from_origin +
+                  window.textbox.upper_box_padding + 106);
     layout.HardBreak();
   }
-  EXPECT_FALSE(layout.PlaceCharacter('A', std::nullopt, {}));
+  EXPECT_TRUE(layout.LayoutText("A", {}).glyphs.empty());
 }
 
 TEST(MwndConfigTest, SiglusRubyDoesNotChangeMessageLinePositions) {
@@ -75,12 +78,13 @@ TEST(MwndConfigTest, SiglusRubyDoesNotChangeMessageLinePositions) {
   for (int line = 0; line < 3; ++line) {
     SCOPED_TRACE(line);
     layout.RubyBegin();
-    EXPECT_EQ(layout.PlaceCharacter(0x6f22, std::nullopt, {}),
-              Point(0, line * 40));
-    const auto ruby = layout.PlaceRubyText("かん");
+    const auto result = layout.LayoutText("漢", {});
+    ASSERT_EQ(result.glyphs.size(), 1U);
+    EXPECT_EQ(result.glyphs[0].position, Point(0, line * 40 + 13));
+    const auto ruby = layout.RubyEnd("かん", Size(26, 10));
     ASSERT_TRUE(ruby);
-    EXPECT_EQ(*ruby, Rect::REC(0, line * 40 - 13, 26, 10));
-    EXPECT_GE(ruby->y() + layout.GetRubyTopPadding(), 0);
+    EXPECT_EQ(*ruby, Rect::REC(0, line * 40, 26, 10));
+    EXPECT_GE(ruby->y(), 0);
     layout.HardBreak();
   }
 }
@@ -100,11 +104,36 @@ TEST(MwndConfigTest, RealliveMessageLinesStillReserveRubySpace) {
   EXPECT_EQ(layout.GetRubyTopPadding(), 0);
   for (int line = 0; line < 3; ++line) {
     SCOPED_TRACE(line);
-    EXPECT_EQ(layout.PlaceCharacter('A', std::nullopt, {}),
-              Point(0, 10 + line * 50));
+    const auto result = layout.LayoutText("A", {});
+    ASSERT_EQ(result.glyphs.size(), 1U);
+    EXPECT_EQ(result.glyphs[0].position, Point(0, 10 + line * 50));
     layout.HardBreak();
   }
-  EXPECT_FALSE(layout.PlaceCharacter('A', std::nullopt, {}));
+  EXPECT_TRUE(layout.LayoutText("A", {}).glyphs.empty());
+}
+
+TEST(MwndConfigTest, SiglusFinalCellFitsWithoutTrailingSpacing) {
+  Gameexe gameexe;
+  gameexe.parseLine("MWND.000.MOJI_CNT = 2,1");
+  gameexe.parseLine("MWND.000.MOJI_SIZE = 26");
+  gameexe.parseLine("MWND.000.MOJI_SPACE = 3,14");
+  gameexe.parseLine("MWND.000.RUBY_SIZE = 0");
+  gameexe.parseLine("MWND.000.RUBY_SPACE = 0");
+
+  auto layout = MwndConfig::ParseSiglus(gameexe).GetWindow(0).layout;
+  layout.Reset();
+  EXPECT_EQ(layout.GetNormalSize(), Size(55, 26));
+  EXPECT_EQ(layout.GetXSpacing(), 3);
+  EXPECT_EQ(layout.GetYSpacing(), 14);
+
+  const auto result = layout.LayoutText("漢字語", {});
+  ASSERT_EQ(result.glyphs.size(), 2U);
+  EXPECT_EQ(result.consumed_bytes, std::string("漢字").size());
+  EXPECT_EQ(result.glyphs[0].position, Point(0, 0));
+  EXPECT_EQ(result.glyphs[1].position, Point(29, 0));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(58, 0));
+  EXPECT_TRUE(layout.LayoutText("語", {}).glyphs.empty());
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(58, 0));
 }
 
 TEST(MwndConfigTest, SiglusNameboxUsesItsAnchorAndTextOffset) {
@@ -195,9 +224,9 @@ TEST(MwndConfigTest, ScreenDimensionsUseTheSelectedEngine) {
   gameexe.parseLine("SCREEN_SIZE = 1280,720");
   gameexe.parseLine("SCREENSIZE_MOD = 999,1920,1080");
 
-  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).screen_size,
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).textbox.screen_size,
             Size(1280, 720));
-  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWindow(0).screen_size,
+  EXPECT_EQ(MwndConfig::ParseReallive(gameexe).GetWindow(0).textbox.screen_size,
             Size(1920, 1080));
 }
 
@@ -205,7 +234,7 @@ TEST(MwndConfigTest, SiglusScreenDimensionsDoNotRequireRealliveKeys) {
   Gameexe gameexe;
   gameexe.parseLine("SCREEN_SIZE = 1920,1080");
 
-  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).screen_size,
+  EXPECT_EQ(MwndConfig::ParseSiglus(gameexe).GetWindow(0).textbox.screen_size,
             Size(1920, 1080));
   EXPECT_FALSE(gameexe.Exists("SCREENSIZE_MOD"));
 }
@@ -213,13 +242,14 @@ TEST(MwndConfigTest, SiglusScreenDimensionsDoNotRequireRealliveKeys) {
 TEST(MwndConfigTest, MissingEngineScreenDimensionsUseLegacyDefaults) {
   Gameexe siglus;
   siglus.parseLine("SCREENSIZE_MOD = 0");
-  EXPECT_EQ(MwndConfig::ParseSiglus(siglus).GetWindow(0).screen_size,
+  EXPECT_EQ(MwndConfig::ParseSiglus(siglus).GetWindow(0).textbox.screen_size,
             Size(800, 600));
 
   Gameexe reallive;
   reallive.parseLine("SCREEN_SIZE = 1280,720");
-  EXPECT_EQ(MwndConfig::ParseReallive(reallive).GetWindow(0).screen_size,
-            Size(800, 600));
+  EXPECT_EQ(
+      MwndConfig::ParseReallive(reallive).GetWindow(0).textbox.screen_size,
+      Size(800, 600));
 }
 
 TEST(MwndConfigTest, SiglusWakuObjectsUseLegacyDefaultAndExplicitCounts) {
@@ -299,11 +329,11 @@ TEST(MwndConfigTest, ParsesSiglusWithoutSynthesizingRealliveKeys) {
   EXPECT_EQ(config.default_selection_window(), 1);
   EXPECT_TRUE(config.HasWindow(1));
   const auto& window = config.GetWindow(0);
-  EXPECT_EQ(window.screen_size, Size(1920, 1080));
-  EXPECT_EQ(window.x_distance_from_origin, 12);
-  EXPECT_EQ(window.y_distance_from_origin, 34);
+  EXPECT_EQ(window.textbox.screen_size, Size(1920, 1080));
+  EXPECT_EQ(window.textbox.x_distance_from_origin, 12);
+  EXPECT_EQ(window.textbox.y_distance_from_origin, 34);
   EXPECT_EQ(window.action_on_pause, 1);
-  EXPECT_EQ(window.waku_set, 3);
+  EXPECT_EQ(window.textbox.waku_set, 3);
   EXPECT_EQ(window.layout.GetNormalSize(), Size(318, 129));
 
   const auto& waku = config.GetWaku(3);
@@ -359,9 +389,9 @@ TEST(MwndConfigTest, SiglusFilterUsesConfiguredColourAndOpacity) {
   const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
 
   EXPECT_EQ(config.window_attr(), (std::vector<int>{11, 22, 33, 76, 0}));
-  EXPECT_EQ(config.GetWindow(0).colour, RGBAColour(11, 22, 33, 76));
-  EXPECT_EQ(config.GetWindow(1).colour, RGBAColour(11, 22, 33, 76));
-  EXPECT_FALSE(config.GetWindow(0).is_filter);
+  EXPECT_EQ(config.GetWindow(0).textbox.colour, RGBAColour(11, 22, 33, 76));
+  EXPECT_EQ(config.GetWindow(1).textbox.colour, RGBAColour(11, 22, 33, 76));
+  EXPECT_FALSE(config.GetWindow(0).textbox.is_filter);
   const auto& waku = config.GetWaku(0);
   EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::AlphaBlend);
   EXPECT_EQ(waku.filter_colour, RGBAColour(44, 55, 66, 128));
@@ -376,7 +406,7 @@ TEST(MwndConfigTest, SiglusFiltersUseLegacyDefaults) {
   const MwndConfig config = MwndConfig::ParseSiglus(gameexe);
 
   EXPECT_EQ(config.window_attr(), (std::vector<int>{0, 0, 0, 128, 0}));
-  EXPECT_EQ(config.GetWindow(0).colour, RGBAColour(0, 0, 0, 128));
+  EXPECT_EQ(config.GetWindow(0).textbox.colour, RGBAColour(0, 0, 0, 128));
   const auto& waku = config.GetWaku(0);
   EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::AlphaBlend);
   EXPECT_EQ(waku.filter_colour, RGBAColour(0, 0, 255, 128));
@@ -391,13 +421,13 @@ TEST(MwndConfigTest, SiglusFilterColourIsValidated) {
   const MwndConfig clamped = MwndConfig::ParseSiglus(gameexe);
 
   EXPECT_EQ(clamped.window_attr(), (std::vector<int>{0, 255, 33, 0, 0}));
-  EXPECT_EQ(clamped.GetWindow(0).colour, RGBAColour(0, 255, 33, 0));
+  EXPECT_EQ(clamped.GetWindow(0).textbox.colour, RGBAColour(0, 255, 33, 0));
 
   gameexe.SetAt("CONFIG.FILTER_COLOR", {11, 22, 33});
   const MwndConfig malformed = MwndConfig::ParseSiglus(gameexe);
 
   EXPECT_EQ(malformed.window_attr(), (std::vector<int>{0, 0, 0, 128, 0}));
-  EXPECT_EQ(malformed.GetWindow(0).colour, RGBAColour(0, 0, 0, 128));
+  EXPECT_EQ(malformed.GetWindow(0).textbox.colour, RGBAColour(0, 0, 0, 128));
   EXPECT_EQ(malformed.GetWaku(0).filter_rendering,
             MwndConfig::FilterRendering::AlphaBlend);
 }
@@ -437,12 +467,12 @@ TEST(MwndConfigTest, ParsesRealliveWindowWakuAndFarcall) {
 
   EXPECT_EQ(config.window_attr(), (std::vector<int>{1, 2, 3, 4, 1}));
   const auto& window = config.GetWindow(0);
-  EXPECT_EQ(window.colour, RGBAColour(1, 2, 3, 4));
-  EXPECT_TRUE(window.is_filter);
+  EXPECT_EQ(window.textbox.colour, RGBAColour(1, 2, 3, 4));
+  EXPECT_TRUE(window.textbox.is_filter);
   EXPECT_EQ(window.layout.GetNormalSize(), Size(105, 50));
   EXPECT_EQ(window.default_colour, RGBColour(9, 8, 7));
-  EXPECT_EQ(window.waku_set, 2);
-  EXPECT_EQ(window.keycursor_pos, Point(12, 13));
+  EXPECT_EQ(window.textbox.waku_set, 2);
+  EXPECT_EQ(window.textbox.keycursor_pos, Point(12, 13));
 
   const auto& waku = config.GetWaku(2);
   EXPECT_EQ(waku.filter_rendering, MwndConfig::FilterRendering::ColorMask);

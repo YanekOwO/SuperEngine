@@ -109,14 +109,10 @@ class MwndConfig {
     bool operator==(const Namebox&) const = default;
   };
 
-  // Message window settings, adapted from RealLive WINDOW or Siglus MWND.
-  struct Window {
+  // Textbox frame, geometry, background attributes, and wait-cursor settings.
+  struct Textbox {
     // Screen dimensions in pixels, used to resolve the window position.
     Size screen_size;
-    // Message area, moji spacing, and ruby size derived from the text settings.
-    TextLayout layout{0, 0, 0};
-    // Default message character size in pixels (moji_size).
-    int default_font_size = 25;
     // RealLive ATTR_MOD: 0 uses global WINDOW_ATTR;
     // nonzero uses this window's ATTR.
     int window_attr_mod = 0;
@@ -126,13 +122,6 @@ class MwndConfig {
     RGBAColour colour = RGBAColour::White();
     // RealLive WINDOW_ATTR filter flag, passed to colour-mask rendering.
     bool is_filter = false;
-    // Initial message text colour, taken from COLOR_TABLE.000.
-    RGBColour default_colour = RGBColour::White();
-    // RealLive indentation flag (INDENT_USE): 0 off, nonzero on.
-    int use_indentation = 1;
-    // Pause behavior: 0 starts a new page, nonzero starts a new paragraph.
-    // RealLive R_COMMAND_MOD or Siglus novel_mode (0 AVG, 1 novel).
-    int action_on_pause = 0;
     // Screen corner: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
     int origin = 0;
     // Horizontal distance in pixels inward from the selected screen corner.
@@ -152,6 +141,24 @@ class MwndConfig {
     int keycursor_type = 0;
     // Key-wait cursor offset in pixels; used only when keycursor_type is 2.
     Point keycursor_pos;
+
+    bool operator==(const Textbox&) const = default;
+  };
+
+  // Message window settings, adapted from RealLive WINDOW or Siglus MWND.
+  struct Window {
+    Textbox textbox;
+    // Message area, moji spacing, and ruby size derived from the text settings.
+    TextLayout layout;
+    // Default message character size in pixels (moji_size).
+    int default_font_size = 25;
+    // Initial message text colour, taken from COLOR_TABLE.000.
+    RGBColour default_colour = RGBColour::White();
+    // RealLive indentation flag (INDENT_USE): 0 off, nonzero on.
+    int use_indentation = 1;
+    // Pause behavior: 0 starts a new page, nonzero starts a new paragraph.
+    // RealLive R_COMMAND_MOD or Siglus novel_mode (0 AVG, 1 novel).
+    int action_on_pause = 0;
     // Speaker-name mode: 0 inline, 1 separate name window, 2 hidden
     // (NAME_DISP_MODE)
     int name_mod = 0;

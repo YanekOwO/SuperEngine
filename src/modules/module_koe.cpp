@@ -37,13 +37,13 @@
 #include "machine/rloperation/default_value_t.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
 
 namespace {
 
 void addKoeIcon(RLMachine& machine, int id) {
-  machine.GetSystem().text().GetCurrentPage().KoeMarker(id);
+  machine.GetSystem().text().GetCurrentMwnd()->Submit(msgcmd::KoeMarker{id});
 }
 
 bool koeIsPlaying(RLMachine& machine) {

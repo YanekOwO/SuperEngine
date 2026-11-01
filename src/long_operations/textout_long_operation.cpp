@@ -28,7 +28,6 @@
 #include "machine/rlmachine.hpp"
 #include "systems/system.hpp"
 #include "systems/system_error.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "utilities/exception.hpp"
@@ -49,7 +48,9 @@ TextoutLongOperation::TextoutLongOperation(RLMachine& machine,
     : machine_(machine), utf8_string_(utf8string), no_wait_(false) {
   // If we are inside a ruby gloss right now, don't delay at
   // all. Render the entire gloss!
-  if (machine.GetSystem().text().GetCurrentPage().in_ruby_gloss())
+  const bool in_ruby_gloss =
+      machine.GetSystem().text().GetCurrentMwnd()->Layout().IsRubyActive();
+  if (in_ruby_gloss)
     no_wait_ = true;
 }
 
@@ -96,10 +97,10 @@ bool TextoutLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
   return false;
 }
 
-bool TextoutLongOperation::PrepareNextPage(TextPage& page) {
+bool TextoutLongOperation::PrepareNextPage(TextWindow& page) {
   const auto end = utf8_string_.cend();
   while (position_ < utf8_string_.size()) {
-    if (page.IsFull())
+    if (page.Layout().IsFull())
       return false;
 
     auto current = utf8_string_.cbegin() + position_;
@@ -124,10 +125,13 @@ bool TextoutLongOperation::PrepareNextPage(TextPage& page) {
       auto peek = next;
       if (peek != end)
         utf8::next(peek, end);
-      page.Name(machine_.name_mapping().Map(std::string(name_begin, name_end)),
-                std::string(next, peek));
-    } else if (codepoint != 0 && !page.Character(std::string(current, next),
-                                                 std::string(next, end))) {
+      page.Submit(msgcmd::Name{
+          machine_.name_mapping().Map(std::string(name_begin, name_end)),
+          std::string(next, peek)});
+    } else if (codepoint != 0 &&
+               page.SubmitText(msgcmd::Text{std::string(current, next),
+                                            std::string(next, end)}) !=
+                   static_cast<std::size_t>(next - current)) {
       // Do not consume the rejected character, including the final one.
       return false;
     }
@@ -139,12 +143,18 @@ bool TextoutLongOperation::PrepareNextPage(TextPage& page) {
 Task<int> TextoutLongOperation::Run(WaitContext& waits) {
   auto window = machine_.GetSystem().text().GetCurrentMwnd();
   while (true) {
+    while (machine_.GetSystem().text().IsReadingBacklog())
+      co_await waits.Schedule(false);
     if (!machine_.GetSystem().text().system_visible())
       throw rlvm::Exception("Trying to Textout while TextSystem is hidden!");
     bool complete = false;
     window->PrepareMessageText(
-        [&](TextPage& page) { complete = PrepareNextPage(page); });
+        [&](TextWindow& page) { complete = PrepareNextPage(page); });
     while (window->HasPendingMessageText()) {
+      if (machine_.GetSystem().text().IsReadingBacklog()) {
+        co_await waits.Schedule(false);
+        continue;
+      }
       if (no_wait_) {
         window->FlushMessageText();
         break;

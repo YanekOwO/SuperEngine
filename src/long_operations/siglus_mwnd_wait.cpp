@@ -26,7 +26,6 @@
 #include "core/game_config.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 
@@ -81,15 +80,20 @@ SiglusMwndWaitOperation::SiglusMwndWaitOperation(
     std::shared_ptr<TextWindow> window,
     std::shared_ptr<MwndMessageState> message_state,
     AfterWait after_wait)
-    : runtime_(runtime),
-      system_(runtime.system.get()),
+    : system_(runtime.system.get()),
       window_(std::move(window)),
       local_config_(runtime.local_config),
       message_state_(std::move(message_state)),
       after_wait_(after_wait) {}
 
 Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
+  while (system_ && system_->text().IsReadingBacklog())
+    co_await waits.Schedule(false);
   while (system_ && window_->HasPendingMessageText()) {
+    if (system_->text().IsReadingBacklog()) {
+      co_await waits.Schedule(false);
+      continue;
+    }
     if (MessageNowait(system_)) {
       window_->FlushMessageText();
       break;
@@ -113,14 +117,16 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
   PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
 
   try {
-    auto counter = runtime_.CreateCounter();
-    counter->StartGame();
+    const auto start = system_->text().MessageTime();
     const int auto_time = EffectiveAutoTime(
         local_config_, system_->global_config(), AutoModeCharCount());
 
     while (true) {
-      if ((co_await waits.WaitFor(std::chrono::milliseconds(5), true)) ==
-          WaitOutcome::InterruptedByInput) {
+      const auto outcome =
+          co_await waits.WaitFor(std::chrono::milliseconds(5), true);
+      if (system_->text().IsReadingBacklog())
+        continue;
+      if (outcome == WaitOutcome::InterruptedByInput) {
         pause.Reset();
         FinishWait();
         co_return 1;
@@ -133,7 +139,8 @@ Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
       }
 
       if (AutoModeEnabled(system_)) {
-        if (counter->Get() >= std::max(auto_time, 0)) {
+        if ((system_->text().MessageTime() - start).count() >=
+            std::max(auto_time, 0)) {
           pause.Reset();
           FinishWait();
           co_return 0;
@@ -154,14 +161,14 @@ void SiglusMwndWaitOperation::FinishWait() {
     case AfterWait::None:
       return;
     case AfterWait::Paragraph: {
-      message_state_->MarkNovelClear(Page());
-      TextPage& page = Page();
-      page.ResetIndentation();
-      page.HardBrake();
+      message_state_->MarkNovelClear(*window_);
+      TextWindow& page = *window_;
+      page.Submit(msgcmd::ClearIndentation{});
+      page.Submit(msgcmd::HardBreak{});
       return;
     }
     case AfterWait::Clear:
-      message_state_->MarkMessageClearReady(Page());
+      message_state_->MarkMessageClearReady(*window_);
       return;
   }
 }
@@ -171,14 +178,8 @@ int SiglusMwndWaitOperation::AutoModeCharCount() {
   if (configured_count > 0)
     return configured_count;
 
-  const int current_count = Page().number_of_chars_on_page();
-  if (!message_state_)
-    return current_count;
-  return window_->MessageAutoModeCharCount();
+  return window_->GetCharacterCount();
 }
 
-TextPage& SiglusMwndWaitOperation::Page() {
-  return system_->text().GetPageOnWindow(window_);
-}
 
 }  // namespace lop

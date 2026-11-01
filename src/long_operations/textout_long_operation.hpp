@@ -29,7 +29,7 @@
 #include "long_operations/long_operation.hpp"
 
 class RLMachine;
-class TextPage;
+class TextWindow;
 
 namespace lop {
 
@@ -53,7 +53,7 @@ class TextoutLongOperation : public LongOperation {
   bool OnKeyStateChanged(KeyCode keyCode, bool pressed);
 
   // Prepare until the source ends or a character needs a new page.
-  bool PrepareNextPage(TextPage& page);
+  bool PrepareNextPage(TextWindow& page);
 
   std::string utf8_string_;
 

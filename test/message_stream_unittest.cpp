@@ -147,7 +147,6 @@ TEST_F(MessageStreamTest,
        CopiedStatePreservesProgressAndAdvancesIndependently) {
   MessageStreamState original;
   original.deferring = false;
-  original.first_stream_chars = 7;
   original.stream.Enqueue(Glyph("a"));
   original.stream.Enqueue(Glyph("b"));
   EXPECT_TRUE(original.stream.Advance(15ms, 10ms, Record()));
@@ -156,7 +155,6 @@ TEST_F(MessageStreamTest,
 
   auto copy = original;
   EXPECT_FALSE(copy.deferring);
-  EXPECT_EQ(copy.first_stream_chars, 7);
   EXPECT_TRUE(copy.stream.Advance(5ms, 10ms, Record()));
   EXPECT_THAT(revealed_, ElementsAre("a", "b"));
   EXPECT_TRUE(copy.stream.Advance(5ms, 10ms, Record()));

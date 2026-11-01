@@ -27,6 +27,7 @@
 
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
+#include "core/message_page.hpp"
 #include "core/mwnd_config.hpp"
 
 #include <boost/serialization/split_member.hpp>
@@ -52,7 +53,6 @@ class SDLSurface;
 class System;
 class Stage;
 class TextKeyCursor;
-class TextPage;
 class TextWindow;
 class TextWaku;
 class GraphicsObject;
@@ -102,8 +102,8 @@ class TextSystem final : public EventListener {
     bool activated = false;
   };
 
-  // Owning foreground page snapshots used for message history.
-  using PageSet = std::map<int, TextPage>;
+  using PageSet = std::map<int, MessagePage>;
+  using WindowList = std::vector<std::shared_ptr<TextWindow>>;
 
  public:
   TextSystem(System& system,
@@ -118,6 +118,10 @@ class TextSystem final : public EventListener {
 
   void ExecuteTextSystem();
   void AdvanceMessageText(std::chrono::milliseconds delta);
+  // Elapsed message time excludes time spent reading history.
+  std::chrono::milliseconds MessageTime() const { return message_time_; }
+  const WindowList& GetDisplayedWindows(int layer) const;
+  bool IsLiveWindow(const TextWindow* window) const;
 
   void Render();
   void RenderWindow(TextWindow& window);
@@ -132,7 +136,7 @@ class TextSystem final : public EventListener {
   void ClearVisualOverrides();
   bool ShowWindow(int win_num) const;
 
-  // Text window, aka mwnd. Consists of waku decoration and TextPage layout
+  // Text window, aka mwnd. Consists of waku decoration and message layout
   // management
   std::shared_ptr<TextWindow> GetMwnd(int text_window_number);
   std::shared_ptr<TextWindow> GetMwnd(int layer, int text_window_number);
@@ -182,24 +186,18 @@ class TextSystem final : public EventListener {
 
   std::vector<int> GetActiveWindows();
 
-  // Take a snapshot of the current window state, with their
-  // respective TextPages, and add it to the backlog.
+  // Copy the foreground message pages into history.
   void Snapshot();
 
   // Resets the text page in the current_set
   void NewPageOnWindow(int window);
   void NewPageOnWindow(std::shared_ptr<TextWindow> window);
 
-  TextPage& GetPageOnWindow(std::shared_ptr<TextWindow> window);
-
-  // Get the active foreground window's live page.
-  TextPage& GetCurrentPage();
-
-  // Clears the screen, moves back one page and renders it.
+  // Navigate detached history windows without modifying the live stage.
   void BackPage();
   void ForwardPage();
 
-  void ReplayPageSet(PageSet& set, bool is_current_page);
+  void ReplayPageSet(const PageSet& set);
 
   bool IsReadingBacklog() const;
   void StopReadingBacklog();
@@ -265,10 +263,6 @@ class TextSystem final : public EventListener {
   // Platform dependent text implementor
   std::unique_ptr<ITextSystem> text_impl_;
 
-  // TextPage will call our internals since it actually does most of
-  // the work while we hold state.
-  friend class TextPage;
-
   LocalConfig& local_config_;
   GlobalConfig& global_config_;
 
@@ -288,6 +282,11 @@ class TextSystem final : public EventListener {
  private:
   // Whether we are reading the backlog
   bool is_reading_backlog_;
+  WindowList history_windows_;
+  std::chrono::milliseconds message_time_{};
+  std::optional<KeyCode> history_close_key_;
+  std::shared_ptr<TextWindow> CreateWindow(int window_id, bool history = false);
+  bool IsDisplayedWindow(const TextWindow* window) const;
 
   // The current page set. Represents what is on the screen right now.
   void CollectCurrentPages();

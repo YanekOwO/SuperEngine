@@ -30,17 +30,17 @@
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_waku.hpp"
 #include "utilities/assertx.hpp"
-#include "utilities/string_utilities.hpp"
+
+#include <utf8.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -66,6 +66,7 @@ struct TextWindow::FaceSlot {
 
   // The current face loaded. NULL whenever no face is loaded.
   std::shared_ptr<const SDLSurface> face_surface;
+  std::string filename;
 };
 
 // -----------------------------------------------------------------------
@@ -75,52 +76,28 @@ struct TextWindow::FaceSlot {
 TextWindow::TextWindow(System& system,
                        int window_num,
                        ITextSystem* text_impl,
-                       const InitParams& params)
+                       const InitParams& params,
+                       bool history_view)
     : sorter_(system.text().mwnd_config().order_, 0),
+      history_view_(history_view),
       text_impl_(text_impl),
-      screen_width_(params.screen_size.width()),
-      screen_height_(params.screen_size.height()),
       window_num_(window_num),
-      waku_set_(params.waku_set),
+      textbox_config_(params.textbox),
       layout_(params.layout),
-      glyph_render_offset_(0, 0),
-      last_token_was_name_(false),
       default_font_size_(params.default_font_size),
       use_indentation_(params.use_indentation),
       default_colour_(params.default_colour),
       font_colour_(params.default_colour),
       action_on_pause_(params.action_on_pause),
-      origin_(params.origin),
-      x_distance_from_origin_(params.x_distance_from_origin),
-      y_distance_from_origin_(params.y_distance_from_origin),
-      upper_box_padding_(params.upper_box_padding),
-      lower_box_padding_(params.lower_box_padding),
-      left_box_padding_(params.left_box_padding),
-      right_box_padding_(params.right_box_padding),
-      window_attr_mod_(params.window_attr_mod),
-      colour_(params.colour),
-      is_filter_(params.is_filter),
       is_visible_(false),
-      keycursor_type_(params.keycursor_type),
-      keycursor_pos_(params.keycursor_pos),
-      name_mod_(NameMode::Inline),
-      name_waku_set_(params.namebox.waku_set),
-      name_font_size_in_pixels_(0),
-      name_waku_dir_set_(params.namebox.waku_dir_set),
-      name_x_spacing_(params.namebox.x_spacing),
-      horizontal_namebox_padding_(params.namebox.horizontal_padding),
-      vertical_namebox_padding_(params.namebox.vertical_padding),
-      namebox_x_offset_(params.namebox.x_offset),
-      namebox_y_offset_(params.namebox.y_offset),
-      namebox_centering_(params.namebox.centering),
-      minimum_namebox_size_(params.namebox.minimum_size),
-      name_size_(params.namebox.character_size),
-      siglus_namebox_layout_(params.namebox.siglus_layout),
+      namebox_config_(params.namebox),
       namebox_characters_(0),
       next_char_italic_(false),
       system_(system) {
   ASSERTX_NE(text_impl, nullptr);
-  SetNameMod(params.name_mod);
+  ASSERTX_LE(0, params.name_mod);
+  ASSERTX_LE(params.name_mod, 2);
+  layout_.SetNameMode(static_cast<NameMode>(params.name_mod));
 
   for (std::size_t i = 0; i < params.face_slots.size(); ++i) {
     if (params.face_slots[i]) {
@@ -138,26 +115,158 @@ void MwndMessageState::ClearKoe() {
   current_koe_no_auto_mode = false;
 }
 
-void MwndMessageState::MarkNovelClear(TextPage& page) {
-  page.window()->EndMultiMessage();
+void MwndMessageState::MarkNovelClear(TextWindow& window) {
+  window.EndMultiMessage();
   block_started = false;
-  auto_mode_base_chars = page.number_of_chars_on_page();
+  auto_mode_base_chars = window.GetCharacterCount();
   ClearKoe();
 }
 
-void MwndMessageState::MarkMessageClearReady(TextPage& page) {
+void MwndMessageState::MarkMessageClearReady(TextWindow& window) {
   clear_ready = true;
-  MarkNovelClear(page);
+  MarkNovelClear(window);
 }
 
-TextPage& TextWindow::GetPage() {
+const MessagePage& TextWindow::GetPage() { return EnsurePage(); }
+
+MessagePage& TextWindow::EnsurePage() {
   if (!page_)
     NewPage();
   return *page_;
 }
 
 void TextWindow::NewPage() {
-  page_ = std::make_unique<TextPage>(system_.gameexe(), *this);
+  page_.emplace();
+  page_->initial_state = CaptureMessageState();
+}
+
+MessagePageState TextWindow::CaptureMessageState() const {
+  MessagePageState state;
+  state.layout = layout_;
+  state.default_font_size = default_font_size_;
+  state.default_color = default_colour_;
+  state.color = font_colour_;
+  state.name = current_name_;
+  state.next_char_italic = next_char_italic_;
+  for (int i = 0; i < kNumFaceSlots; ++i)
+    if (face_slot_[i] && !face_slot_[i]->filename.empty())
+      state.faces.push_back({face_slot_[i]->filename, i});
+  return state;
+}
+
+bool TextWindow::Submit(MessageCommand command) {
+  auto& page = EnsurePage();
+  if (!ApplyMessageCommand(command, false))
+    return false;
+  if (std::holds_alternative<msgcmd::Name>(command))
+    ++page.number_of_chars_on_page;
+  page.history.push_back(std::move(command));
+  return true;
+}
+
+bool TextWindow::ApplyMessageCommand(const MessageCommand& command,
+                                     bool replay) {
+  return std::visit(
+      [this, replay](const auto& cmd) -> bool {
+        using T = std::decay_t<decltype(cmd)>;
+        if constexpr (std::is_same_v<T, msgcmd::Text>) {
+          return DisplayTextImpl(cmd).consumed_bytes == cmd.accepted_bytes;
+        } else if constexpr (std::is_same_v<T, msgcmd::Name>) {
+          SetNameImpl(cmd.name, cmd.next_char);
+        } else if constexpr (std::is_same_v<T, msgcmd::NameWithoutDisplay>) {
+          SetNameWithoutDisplayImpl(cmd.name);
+        } else if constexpr (std::is_same_v<T, msgcmd::SetNameMode>) {
+          ASSERTX_LE(0, cmd.mode);
+          ASSERTX_LE(cmd.mode, 2);
+          layout_.SetNameMode(static_cast<NameMode>(cmd.mode));
+        } else if constexpr (std::is_same_v<T, msgcmd::KoeMarker>) {
+          if (replay && koe_replay_info_)
+            koe_replay_button_.emplace_back(
+                layout_.GetInsertionPoint() + koe_replay_info_->repos, cmd.id);
+        } else if constexpr (std::is_same_v<T, msgcmd::HardBreak>) {
+          layout_.HardBreak();
+        } else if constexpr (std::is_same_v<T, msgcmd::NextMessage>) {
+          NextMessageImpl(cmd);
+        } else if constexpr (std::is_same_v<T, msgcmd::SetIndentation>) {
+          layout_.SetIndentation();
+        } else if constexpr (std::is_same_v<T, msgcmd::ClearIndentation>) {
+          layout_.ClearIndentation();
+        } else if constexpr (std::is_same_v<T, msgcmd::SetFontColor>) {
+          font_colour_ = cmd.color;
+        } else if constexpr (std::is_same_v<T, msgcmd::SetDefaultTextColor>) {
+          default_colour_ = cmd.color;
+        } else if constexpr (std::is_same_v<T, msgcmd::SetFontSize>) {
+          layout_.SetFontSize(cmd.size);
+        } else if constexpr (std::is_same_v<T, msgcmd::RubyBegin>) {
+          layout_.RubyBegin();
+        } else if constexpr (std::is_same_v<T, msgcmd::RubyText>) {
+          DisplayRubyTextImpl(cmd.ruby);
+        } else if constexpr (std::is_same_v<T, msgcmd::SetInsertion>) {
+          layout_.SetInsertionPoint(cmd.point);
+        } else if constexpr (std::is_same_v<T, msgcmd::SetGlyphRenderOffset>) {
+          layout_.SetGlyphRenderOffset(cmd.offset);
+        } else if constexpr (std::is_same_v<T, msgcmd::FaceOpen>) {
+          FaceOpenImpl(cmd.filename, cmd.index, replay);
+        } else if constexpr (std::is_same_v<T, msgcmd::FaceClose>) {
+          FaceCloseImpl(cmd.index, replay);
+        } else if constexpr (std::is_same_v<T, msgcmd::MarkItalic>) {
+          next_char_italic_ = true;
+        } else {
+          static_assert(std::is_same_v<T, void>, "Unhandled message command");
+        }
+        return true;
+      },
+      command);
+}
+
+void TextWindow::Restore(const MessagePage& page,
+                         std::optional<RGBColour> initial_color) {
+  // Copy first: callers may restore this window's own page.
+  MessagePage restored = page;
+  const auto& state = restored.initial_state;
+  const bool was_restoring = std::exchange(restoring_, true);
+  try {
+    layout_ = state.layout;
+    text_surface_.reset();
+    ClearWin();
+    layout_ = state.layout;
+    default_font_size_ = state.default_font_size;
+    default_colour_ = state.default_color;
+    font_colour_ = initial_color.value_or(state.color);
+    next_char_italic_ = state.next_char_italic;
+    if (!state.name.empty())
+      SetNameWithoutDisplayImpl(state.name);
+    // Recreating a namebox must not change the saved speaker transition.
+    layout_ = state.layout;
+    for (auto& slot : face_slot_)
+      if (slot) {
+        slot->face_surface.reset();
+        slot->filename.clear();
+      }
+    for (const auto& face : state.faces)
+      FaceOpenImpl(face.filename, face.index, true);
+    for (const auto& command : restored.history)
+      ApplyMessageCommand(command, true);
+    FlushMessageText();
+    page_ = std::move(restored);
+  } catch (...) {
+    restoring_ = was_restoring;
+    throw;
+  }
+  restoring_ = was_restoring;
+}
+
+std::size_t TextWindow::SubmitText(msgcmd::Text command) {
+  if (command.text.empty())
+    return 0;
+  auto& page = EnsurePage();
+  const auto result = DisplayTextImpl(command);
+  if (result.consumed_bytes == 0)
+    return 0;
+  command.accepted_bytes = result.consumed_bytes;
+  page.number_of_chars_on_page += static_cast<int>(result.glyphs.size());
+  page.history.emplace_back(std::move(command));
+  return result.consumed_bytes;
 }
 
 void TextWindow::ClearMouseCapture() {
@@ -171,48 +280,20 @@ void TextWindow::ClearMouseCapture() {
 std::shared_ptr<TextWindow> TextWindow::Clone() const {
   auto result = std::make_shared<TextWindow>(
       system_, window_num_, text_impl_,
-      system_.text().mwnd_config().GetWindow(window_num_));
+      system_.text().mwnd_config().GetWindow(window_num_), history_view_);
   result->sorter_ = sorter_;
-  result->screen_width_ = screen_width_;
-  result->screen_height_ = screen_height_;
   result->window_num_ = window_num_;
-  result->waku_set_ = waku_set_;
+  result->SetTextboxConfig(GetTextboxConfig());
   result->layout_ = layout_;
   result->selection_size_ = selection_size_;
-  result->glyph_render_offset_ = glyph_render_offset_;
-  result->last_token_was_name_ = last_token_was_name_;
   result->current_name_ = current_name_;
   result->default_font_size_ = default_font_size_;
   result->use_indentation_ = use_indentation_;
   result->default_colour_ = default_colour_;
   result->font_colour_ = font_colour_;
   result->action_on_pause_ = action_on_pause_;
-  result->origin_ = origin_;
-  result->x_distance_from_origin_ = x_distance_from_origin_;
-  result->y_distance_from_origin_ = y_distance_from_origin_;
-  result->upper_box_padding_ = upper_box_padding_;
-  result->lower_box_padding_ = lower_box_padding_;
-  result->left_box_padding_ = left_box_padding_;
-  result->right_box_padding_ = right_box_padding_;
-  result->window_attr_mod_ = window_attr_mod_;
-  result->colour_ = colour_;
-  result->is_filter_ = is_filter_;
   result->is_visible_ = is_visible_;
-  result->keycursor_type_ = keycursor_type_;
-  result->keycursor_pos_ = keycursor_pos_;
-  result->name_mod_ = name_mod_;
-  result->name_waku_set_ = name_waku_set_;
-  result->name_font_size_in_pixels_ = name_font_size_in_pixels_;
-  result->name_waku_dir_set_ = name_waku_dir_set_;
-  result->name_x_spacing_ = name_x_spacing_;
-  result->horizontal_namebox_padding_ = horizontal_namebox_padding_;
-  result->vertical_namebox_padding_ = vertical_namebox_padding_;
-  result->namebox_x_offset_ = namebox_x_offset_;
-  result->namebox_y_offset_ = namebox_y_offset_;
-  result->namebox_centering_ = namebox_centering_;
-  result->minimum_namebox_size_ = minimum_namebox_size_;
-  result->name_size_ = name_size_;
-  result->siglus_namebox_layout_ = siglus_namebox_layout_;
+  result->SetNameboxConfig(GetNameboxConfig());
   result->namebox_characters_ = namebox_characters_;
   result->next_char_italic_ = next_char_italic_;
   result->koe_replay_button_ = koe_replay_button_;
@@ -226,7 +307,7 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   result->namebox_waku_ = namebox_waku_ ? namebox_waku_->Clone() : nullptr;
   *result->message_state_ = *message_state_;
   if (page_)
-    result->page_ = std::make_unique<TextPage>(page_->CloneFor(*result));
+    result->page_ = *page_;
   for (int i = 0; i < kNumFaceSlots; ++i)
     result->face_slot_[i] =
         face_slot_[i] ? std::make_unique<FaceSlot>(*face_slot_[i]) : nullptr;
@@ -244,9 +325,10 @@ void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
     waku->ResetButtonsFrom(*textbox_waku_);
   if (textbox_waku_)
     waku->ResetFacesFrom(*textbox_waku_);
-  waku_set_ = waku_set;
+  textbox_config_.waku_set = waku_set;
   textbox_waku_ = std::move(waku);
-  system_.text().InitializeMwndButtonFrameActions(*textbox_waku_);
+  if (!history_view_)
+    system_.text().InitializeMwndButtonFrameActions(*textbox_waku_);
 }
 
 void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
@@ -255,9 +337,10 @@ void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
     waku->ResetObjectsFrom(*namebox_waku_);
   if (namebox_waku_)
     waku->ResetButtonsFrom(*namebox_waku_);
-  name_waku_set_ = waku_set;
+  namebox_config_.waku_set = waku_set;
   namebox_waku_ = std::move(waku);
-  system_.text().InitializeMwndButtonFrameActions(*namebox_waku_);
+  if (!history_view_)
+    system_.text().InitializeMwndButtonFrameActions(*namebox_waku_);
 }
 
 void TextWindow::Execute(bool update_controls) {
@@ -289,8 +372,8 @@ bool TextWindow::IsNameboxWakuVisible() const {
 void TextWindow::ShowWaitIcon(bool page) {
   if (!textbox_waku_)
     return;
-  const Point position = GetTextSurfaceRect().origin() +
-                         Size(layout_.insertion_x, layout_.insertion_y);
+  const Point position =
+      GetTextSurfaceRect().origin() + layout_.GetInsertionPoint();
   textbox_waku_->SetWaitIcon(page, position);
 }
 
@@ -311,32 +394,26 @@ void TextWindow::SetWakuFilterFile(const std::string& file) {
         file.empty() ? nullptr : system_.text().LoadImage(file));
 }
 
-void TextWindow::SetTextboxPadding(const std::vector<int>& pos_data) {
-  upper_box_padding_ = pos_data.at(0);
-  lower_box_padding_ = pos_data.at(1);
-  left_box_padding_ = pos_data.at(2);
-  right_box_padding_ = pos_data.at(3);
-}
-
-void TextWindow::SetName(const std::string& utf8name,
-                         const std::string& next_char) {
-  if (name_mod_ == NameMode::Inline) {
-    // Display the name in one pass
-    PrintTextToFunction(
-        [this](const std::string& current, const std::string& rest) {
-          return this->DisplayCharacter(current, rest);
-        },
-        utf8name, next_char);
-    SetIndentation();
+void TextWindow::SetNameImpl(const std::string& utf8name,
+                             const std::string& next_char) {
+  if (layout_.GetNameMode() == NameMode::Inline && !utf8name.empty()) {
+    const auto font = system_.text().LoadFont(layout_.GetFontSize());
+    const TextLayout::FontMetrics metrics{
+        font->IsMonospace(),
+        [font](int codepoint) { return font->GetCharWidth(codepoint); }};
+    const auto result = layout_.LayoutName(utf8name, metrics, next_char);
+    QueueText(utf8name, result, font);
+  } else {
+    (void)layout_.LayoutName(utf8name, {}, next_char);
   }
 
-  SetNameWithoutDisplay(utf8name);
+  SetNameWithoutDisplayImpl(utf8name);
 }
 
-void TextWindow::SetNameWithoutDisplay(const std::string& utf8name) {
+void TextWindow::SetNameWithoutDisplayImpl(const std::string& utf8name) {
   current_name_ = utf8name;
 
-  if (name_mod_ == NameMode::SeparateWindow) {
+  if (layout_.GetNameMode() == NameMode::SeparateWindow) {
     namebox_characters_ = 0;
     try {
       namebox_characters_ = utf8::distance(utf8name.begin(), utf8name.end());
@@ -344,34 +421,23 @@ void TextWindow::SetNameWithoutDisplay(const std::string& utf8name) {
       // If utf8name isn't a real UTF-8 string, possibly overestimate:
       namebox_characters_ = utf8name.size();
     }
-    namebox_characters_ = std::max(namebox_characters_, minimum_namebox_size_);
+    namebox_characters_ =
+        std::max(namebox_characters_, namebox_config_.minimum_size);
     RenderNameInBox(utf8name);
   }
 
-  last_token_was_name_ = true;
+  layout_.NameWithoutDisplay();
 }
 
 void TextWindow::RenderNameInBox(const std::string& utf8str) {
   RGBColour shadow = RGBAColour::Black().rgb();
-  const int font_size =
-      siglus_namebox_layout_ ? name_size_ : font_size_in_pixels();
-  const int x_spacing = siglus_namebox_layout_ ? name_x_spacing_ : 0;
+  const int font_size = namebox_config_.siglus_layout
+                            ? namebox_config_.character_size
+                            : layout_.GetFontSize();
+  const int x_spacing =
+      namebox_config_.siglus_layout ? namebox_config_.x_spacing : 0;
   name_surface_ = system_.text().RenderText(utf8str, font_size, x_spacing, 0,
                                             font_colour_, &shadow, 0);
-}
-
-void TextWindow::SetDefaultTextColor(const std::vector<int>& colour) {
-  SetDefaultTextColor(RGBColour(colour.at(0), colour.at(1), colour.at(2)));
-}
-
-void TextWindow::SetFontColor(const std::vector<int>& colour) {
-  SetFontColor(RGBColour(colour.at(0), colour.at(1), colour.at(2)));
-}
-
-void TextWindow::SetWindowPosition(const std::vector<int>& pos_data) {
-  origin_ = pos_data.at(0);
-  x_distance_from_origin_ = pos_data.at(1);
-  y_distance_from_origin_ = pos_data.at(2);
 }
 
 Size TextWindow::GetTextWindowSize() const {
@@ -388,8 +454,10 @@ Size TextWindow::GetWakuContentSize() const {
   // Siglus MESSAGE_MARGIN is measured from the outside of the frame;
   // the nine-slice renderer takes the size between its border pieces.
   const Size outer =
-      *selection_size_ + Size(left_box_padding_ + right_box_padding_,
-                              upper_box_padding_ + lower_box_padding_);
+      *selection_size_ +
+      Size(textbox_config_.left_box_padding + textbox_config_.right_box_padding,
+           textbox_config_.upper_box_padding +
+               textbox_config_.lower_box_padding);
   const Size border = textbox_waku_->GetSize(Size(0, 0));
   return Size(std::max(0, outer.width() - border.width()),
               std::max(0, outer.height() - border.height()));
@@ -416,41 +484,45 @@ Rect TextWindow::GetWindowRect(Size waku_size) const {
   // left. Expanding this number didn't change the position offscreen.
 
   int x, y;
-  switch (origin_) {
+  switch (textbox_config_.origin) {
     case 0:
     case 2:
-      x = x_distance_from_origin_;
+      x = textbox_config_.x_distance_from_origin;
       break;
     case 1:
     case 3:
-      x = screen_width_ - waku_size.width() - x_distance_from_origin_;
+      x = textbox_config_.screen_size.width() - waku_size.width() -
+          textbox_config_.x_distance_from_origin;
       break;
     [[unlikely]] default:
-      throw std::logic_error("Invalid origin = " + std::to_string(origin_));
+      throw std::logic_error("Invalid origin = " +
+                             std::to_string(textbox_config_.origin));
   }
 
-  switch (origin_) {
+  switch (textbox_config_.origin) {
     case 0:  // Top and left
     case 1:  // Top and right
-      y = y_distance_from_origin_;
+      y = textbox_config_.y_distance_from_origin;
       break;
     case 2:  // Bottom and left
     case 3:  // Bottom and right
-      y = screen_height_ - waku_size.height() - y_distance_from_origin_;
+      y = textbox_config_.screen_size.height() - waku_size.height() -
+          textbox_config_.y_distance_from_origin;
       break;
     [[unlikely]] default:
-      throw std::logic_error("Invalid origin = " + std::to_string(origin_));
+      throw std::logic_error("Invalid origin = " +
+                             std::to_string(textbox_config_.origin));
   }
 
   // Now that we have the coordinate that the programmer wanted to position the
   // box at, possibly move the box so it fits on screen.
-  if ((x + waku_size.width()) > screen_width_)
-    x -= (x + waku_size.width()) - screen_width_;
+  if ((x + waku_size.width()) > textbox_config_.screen_size.width())
+    x -= (x + waku_size.width()) - textbox_config_.screen_size.width();
   if (x < 0)
     x = 0;
 
-  if ((y + waku_size.height()) > screen_height_)
-    y -= (y + waku_size.height()) - screen_height_;
+  if ((y + waku_size.height()) > textbox_config_.screen_size.height())
+    y -= (y + waku_size.height()) - textbox_config_.screen_size.height();
   if (y < 0)
     y = 0;
 
@@ -460,11 +532,12 @@ Rect TextWindow::GetWindowRect(Size waku_size) const {
 Rect TextWindow::GetTextSurfaceRect() const {
   Rect window = GetWindowRect();
 
-  Point textOrigin =
-      window.origin() + Size(left_box_padding_, upper_box_padding_);
+  Point textOrigin = window.origin() + Size(textbox_config_.left_box_padding,
+                                            textbox_config_.upper_box_padding);
 
   Size rectSize = GetTextSurfaceSize();
-  rectSize += Size(right_box_padding_, lower_box_padding_);
+  rectSize += Size(textbox_config_.right_box_padding,
+                   textbox_config_.lower_box_padding);
 
   return Rect(textOrigin, rectSize);
 }
@@ -476,90 +549,68 @@ Rect TextWindow::GetNameboxWakuRect() const {
 
   // The waku is offset from the top left corner of the text window.
   Rect r = GetWindowRect();
-  if (siglus_namebox_layout_) {
+  if (namebox_config_.siglus_layout) {
     const Point anchor =
-        r.origin() + Point(namebox_x_offset_, namebox_y_offset_);
-    return siglus_namebox_layout_->GetWindowRect(anchor, boxSize,
-                                                 GetNameboxTextSize());
+        r.origin() + Point(namebox_config_.x_offset, namebox_config_.y_offset);
+    return namebox_config_.siglus_layout->GetWindowRect(anchor, boxSize,
+                                                        GetNameboxTextSize());
   }
-  return Rect(Point(r.x() + namebox_x_offset_,
-                    r.y() + namebox_y_offset_ - boxSize.height()),
+  return Rect(Point(r.x() + namebox_config_.x_offset,
+                    r.y() + namebox_config_.y_offset - boxSize.height()),
               boxSize);
 }
 
 Size TextWindow::GetNameboxTextArea() const {
-  if (siglus_namebox_layout_)
-    return siglus_namebox_layout_->GetContentSize(GetNameboxTextSize());
+  if (namebox_config_.siglus_layout)
+    return namebox_config_.siglus_layout->GetContentSize(GetNameboxTextSize());
   // TODO(erg): This seems excessively wide.
   return Size(
-      2 * horizontal_namebox_padding_ + namebox_characters_ * name_size_,
-      vertical_namebox_padding_ + name_size_);
+      2 * namebox_config_.horizontal_padding +
+          namebox_characters_ * namebox_config_.character_size,
+      namebox_config_.vertical_padding + namebox_config_.character_size);
 }
 
 Size TextWindow::GetNameboxTextSize() const {
   if (!name_surface_)
-    return Size(0, name_size_);
+    return Size(0, namebox_config_.character_size);
   const Size surface = name_surface_->GetSize();
   return Size(std::max(surface.width() - 2, 0),
               std::max(surface.height() - 2, 0));
 }
 
-void TextWindow::SetNameMod(const int in) {
-  ASSERTX_LE(0, in);
-  ASSERTX_LE(in, 2);
-  name_mod_ = static_cast<NameMode>(in);
-}
-
-void TextWindow::SetNameSpacingBetweenCharacters(int pos_data) {
-  name_x_spacing_ = pos_data;
-}
-
-void TextWindow::SetNameboxPadding(const std::vector<int>& pos_data) {
-  if (pos_data.size() >= 1)
-    horizontal_namebox_padding_ = pos_data.at(0);
-  if (pos_data.size() >= 2)
-    vertical_namebox_padding_ = pos_data.at(1);
-}
-
-void TextWindow::SetNameboxPosition(const std::vector<int>& pos_data) {
-  namebox_x_offset_ = pos_data.at(0);
-  namebox_y_offset_ = pos_data.at(1);
-}
-
-void TextWindow::SetKeycursorMod(const std::vector<int>& keycur) {
-  keycursor_type_ = keycur.at(0);
-  keycursor_pos_ = Point(keycur.at(1), keycur.at(2));
-}
-
 Point TextWindow::KeycursorPosition(const Size& cursor_size) const {
-  switch (keycursor_type_) {
+  switch (textbox_config_.keycursor_type) {
     case 0:
       return GetTextSurfaceRect().lower_right() - cursor_size;
     case 1:
       return GetTextSurfaceRect().origin() + layout_.GetInsertionPoint();
     case 2:
-      return GetTextSurfaceRect().origin() + keycursor_pos_;
+      return GetTextSurfaceRect().origin() + textbox_config_.keycursor_pos;
     [[unlikely]] default:
       throw std::logic_error("Invalid keycursor type = " +
-                             std::to_string(keycursor_type_));
+                             std::to_string(textbox_config_.keycursor_type));
   }
 }
 
-void TextWindow::FaceOpen(const std::string& filename, int index) {
-  if (face_slot_[index]) {
+void TextWindow::FaceOpenImpl(const std::string& filename,
+                              int index,
+                              bool replay) {
+  if (index >= 0 && index < kNumFaceSlots && face_slot_[index]) {
     face_slot_[index]->face_surface = system_.text().LoadImage(filename);
+    face_slot_[index]->filename = filename;
 
-    if (face_slot_[index]->hide_other_windows) {
+    if (!replay && face_slot_[index]->hide_other_windows) {
       system_.text().HideAllTextWindowsExcept(window_number());
     }
   }
 }
 
-void TextWindow::FaceClose(int index) {
-  if (face_slot_[index]) {
+void TextWindow::FaceCloseImpl(int index, bool replay) {
+  if (index >= 0 && index < kNumFaceSlots && face_slot_[index]) {
     face_slot_[index]->face_surface.reset();
+    face_slot_[index]->filename.clear();
 
-    if (face_slot_[index]->hide_other_windows) {
+    if (!replay && face_slot_[index]->hide_other_windows) {
       system_.text().HideAllTextWindowsExcept(window_number());
     }
   }
@@ -573,8 +624,6 @@ void TextWindow::SetFaceSlotPosition(int index, Point position) {
   face_slot_[index]->x = position.x();
   face_slot_[index]->y = position.y();
 }
-
-void TextWindow::NextCharIsItalic() { next_char_italic_ = true; }
 
 static Point InsertionPoint(const Rect& waku_rect,
                             const Size& padding,
@@ -597,18 +646,20 @@ static Point InsertionPoint(const Rect& waku_rect,
 
 Rect TextWindow::GetNameboxTextRect() const {
   const Size surface_size = name_surface_->GetSize();
-  if (siglus_namebox_layout_) {
+  if (namebox_config_.siglus_layout) {
     const Point anchor =
-        GetWindowRect().origin() + Point(namebox_x_offset_, namebox_y_offset_);
-    return Rect(
-        siglus_namebox_layout_->GetTextOrigin(anchor, GetNameboxTextSize()),
-        surface_size);
+        GetWindowRect().origin() +
+        Point(namebox_config_.x_offset, namebox_config_.y_offset);
+    return Rect(namebox_config_.siglus_layout->GetTextOrigin(
+                    anchor, GetNameboxTextSize()),
+                surface_size);
   }
   const Point origin = InsertionPoint(
       GetNameboxWakuRect(),
-      Size(horizontal_namebox_padding_, vertical_namebox_padding_),
-      surface_size, namebox_centering_ && namebox_waku_->center_w_,
-      namebox_centering_ && namebox_waku_->center_h_);
+      Size(namebox_config_.horizontal_padding,
+           namebox_config_.vertical_padding),
+      surface_size, namebox_config_.centering && namebox_waku_->center_w_,
+      namebox_config_.centering && namebox_waku_->center_h_);
   return Rect(origin, surface_size);
 }
 // TODO(erg): Make this pass the #WINDOW_ATTR colour off wile rendering the
@@ -624,8 +675,8 @@ void TextWindow::Render() {
         GetTextSurfaceRect().origin() - Size(0, layout_.GetRubyTopPadding());
 
     textbox_waku_->renderer_ = system_.text().GetSceneRenderer();
-    textbox_waku_->Render(box, GetWakuContentSize(), GetColour(),
-                          GetIsFilter());
+    textbox_waku_->Render(box, GetWakuContentSize(), textbox_config_.colour,
+                          textbox_config_.is_filter);
     RenderFaces(1);
 
     if (name_surface_) {
@@ -635,8 +686,9 @@ void TextWindow::Render() {
         namebox_waku_->renderer_ = system_.text().GetSceneRenderer();
         // TODO(erg): The waku needs to be adjusted to be the minimum size
         // of the window in characters
-        namebox_waku_->Render(r.origin(), GetNameboxTextArea(), GetColour(),
-                              GetIsFilter());
+        namebox_waku_->Render(r.origin(), GetNameboxTextArea(),
+                              textbox_config_.colour,
+                              textbox_config_.is_filter);
       }
 
       name_surface_->RenderToScreen(name_surface_->GetRect(),
@@ -701,11 +753,11 @@ MessageStreamState& TextWindow::EnsureMessageStream() {
 }
 
 void TextWindow::PrepareMessageText(
-    const std::function<void(TextPage&)>& prepare) {
+    const std::function<void(TextWindow&)>& prepare) {
   auto& state = EnsureMessageStream();
   const bool was_deferring = std::exchange(state.deferring, true);
   try {
-    prepare(GetPage());
+    prepare(*this);
   } catch (...) {
     state.deferring = was_deferring;
     throw;
@@ -724,48 +776,33 @@ void TextWindow::EndMultiMessage() {
   system_.local_config().multi_msg_mode = false;
   if (message_stream_) {
     message_stream_->deferring = false;
-    message_stream_->first_stream_chars.reset();
     if (message_stream_->stream.Empty())
       message_stream_.reset();
   }
 }
 
-void TextWindow::NextMessage() {
+void TextWindow::NextMessageImpl(const msgcmd::NextMessage& command) {
   // Legacy next_msg creates a default-styled stream at the previous stream's
   // final layout position. It does not insert a line break of its own.
-  const Point position = layout_.GetInsertionPoint();
-  layout_ = system_.text().mwnd_config().GetWindow(window_num_).layout;
-  layout_.insertion_x = position.x();
-  layout_.insertion_y = position.y();
-  font_colour_ = default_colour_;
-  glyph_render_offset_ = Point(0, 0);
+  layout_.NextMessage(command.layout);
+  font_colour_ = command.color;
   next_char_italic_ = false;
-  last_token_was_name_ = false;
-  if (message_stream_ && message_stream_->deferring) {
-    if (!message_stream_->first_stream_chars)
-      message_stream_->first_stream_chars =
-          std::max(GetPage().number_of_chars_on_page() -
-                       message_state_->auto_mode_base_chars,
-                   0);
+  if (message_stream_ && message_stream_->deferring)
     message_stream_->stream.NextStream();
-  }
 }
 
 bool TextWindow::HasPendingMessageText() const {
   return message_stream_ && !message_stream_->stream.Empty();
 }
 
-int TextWindow::MessageAutoModeCharCount() {
-  // Legacy auto-mode timing counts the first stream, even when additional
-  // simultaneous streams contain more text.
-  if (message_stream_ && message_stream_->first_stream_chars)
-    return *message_stream_->first_stream_chars;
-  return std::max(GetPage().number_of_chars_on_page() -
-                      message_state_->auto_mode_base_chars,
-                  0);
+int TextWindow::GetCharacterCount() const {
+  return page_ ? std::max(0, page_->number_of_chars_on_page) : 0;
 }
 
 void TextWindow::AdvanceMessageText(std::chrono::milliseconds delta) {
+  if (!restoring_ && system_.text().IsReadingBacklog() &&
+      system_.text().IsLiveWindow(this))
+    return;
   if (!message_stream_)
     return;
   const bool flush =
@@ -784,6 +821,9 @@ void TextWindow::AdvanceMessageText(std::chrono::milliseconds delta) {
 }
 
 void TextWindow::FlushMessageText() {
+  if (!restoring_ && system_.text().IsReadingBacklog() &&
+      system_.text().IsLiveWindow(this))
+    return;
   if (HasPendingMessageText()) {
     message_stream_->stream.Advance(
         std::chrono::milliseconds::zero(), std::chrono::milliseconds::zero(),
@@ -796,120 +836,69 @@ void TextWindow::FlushMessageText() {
   }
 }
 
-bool TextWindow::DisplayCharacter(const std::string& current,
-                                  const std::string& rest) {
-  // If this text page is already full, save some time and reject
-  // early.
-  if (IsFull())
-    return false;
-
-  SetVisible(true);
-
-  if (!current.empty()) {
-    int cur_codepoint = Codepoint(current);
-    bool indent_after_spacing = false;
-
-    // But if the last character was a lenticular bracket, we need to indent
-    // now. See doc/notes/NamesAndIndentation.txt for more details.
-    if (last_token_was_name_) {
-      switch (name_mod_) {
-        case NameMode::Inline:
-        case NameMode::Disable:
-          if (IsOpeningQuoteMark(cur_codepoint))
-            indent_after_spacing = true;
-          break;
-
-        case NameMode::SeparateWindow:
-          break;
-      }
-    }
-
-    std::shared_ptr<IFont> font =
-        system_.text().LoadFont(font_size_in_pixels());
-    const int decoration =
-        EffectiveFontShadow(system_.local_config(), system_.global_config());
-    FontFace font_face{.font = font,
-                       .is_italic = std::exchange(next_char_italic_, false),
-                       .is_shadow = (decoration & 1) != 0,
-                       .is_futidoru = (decoration & 2) != 0};
-    if (system_.text().mwnd_config().layered_windows()) {
-      // Siglus fixes the baseline at 86% of the character cell height,
-      // independently of font line metrics.
-      font_face.baseline_from_top =
-          static_cast<int>(std::round(font_size_in_pixels() * 0.86));
-    }
-
-    const bool has_shadow = font_face.is_shadow || font_face.is_futidoru;
-
-    // If our font is not monospaced ASCII, we aren't using
-    // the recommended font so we'll try laying out the text so that
-    // kerning looks better. This is the common case.
-    std::optional<int> width;
-    if (cur_codepoint < 127 && !font->IsMonospace())
-      width = font->GetCharWidth(cur_codepoint);
-
-    std::optional<Point> insertion_point =
-        layout_.PlaceCharacter(cur_codepoint, width, rest);
-    if (!insertion_point.has_value())
-      return false;
-
-    std::optional<RGBColour> shadow;
-    if (has_shadow)
-      shadow = RGBAColour::Black().rgb();
-
-    MessageStream::Glyph glyph{current, font_face, font_colour_, shadow,
-                               *insertion_point + glyph_render_offset_ +
-                                   Point(0, layout_.GetRubyTopPadding())};
-    auto& state = EnsureMessageStream();
-    state.stream.Enqueue(std::move(glyph));
-    if (!state.deferring)
-      FlushMessageText();
-
-    if (indent_after_spacing)
-      SetIndentation();
-  }
-
-  last_token_was_name_ = false;
-
-  return true;
+TextLayout::Result TextWindow::DisplayTextImpl(const msgcmd::Text& command) {
+  if (command.text.empty() || layout_.IsFull())
+    return {};
+  const auto font = system_.text().LoadFont(layout_.GetFontSize());
+  const TextLayout::FontMetrics metrics{
+      font->IsMonospace(),
+      [font](int codepoint) { return font->GetCharWidth(codepoint); }};
+  auto result = layout_.LayoutText(
+      command.text, metrics, command.final_lookahead, command.accepted_bytes);
+  QueueText(command.text, result, font);
+  return result;
 }
 
-bool TextWindow::IsFull() const { return layout_.IsFull(); }
-
-void TextWindow::KoeMarker(int id) {
-  if (!koe_replay_info_)
+void TextWindow::QueueText(std::string_view text,
+                           const TextLayout::Result& layout,
+                           const std::shared_ptr<IFont>& font) {
+  if (layout.glyphs.empty())
     return;
-  Point p = layout_.GetInsertionPoint() + koe_replay_info_->repos;
-  koe_replay_button_.emplace_back(p, id);
+  const int decoration =
+      EffectiveFontShadow(system_.local_config(), system_.global_config());
+  FontFace face{.font = font,
+                .is_italic = next_char_italic_,
+                .is_shadow = (decoration & 1) != 0,
+                .is_futidoru = (decoration & 2) != 0};
+  std::optional<RGBColour> shadow;
+  if (face.is_shadow || face.is_futidoru)
+    shadow = RGBAColour::Black().rgb();
+
+  // Complete both geometry and rendering attributes before adding any of this
+  // submission to the independently timed reveal stream.
+  std::vector<MessageStream::Glyph> glyphs;
+  glyphs.reserve(layout.glyphs.size());
+  for (const auto& placement : layout.glyphs) {
+    face.baseline_from_top = placement.baseline_from_top;
+    glyphs.push_back(
+        {std::string(text.substr(placement.byte_offset, placement.byte_count)),
+         face, font_colour_, shadow, placement.position});
+    face.is_italic = false;
+  }
+  next_char_italic_ = false;
+  SetVisible(true);
+  auto& state = EnsureMessageStream();
+  for (auto& glyph : glyphs)
+    state.stream.Enqueue(std::move(glyph));
+  if (!state.deferring)
+    FlushMessageText();
 }
 
-void TextWindow::SetIndentation() {
-  layout_.indent_pixels = layout_.insertion_x;
-}
-void TextWindow::ResetIndentation() { layout_.indent_pixels = 0; }
-
-void TextWindow::MarkRubyBegin() { layout_.RubyBegin(); }
-
-void TextWindow::DisplayRubyText(const std::string& utf8str) {
-  if (std::optional<Rect> ruby_area = layout_.PlaceRubyText(utf8str)) {
-    std::shared_ptr<IFont> ifont =
-        system_.text().LoadFont(layout_.ruby_font_size);
-    std::shared_ptr<SDLSurface> ruby_surface =
-        text_impl_->RenderText(utf8str, FontFace(ifont), font_colour_);
-
-    Point origin = ruby_area->origin() + Point(0, layout_.GetRubyTopPadding());
-    int delta_x =
-        (ruby_area->size().width() - ruby_surface->GetSize().width()) / 2;
-    origin += Point(delta_x, 0);
-
-    MessageStream::Ruby ruby{ruby_surface, Rect(origin, ruby_area->size())};
+void TextWindow::DisplayRubyTextImpl(const std::string& utf8str) {
+  // Empty annotations still close the span without loading a font or drawing.
+  std::shared_ptr<SDLSurface> surface;
+  if (!utf8str.empty() && layout_.IsRubyActive()) {
+    const auto font = system_.text().LoadFont(layout_.GetRubyFontSize());
+    surface = text_impl_->RenderText(utf8str, FontFace(font), font_colour_);
+  }
+  const auto destination =
+      layout_.RubyEnd(utf8str, surface ? surface->GetSize() : Size());
+  if (destination && surface) {
     auto& state = EnsureMessageStream();
-    state.stream.Enqueue(std::move(ruby));
+    state.stream.Enqueue(MessageStream::Ruby{std::move(surface), *destination});
     if (!state.deferring)
       FlushMessageText();
   }
-
-  last_token_was_name_ = false;
 }
 
 void TextWindow::SetMousePosition(const Point& pos, bool update_waku) {

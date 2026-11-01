@@ -47,8 +47,8 @@
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
 #include "utilities/clock.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/string_utilities.hpp"
@@ -492,7 +492,7 @@ void RLMachine::operator()(std::monostate) {}
 void RLMachine::operator()(Kidoku k) {
   // Check to see if we mark savepoints on textout
   if (GetScenarioConfig().enable_message_savepoint &&
-      system_->text().GetCurrentPage().number_of_chars_on_page() == 0) {
+      system_->text().GetCurrentMwnd()->GetCharacterCount() == 0) {
     MarkSavepoint();
   }
 

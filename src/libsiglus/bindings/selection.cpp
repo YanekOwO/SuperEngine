@@ -38,7 +38,6 @@
 #include "systems/event_system.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/sound_system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "vm/exception.hpp"

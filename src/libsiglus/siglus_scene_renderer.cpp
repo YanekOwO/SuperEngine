@@ -200,7 +200,7 @@ void SiglusSceneRenderer::RenderObjects(
       to_render_.emplace_back(param.z_order, param.z_layer, 0, param.z_depth,
                               static_cast<int>(i), objects[i].get());
   }
-  const auto& windows = stage_.mwnd[stage_layer];
+  const auto& windows = system_.text().GetDisplayedWindows(stage_layer);
   for (size_t i = 0; i < windows.size(); ++i) {
     if (!windows[i] || !in_range(windows[i]->sorter()))
       continue;

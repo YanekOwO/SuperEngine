@@ -28,7 +28,6 @@
 #include <memory>
 
 class System;
-class TextPage;
 class TextWindow;
 struct LocalConfig;
 struct MwndMessageState;
@@ -52,9 +51,7 @@ class SiglusMwndWaitOperation final : public LongOperation {
   class PauseGuard;
   void FinishWait();
   int AutoModeCharCount();
-  TextPage& Page();
 
-  libsiglus::SiglusMachine& runtime_;
   System* system_;
   std::shared_ptr<TextWindow> window_;
   LocalConfig& local_config_;

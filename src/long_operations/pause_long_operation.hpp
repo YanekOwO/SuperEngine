@@ -58,13 +58,13 @@ class PauseLongOperation : public LongOperation {
   // Used in automode:
   // How long after start_time_ to automatically break out of this
   // Longoperation if auto mode is enabled
-  unsigned int automode_time_;
+  std::chrono::milliseconds automode_time_{};
 
   // How long it's been since the last time we've added time to |total_time_|.
-  unsigned int time_at_last_pass_;
+  std::chrono::milliseconds time_at_last_pass_{};
 
   // When this hits |automode_time_|, we fire.
-  unsigned int total_time_;
+  std::chrono::milliseconds total_time_{};
 };
 
 // -----------------------------------------------------------------------

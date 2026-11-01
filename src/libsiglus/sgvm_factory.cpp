@@ -405,6 +405,11 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
 
   rt.interaction_manager = std::make_unique<InteractionManager>(
       *rt.stage, *input, ButtonActionTable::ParseSiglus(gexe));
+  rt.interaction_manager->SetWindowSource(
+      [text = &rt.system->text()](int layer) -> const TextSystem::WindowList& {
+        return text->GetDisplayedWindows(layer);
+      },
+      [text = &rt.system->text()] { return text->IsReadingBacklog(); });
   const auto button_config = [](const GraphicsObject& object, int slot) {
     auto config = object.Param().button.config.value_or(MwndConfig::Button{});
     config.slot_id = slot;

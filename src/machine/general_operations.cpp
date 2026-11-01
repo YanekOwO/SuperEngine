@@ -78,8 +78,8 @@ CGMTable& GetSystemObj(RLMachine& machine) {
 }
 
 template <>
-TextPage& GetSystemObj(RLMachine& machine) {
-  return machine.GetSystem().text().GetCurrentPage();
+TextWindow& GetSystemObj(RLMachine& machine) {
+  return *machine.GetSystem().text().GetCurrentMwnd();
 }
 
 }  // namespace getSystemObjImpl

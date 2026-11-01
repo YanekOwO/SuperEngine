@@ -94,7 +94,6 @@ class MessageStream {
 struct MessageStreamState {
   MessageStream stream;
   bool deferring = false;
-  std::optional<int> first_stream_chars;
 
   static void Draw(ITextSystem& renderer,
                    const std::shared_ptr<SDLSurface>& destination,

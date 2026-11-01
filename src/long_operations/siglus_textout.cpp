@@ -24,7 +24,6 @@
 #include "long_operations/siglus_textout.hpp"
 
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 
@@ -41,8 +40,15 @@ Task<int> SiglusTextoutOperation::Run(WaitContext& waits) {
     co_return 0;
 
   auto window = system_->text().GetCurrentMwnd();
-  window->PrepareMessageText([this](TextPage& page) { page.Text(text_); });
+  while (system_->text().IsReadingBacklog())
+    co_await waits.Schedule(false);
+  window->PrepareMessageText(
+      [this](TextWindow& page) { page.SubmitText(msgcmd::Text{text_, {}}); });
   while (window->HasPendingMessageText()) {
+    if (system_->text().IsReadingBacklog()) {
+      co_await waits.Schedule(false);
+      continue;
+    }
     if ((co_await waits.Schedule()) == WaitOutcome::InterruptedByInput) {
       window->FlushMessageText();
       // Finish this input dispatch before a subsequent pause can listen.

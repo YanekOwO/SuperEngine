@@ -28,8 +28,10 @@
 
 #include "systems/text_system.hpp"
 
+#include "core/colour.hpp"
 #include "core/gameexe.hpp"
 #include "core/image_resources.hpp"
+#include "core/rlevent_listener.hpp"
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
@@ -40,7 +42,6 @@
 #include "systems/system.hpp"
 #include "systems/text_factory.hpp"
 #include "systems/text_key_cursor.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
 #include "utf8.h"
@@ -50,6 +51,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <exception>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -67,8 +69,6 @@ const int FULLWIDTH_A = 0xFF21;
 const int FULLWIDTH_B = 0xFF22;
 const int FULLWIDTH_ZERO = 0xFF10;
 const int FULLWIDTH_NINE = 0xFF19;
-
-constexpr int kSeparateNameWindowMode = 1;
 
 struct KoeReplayConfig {
   std::string icon_name;
@@ -146,6 +146,11 @@ TextSystem::~TextSystem() {
 }
 
 void TextSystem::AdvanceMessageText(std::chrono::milliseconds delta) {
+  if (IsReadingBacklog())
+    return;
+  delta = std::max(delta, std::chrono::milliseconds::zero());
+  message_time_ +=
+      std::min(delta, std::chrono::milliseconds::max() - message_time_);
   for (const auto& layer : stage_.mwnd.storage)
     for (const auto& window : layer)
       if (window)
@@ -165,14 +170,19 @@ void TextSystem::ExecuteTextSystem() {
       SetKeyCursor(0);
     text_key_cursor_->Execute();
   }
-  for (int layer : {kLayerBg, kLayerFg, kLayerNext})
-    for (const auto& window : stage_.mwnd[layer])
+  for (int layer : {kLayerBg, kLayerFg, kLayerNext}) {
+    // A repeating history button can replace the displayed collection.
+    const auto windows = GetDisplayedWindows(layer);
+    for (const auto& window : windows)
       if (window)
         window->Execute(layer == kLayerFg &&
                         ShowWindow(window->window_number()));
+  }
 }
 
 void TextSystem::RenderWindow(TextWindow& window) {
+  if (IsReadingBacklog() && !IsDisplayedWindow(&window))
+    return;
   if (!system_visible() || !ShowWindow(window.window_number()) ||
       IsInterfaceHidden())
     return;
@@ -180,7 +190,7 @@ void TextSystem::RenderWindow(TextWindow& window) {
 }
 
 void TextSystem::Render() {
-  for (const auto& window : stage_.mwnd[kLayerFg])
+  for (const auto& window : GetDisplayedWindows(kLayerFg))
     if (window)
       RenderWindow(*window);
   auto current = FindMwnd(kLayerFg, active_window_);
@@ -268,33 +278,61 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int window_id) {
 std::shared_ptr<TextWindow> TextSystem::GetMwnd(int layer, int window_id) {
   if (window_id < 0 || !mwnd_config_.HasWindow(window_id))
     throw std::out_of_range("Invalid message-window index");
-  return stage_.mwnd.Get(layer, window_id, [this, window_id]() {
-    Gameexe& gexe = system_.gameexe();
-    TextWindow::InitParams params = mwnd_config_.GetWindow(window_id);
-    if (params.window_attr_mod == 0) {
-      params.colour = global_config_.filter_color;
-      params.is_filter = global_config_.reallive.window_filter != 0;
-    }
-    auto tw = std::make_shared<TextWindow>(system_, window_id, text_impl_.get(),
-                                           params);
+  return stage_.mwnd.Get(layer, window_id,
+                         [this, window_id] { return CreateWindow(window_id); });
+}
 
-    TextFactory waku_factory(mwnd_config_);
-    tw->SetTextboxWaku(params.waku_set, waku_factory.CreateWaku(
-                                            system_, *tw, params.waku_set, 0));
-    if (tw->GetNameMod() == kSeparateNameWindowMode &&
-        params.namebox.has_waku) {
-      tw->SetNameboxWaku(
-          params.namebox.waku_set,
-          waku_factory.CreateWaku(system_, *tw, params.namebox.waku_set, 0));
-    }
+std::shared_ptr<TextWindow> TextSystem::CreateWindow(int window_id,
+                                                     bool history) {
+  Gameexe& gexe = system_.gameexe();
+  TextWindow::InitParams params = mwnd_config_.GetWindow(window_id);
+  if (params.textbox.window_attr_mod == 0) {
+    params.textbox.colour = global_config_.filter_color;
+    params.textbox.is_filter = global_config_.reallive.window_filter != 0;
+  }
+  auto tw = std::make_shared<TextWindow>(system_, window_id, text_impl_.get(),
+                                         params, history);
 
-    const auto& waku = mwnd_config_.GetWaku(params.waku_set);
-    tw->message_state()->waku_file = waku.main_file;
-    tw->message_state()->filter_file = waku.filter_file;
-    tw->ClearWin();
-    tw->SetKoeReplayInfo(BuildKoeReplayInfo(system_, gexe));
-    return tw;
-  });
+  TextFactory waku_factory(mwnd_config_);
+  const auto& textbox = tw->GetTextboxConfig();
+  tw->SetTextboxWaku(textbox.waku_set, waku_factory.CreateWaku(
+                                           system_, *tw, textbox.waku_set, 0));
+  const auto& namebox = tw->GetNameboxConfig();
+  if (tw->Layout().GetNameMode() == TextLayout::NameMode::SeparateWindow &&
+      namebox.has_waku) {
+    tw->SetNameboxWaku(
+        namebox.waku_set,
+        waku_factory.CreateWaku(system_, *tw, namebox.waku_set, 0));
+  }
+
+  const auto& waku = mwnd_config_.GetWaku(textbox.waku_set);
+  tw->message_state()->waku_file = waku.main_file;
+  tw->message_state()->filter_file = waku.filter_file;
+  tw->ClearWin();
+  tw->SetKoeReplayInfo(BuildKoeReplayInfo(system_, gexe));
+  return tw;
+}
+
+const TextSystem::WindowList& TextSystem::GetDisplayedWindows(int layer) const {
+  if (!IsReadingBacklog())
+    return stage_.mwnd[layer];
+  static const WindowList empty;
+  return layer == kLayerFg ? history_windows_ : empty;
+}
+
+bool TextSystem::IsDisplayedWindow(const TextWindow* window) const {
+  const auto& windows = GetDisplayedWindows(kLayerFg);
+  return std::any_of(
+      windows.begin(), windows.end(),
+      [window](const auto& entry) { return entry && entry.get() == window; });
+}
+
+bool TextSystem::IsLiveWindow(const TextWindow* window) const {
+  for (const auto& layer : stage_.mwnd.storage)
+    for (const auto& entry : layer)
+      if (entry && entry.get() == window)
+        return true;
+  return false;
 }
 
 bool TextSystem::HasCurrentWindow() const {
@@ -406,7 +444,10 @@ void TextSystem::ExecuteMwndButton(const MwndConfig::Button& button) {
   using Action = MwndConfig::ButtonAction;
   switch (button.action) {
     case Action::HideWindow:
-      HideTextWindow(active_window_);
+      if (IsReadingBacklog())
+        StopReadingBacklog();
+      else
+        HideTextWindow(active_window_);
       break;
     case Action::MessageLog:
     case Action::BackPage:
@@ -457,6 +498,81 @@ void TextSystem::ExpireOldPages() {
 }
 
 void TextSystem::OnEvent(std::shared_ptr<Event> event) {
+  if (!event)
+    return;
+  if (const auto* key = std::get_if<KeyDown>(event.get());
+      key && history_close_key_ == key->code) {
+    *event = std::monostate();
+    return;
+  }
+  if (const auto* key = std::get_if<KeyUp>(event.get());
+      key && history_close_key_ == key->code) {
+    history_close_key_.reset();
+    *event = std::monostate();
+    return;
+  }
+  if (IsReadingBacklog()) {
+    const bool input = std::visit(
+        [&](const auto& input) -> bool {
+          using T = std::decay_t<decltype(input)>;
+          if constexpr (std::same_as<T, MouseMotion>) {
+            SetMousePosition(input.pos);
+            return true;
+          } else if constexpr (std::same_as<T, KeyDown>) {
+            if (input.code == KeyCode::UP || input.code == KeyCode::PAGEUP)
+              BackPage();
+            else if (input.code == KeyCode::DOWN ||
+                     input.code == KeyCode::PAGEDOWN)
+              ForwardPage();
+            else if (input.code == KeyCode::RETURN ||
+                     input.code == KeyCode::SPACE ||
+                     input.code == KeyCode::ESCAPE ||
+                     input.code == KeyCode::KP_ENTER) {
+              history_close_key_ = input.code;
+              StopReadingBacklog();
+            }
+            return true;
+          } else if constexpr (std::same_as<T, KeyUp>) {
+            return true;
+          } else if constexpr (std::same_as<T, MouseDown> ||
+                               std::same_as<T, MouseUp>) {
+            constexpr bool pressed = std::same_as<T, MouseDown>;
+            if (input.button == MouseButton::WHEELUP && pressed)
+              BackPage();
+            else if (input.button == MouseButton::WHEELDOWN && pressed)
+              ForwardPage();
+            else if (input.button == MouseButton::LEFT) {
+              if (!HandleMouseClick(system_.rlEvent().GetCursorPos(),
+                                    pressed) &&
+                  !pressed)
+                StopReadingBacklog();
+            }
+            return true;
+          }
+          return false;
+        },
+        *event);
+    if (input) {
+      *event = std::monostate();
+      return;
+    }
+  } else if (in_pause_state_) {
+    const bool back = std::visit(
+        [](const auto& input) {
+          using T = std::decay_t<decltype(input)>;
+          if constexpr (std::same_as<T, KeyDown>)
+            return input.code == KeyCode::UP || input.code == KeyCode::PAGEUP;
+          else if constexpr (std::same_as<T, MouseDown>)
+            return input.button == MouseButton::WHEELUP;
+          return false;
+        },
+        *event);
+    if (back) {
+      BackPage();
+      *event = std::monostate();
+      return;
+    }
+  }
   const bool result = std::visit(
       [&](auto& event) -> bool {
         using T = std::decay_t<decltype(event)>;
@@ -491,11 +607,11 @@ void TextSystem::CollectCurrentPages() {
   current_pageset_.clear();
   for (const auto& window : stage_.mwnd[kLayerFg])
     if (window && window->HasPage())
-      current_pageset_.emplace(window->window_number(),
-                               window->GetPage().CloneFor(*window, window));
+      current_pageset_.emplace(window->window_number(), window->GetPage());
 }
 
 void TextSystem::Snapshot() {
+  StopReadingBacklog();
   CollectCurrentPages();
   const bool all_empty =
       std::all_of(current_pageset_.begin(), current_pageset_.end(),
@@ -511,80 +627,75 @@ void TextSystem::NewPageOnWindow(int window_id) {
 }
 
 void TextSystem::NewPageOnWindow(std::shared_ptr<TextWindow> window) {
+  StopReadingBacklog();
   window->NewPage();
   previous_page_it_ = previous_page_sets_.end();
   ExpireOldPages();
 }
 
-TextPage& TextSystem::GetCurrentPage() {
-  return GetPageOnWindow(GetCurrentMwnd());
-}
-
-TextPage& TextSystem::GetPageOnWindow(std::shared_ptr<TextWindow> window) {
-  return window->GetPage();
-}
-
 void TextSystem::BackPage() {
-  if (!is_reading_backlog_)
+  if (previous_page_sets_.empty())
+    return;
+  if (!IsReadingBacklog()) {
     CollectCurrentPages();
-  is_reading_backlog_ = true;
-
+    previous_page_it_ = previous_page_sets_.end();
+  }
   if (previous_page_it_ != previous_page_sets_.begin()) {
-    previous_page_it_ = std::prev(previous_page_it_);
-
-    // Clear all windows
-    ClearAllTextWindows();
-    HideAllTextWindows();
-
-    ReplayPageSet(*previous_page_it_, false);
+    --previous_page_it_;
+    ReplayPageSet(*previous_page_it_);
   }
 }
 
 void TextSystem::ForwardPage() {
-  if (!is_reading_backlog_)
-    CollectCurrentPages();
-  is_reading_backlog_ = true;
-
-  if (previous_page_it_ != previous_page_sets_.end()) {
-    previous_page_it_ = std::next(previous_page_it_);
-
-    // Clear all windows
-    ClearAllTextWindows();
-    HideAllTextWindows();
-
-    if (previous_page_it_ != previous_page_sets_.end())
-      ReplayPageSet(*previous_page_it_, false);
-    else
-      ReplayPageSet(current_pageset_, false);
-  }
+  if (!IsReadingBacklog() || previous_page_it_ == previous_page_sets_.end())
+    return;
+  ++previous_page_it_;
+  ReplayPageSet(previous_page_it_ == previous_page_sets_.end()
+                    ? current_pageset_
+                    : *previous_page_it_);
 }
 
-void TextSystem::ReplayPageSet(PageSet& set, bool is_current_page) {
-  for (PageSet::iterator it = set.begin(); it != set.end(); ++it) {
+void TextSystem::ReplayPageSet(const PageSet& set) {
+  if (!IsReadingBacklog())
+    CollectCurrentPages();
+  is_reading_backlog_ = true;
+  mwnd_capture_window_.reset();
+  WindowList windows;
+  for (const auto& [id, page] : set) {
+    if (id < 0 || !mwnd_config_.HasWindow(id))
+      continue;
+    if (windows.size() <= static_cast<std::size_t>(id))
+      windows.resize(id + 1);
     try {
-      auto window = GetMwnd(it->first);
-      auto page = it->second.CloneFor(*window);
-      page.Replay(is_current_page);
-    } catch (rlvm::Exception& e) {
-      // Currently, the text system can throw on a few unimplemented situations,
-      // such as ruby across lines.
-
-      // Ignore what would normally be an ignored command when encountered from
-      // the main loop.
+      auto window = CreateWindow(id, true);
+      windows[id] = window;
+      // RealLive history has its own initial color. Explicit recorded color
+      // commands still override it, and MessagePage itself stays unchanged.
+      std::optional<RGBColour> color;
+      if (!mwnd_config_.layered_windows())
+        if (auto values = system_.gameexe()("COLOR_TABLE", 254).IntVec())
+          color = RGBColour(*values);
+      window->Restore(page, color);
+    } catch (const std::exception&) {
+      // Keep other windows usable when an unsupported command or resource
+      // prevents reconstruction of one message window.
     }
   }
+  history_windows_ = std::move(windows);
+  RequestRefresh();
 }
 
 bool TextSystem::IsReadingBacklog() const { return is_reading_backlog_; }
 
 void TextSystem::StopReadingBacklog() {
+  if (!IsReadingBacklog())
+    return;
   is_reading_backlog_ = false;
-
-  // Clear all windows
-  ClearAllTextWindows();
-  HideAllTextWindows();
-  CollectCurrentPages();
-  ReplayPageSet(current_pageset_, true);
+  history_windows_.clear();
+  current_pageset_.clear();
+  previous_page_it_ = previous_page_sets_.end();
+  mwnd_capture_window_.reset();
+  RequestRefresh();
 }
 
 void TextSystem::SetKeyCursor(int new_cursor) {
@@ -607,9 +718,10 @@ void TextSystem::UpdateWindowsForChangeToWindowAttr() {
   // Check each text window to see if it needs updating
   for (const auto& layer : stage_.mwnd.storage)
     for (const auto& window : layer)
-      if (window && !window->GetAttrMod()) {
-        window->SetColour(global_config_.filter_color);
-        window->SetFilter(global_config_.reallive.window_filter);
+      if (window && !window->GetTextboxConfig().window_attr_mod) {
+        auto& textbox = window->GetTextboxConfig();
+        textbox.colour = global_config_.filter_color;
+        textbox.is_filter = global_config_.reallive.window_filter != 0;
       }
 }
 
@@ -624,9 +736,9 @@ bool TextSystem::ShowWindow(int win_num) const {
 
 void TextSystem::SetMousePosition(const Point& pos) {
   auto target = mwnd_capture_window_ ? mwnd_capture_window_->lock() : nullptr;
-  if (target && !IsForegroundWindow(target.get()))
+  if (target && !IsDisplayedWindow(target.get()))
     target.reset();
-  const auto& windows = stage_.mwnd[kLayerFg];
+  const auto windows = GetDisplayedWindows(kLayerFg);
   if (!target)
     for (auto it = windows.rbegin(); it != windows.rend(); ++it)
       if (*it && ShowWindow((*it)->window_number()) &&
@@ -645,12 +757,12 @@ bool TextSystem::HandleMouseClick(const Point& pos, bool pressed) {
   if (!pressed && mwnd_capture_window_) {
     auto window = mwnd_capture_window_->lock();
     mwnd_capture_window_.reset();
-    if (window && IsForegroundWindow(window.get()))
+    if (window && IsDisplayedWindow(window.get()))
       (void)window->HandleMouseClick(pos, false);
     SetMousePosition(pos);
     return true;
   }
-  const auto& windows = stage_.mwnd[kLayerFg];
+  const auto windows = GetDisplayedWindows(kLayerFg);
   for (auto it = windows.rbegin(); it != windows.rend(); ++it)
     if (*it && ShowWindow((*it)->window_number()) &&
         (*it)->HandleMouseClick(pos, pressed)) {
@@ -952,6 +1064,9 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
 void TextSystem::Reset() {
   local_config_.multi_msg_mode = false;
   is_reading_backlog_ = false;
+  history_windows_.clear();
+  history_close_key_.reset();
+  message_time_ = std::chrono::milliseconds::zero();
 
   current_pageset_.clear();
   previous_page_sets_.clear();

@@ -39,7 +39,7 @@ class System;
 class EventSystem;
 class Haikei;
 class Stage;
-class TextPage;
+class TextWindow;
 class TextSystem;
 class SoundSystem;
 class CGMTable;

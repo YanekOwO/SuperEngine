@@ -346,14 +346,11 @@ void SiglusMachine::StartSelection(std::shared_ptr<Selection> s) {
 
 void SiglusMachine::FinishSelection(std::shared_ptr<Selection> s) {
   if (s->window) {
-    TextSystem& text = system->text();
     s->window->SetSelectionSize(std::nullopt);
     if (s->window->action_on_pause())
-      s->window->message_state()->MarkNovelClear(
-          text.GetPageOnWindow(s->window));
+      s->window->message_state()->MarkNovelClear(*s->window);
     else
-      s->window->message_state()->MarkMessageClearReady(
-          text.GetPageOnWindow(s->window));
+      s->window->message_state()->MarkMessageClearReady(*s->window);
     if (s->request.close_window)
       s->window->SetVisible(false);
   }

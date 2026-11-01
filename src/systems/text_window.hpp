@@ -25,6 +25,7 @@
 #pragma once
 
 #include "core/colour.hpp"
+#include "core/message_page.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/rect.hpp"
 #include "core/text_layout.hpp"
@@ -34,6 +35,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,9 +45,10 @@ class SDLSurface;
 class System;
 class TextSystem;
 class ITextSystem;
+struct IFont;
 class TextWaku;
 class TextWindowButton;
-class TextPage;
+class TextWindow;
 struct MessageStreamState;
 
 struct MwndMessageState {
@@ -61,13 +64,13 @@ struct MwndMessageState {
   std::optional<std::string> pending_ruby;
 
   void ClearKoe();
-  void MarkNovelClear(TextPage& page);
-  void MarkMessageClearReady(TextPage& page);
+  void MarkNovelClear(TextWindow& window);
+  void MarkMessageClearReady(TextWindow& window);
 };
 
 constexpr int kNumFaceSlots = MwndConfig::kNumFaceSlots;
 
-// Sets of TextWindows should be reconstructable by the state in TextPage,
+// Message content can be reconstructed from a MessagePage,
 // though there are some notable exceptions, specifically Select_LongOperation.
 //
 // This class has all sorts of complex, rarely used text rendering options,
@@ -76,19 +79,31 @@ constexpr int kNumFaceSlots = MwndConfig::kNumFaceSlots;
 class TextWindow {
  public:
   using FaceSlotConfig = MwndConfig::FaceSlot;
+  using TextboxConfig = MwndConfig::Textbox;
   using NameboxConfig = MwndConfig::Namebox;
   using InitParams = MwndConfig::Window;
 
   TextWindow(System& system,
              int window_num,
              ITextSystem* text_impl,
-             const InitParams& params);
+             const InitParams& params,
+             bool history_view = false);
   ~TextWindow();
 
   std::shared_ptr<TextWindow> Clone() const;
-  TextPage& GetPage();
-  bool HasPage() const { return static_cast<bool>(page_); }
+  const MessagePage& GetPage();
+  inline bool HasPage() const { return page_.has_value(); }
   void NewPage();
+  void Restore(const MessagePage& page,
+               std::optional<RGBColour> initial_color = std::nullopt);
+
+  // [Recorded in MessagePage] ------------------------------------------
+  // Apply and record a non-text command. Submit text through SubmitText.
+  bool Submit(MessageCommand command);
+  // Lay out the complete submission before queuing drawing records. Returns
+  // the accepted UTF-8 byte count; a rejected suffix can be retried later.
+  std::size_t SubmitText(msgcmd::Text command);
+
   const std::shared_ptr<MwndMessageState>& message_state() const {
     return message_state_;
   }
@@ -97,8 +112,28 @@ class TextWindow {
   void ClearMouseCapture();
   std::size_t capture_generation() const { return capture_generation_; }
 
-  inline TextLayout& Layout() { return layout_; }
-  inline TextLayout const& Layout() const { return layout_; }
+  TextLayout& Layout() { return layout_; }
+  const TextLayout& Layout() const { return layout_; }
+
+  // Configuration edits affect subsequent geometry/rendering work.
+  // Frames are set through SetTextboxWaku.
+  inline TextboxConfig& GetTextboxConfig() { return textbox_config_; }
+  inline const TextboxConfig& GetTextboxConfig() const {
+    return textbox_config_;
+  }
+  inline void SetTextboxConfig(TextboxConfig config) {
+    textbox_config_ = std::move(config);
+  }
+
+  // Configuration edits take effect in subsequent geometry/rendering work.
+  // Names are rasterized on submission; frames are set through SetNameboxWaku.
+  inline NameboxConfig& GetNameboxConfig() { return namebox_config_; }
+  inline const NameboxConfig& GetNameboxConfig() const {
+    return namebox_config_;
+  }
+  inline void SetNameboxConfig(NameboxConfig config) {
+    namebox_config_ = std::move(config);
+  }
 
   void Execute(bool update_controls = true);
   void ShowWaitIcon(bool page);
@@ -108,39 +143,20 @@ class TextWindow {
 
   int window_number() const { return window_num_; }
 
-  // TODO(erg): This is nowhere near good enough and handling waku better needs
-  // to be put on the long term goal list. Should waku_set() live on the
-  // TextWindow? O RLY?
-  int waku_set() const { return waku_set_; }
   void SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
   void SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
-  TextWaku* GetTextboxWaku() const { return textbox_waku_.get(); }
-  TextWaku* GetNameboxWaku() const { return namebox_waku_.get(); }
+  inline TextWaku* GetTextboxWaku() const { return textbox_waku_.get(); }
+  inline TextWaku* GetNameboxWaku() const { return namebox_waku_.get(); }
   bool IsTextboxWakuVisible() const;
   bool IsNameboxWakuVisible() const;
 
-  // Sets the size of the font. Represented by #WINDOW.xxx.MOJI.SIZE.
-  void set_font_size_to_default() {
-    set_font_size_in_pixels(default_font_size_);
-  }
-  void set_font_size_in_pixels(int i) { layout_.font_size = i; }
-  int font_size_in_pixels() const { return layout_.font_size; }
+  int GetDefaultFontSize() const { return default_font_size_; }
 
-  void SetTextboxPadding(const std::vector<int>& pos_data);
+  inline void set_use_indentation(const int i) { use_indentation_ = i; }
+  inline int use_indentation() const { return use_indentation_; }
 
-  void set_use_indentation(const int i) { use_indentation_ = i; }
-  int use_indentation() const { return use_indentation_; }
-
-  void SetIndentation();
-  int current_indentation() const { return layout_.indent_pixels; }
-
-  void SetDefaultTextColor(const std::vector<int>& colour_data);
-  void SetFontColor(const std::vector<int>& colour_data);
-  inline void SetDefaultTextColor(RGBColour rgb) { default_colour_ = rgb; }
-  inline void SetFontColor(RGBColour rgb) { font_colour_ = rgb; }
-  RGBColour GetFontColor() const { return font_colour_; }
-
-  void SetWindowPosition(const std::vector<int>& pos_data);
+  inline RGBColour GetDefaultTextColor() const { return default_colour_; }
+  inline RGBColour GetFontColor() const { return font_colour_; }
 
   // We have to differentiate between the official size where we're supposed to
   // put text (GetTextWindowSize()) and the actual size of the surface
@@ -170,35 +186,13 @@ class TextWindow {
   bool HasMwndButtonAt(const Point& pos) const;
   bool HandleMouseClick(const Point& pos, bool pressed);
 
-  // Sets how the name is displayed
-  void SetNameMod(const int in);
-  [[nodiscard]] int GetNameMod() const { return static_cast<int>(name_mod_); }
   [[nodiscard]] bool HasName() const { return !current_name_.empty(); }
-
-  // Sets the size of the spacing between characters. Represented by
-  // #WINDOW.xxx.NAME_MOJI_REP.
-  void SetNameSpacingBetweenCharacters(int pos_data);
-
-  void SetNameboxPadding(const std::vector<int>& pos_data);
-  void SetNameboxPosition(const std::vector<int>& pos_data);
 
   // Set and access the position of the animated icon that appears when waiting
   // for user input. The TextWindow only owns the position which is queried by
   // the TextKeyCursor object which owns the actual image and other
   // properties. This is an artifact of how RealLive handles this.
-  void SetKeycursorMod(const std::vector<int>& keycur);
   Point KeycursorPosition(const Size& cursor_size) const;
-
-  // Accessors regarding the background colour of the window.
-  //
-  // Represents the data parsed from #WINDOW_ATTR,
-  // #WINDOW.index.ATTR_MOD, and #WINDOW.index.ATTR
-  int GetAttrMod() const { return window_attr_mod_; }
-
-  [[nodiscard]] RGBAColour GetColour() const { return colour_; }
-  void SetColour(RGBAColour col) { colour_ = col; }
-  [[nodiscard]] bool GetIsFilter() const { return is_filter_; }
-  void SetFilter(bool f) { is_filter_ = f; }
 
   void SetVisible(bool in) {
     if (!in)
@@ -210,29 +204,7 @@ class TextWindow {
   void set_action_on_pause(const int i) { action_on_pause_ = i; }
   bool action_on_pause() const { return action_on_pause_; }
 
-  int insertion_point_x() const { return layout_.insertion_x; }
-  int insertion_point_y() const { return layout_.insertion_y; }
-  void offset_insertion_point_x(int offset) { layout_.insertion_x += offset; }
-  void offset_insertion_point_y(int offset) { layout_.insertion_y += offset; }
-  void set_insertion_point_x(int x) { layout_.insertion_x = x; }
-  void set_insertion_point_y(int y) { layout_.insertion_y = y; }
-  int line_height() const { return layout_.GetLineHeight(); }
-
-  inline void SetGlyphRenderOffset(Point offset) {
-    glyph_render_offset_ = offset;
-  }
-  inline void ResetGlyphRenderOffset() { glyph_render_offset_ = Point(0, 0); }
-  inline Point glyph_render_offset() const { return glyph_render_offset_; }
-
-  // Loads |filename| into face slot |index|.
-  void FaceOpen(const std::string& filename, int index);
-
-  // Clears face slot |index|.
-  void FaceClose(int index);
   void SetFaceSlotPosition(int index, Point position);
-
-  // Marks that the next character rendered in the window should be italic.
-  void NextCharIsItalic();
 
   void Render();
 
@@ -242,44 +214,40 @@ class TextWindow {
 
   // Queue a batch for window-driven reveal;
   // ordinary page operations outside preparation still flush immediately.
-  void PrepareMessageText(const std::function<void(TextPage&)>& prepare);
+  void PrepareMessageText(const std::function<void(TextWindow&)>& prepare);
 
   // Multi-message submissions keep queuing between preparation batches and
   // reveal independently for each stream.
   void BeginMultiMessage();
   void EndMultiMessage();
-  void NextMessage();
   bool HasPendingMessageText() const;
-  int MessageAutoModeCharCount();
+
+  // Number of characters on the current page, used for auto-mode timing.
+  int GetCharacterCount() const;
+
   void AdvanceMessageText(std::chrono::milliseconds delta);
   void FlushMessageText();
 
-  // Displays one character, and performs line breaking logic based on the next
-  // character. Returns true if the character fits on the screen. False if it
-  // does not and was not displayed.
-  bool DisplayCharacter(const std::string& current, const std::string& rest);
-
-  // Checks to make sure that not only will |cur_codepoint| fit on the line,
-  // but also that we'll perform kinsoku rules correctly.
-  bool MustLineBreak(int cur_codepoint, const std::string& rest);
-
-  // Returns whether another character can be placed on the screen.
-  bool IsFull() const;
-
-  // Sets (and displays, if appropriate) the name of the current speaker.
-  void SetName(const std::string& utf8name, const std::string& next_char);
-  void SetNameWithoutDisplay(const std::string& utf8name);
-
   void RenderNameInBox(const std::string& utf8str);
-
-  void KoeMarker(int id);
-  void ResetIndentation();
-  void MarkRubyBegin();
-  void DisplayRubyText(const std::string& utf8str);
 
  private:
   std::pair<int, int> sorter_;
-  std::unique_ptr<TextPage> page_;
+  std::optional<MessagePage> page_;
+  MessagePage& EnsurePage();
+  MessagePageState CaptureMessageState() const;
+  bool ApplyMessageCommand(const MessageCommand& command, bool replay);
+  TextLayout::Result DisplayTextImpl(const msgcmd::Text& command);
+  void QueueText(std::string_view text,
+                 const TextLayout::Result& layout,
+                 const std::shared_ptr<IFont>& font);
+  void SetNameImpl(const std::string& name, const std::string& next_char);
+  void SetNameWithoutDisplayImpl(const std::string& name);
+  void FaceOpenImpl(const std::string& filename, int index, bool replay);
+  void FaceCloseImpl(int index, bool replay);
+  void DisplayRubyTextImpl(const std::string& text);
+  void NextMessageImpl(const msgcmd::NextMessage& command);
+  bool restoring_ = false;
+  bool history_view_ = false;
   std::unique_ptr<MessageStreamState> message_stream_;
   MessageStreamState& EnsureMessageStream();
   std::shared_ptr<MwndMessageState> message_state_ =
@@ -298,25 +266,14 @@ class TextWindow {
   std::shared_ptr<SDLSurface> text_surface_;
   std::shared_ptr<SDLSurface> name_surface_;
 
-  // We cache the size of the screen so we don't need the machine in
-  // some accessors.
-  int screen_width_, screen_height_;
-
   // Our numeric window identifier.
   int window_num_;
 
-  // The waku set number.
-  int waku_set_;
-
+  TextboxConfig textbox_config_;
   // The window decorations for the text window
   std::unique_ptr<TextWaku> textbox_waku_;
 
   TextLayout layout_;
-  Point glyph_render_offset_;
-
-  // Whether the last token was a SetName. This is used to control indentation
-  // for quotes.
-  bool last_token_was_name_;
   std::string current_name_;
 
   // The default font size.
@@ -337,68 +294,18 @@ class TextWindow {
   // calls. Initialized to #WINDOW.x.R_COMMAND_MOD.
   int action_on_pause_;
 
-  int origin_, x_distance_from_origin_, y_distance_from_origin_;
-
-  int upper_box_padding_;
-  int lower_box_padding_;
-  int left_box_padding_;
-  int right_box_padding_;
-
-  // Whether r_, etc is a per-window colour.
-  int window_attr_mod_;
-
-  // The default window background colour.
-  RGBAColour colour_;
-  bool is_filter_;
-
   bool is_visible_;
   std::size_t capture_generation_ = 0;
 
-  // Determines the position of the keycursor (the animated cursor
-  // that appears when the game is waiting for a click to move to the
-  // next page of text).
-  //
-  // If type is 0, the cursor appears at the bottom right corner of
-  // the text area; if it is 1, it appears directly after the final
-  // character printed; if it is 2, it appears at (x, y) relative to
-  // the top left of the text area. (x and y are ignored when type is
-  // 0 or 1.)
-  int keycursor_type_;
-  Point keycursor_pos_;
+  using NameMode = TextLayout::NameMode;
 
-  enum class NameMode : int { Inline = 0, SeparateWindow = 1, Disable = 2 };
-  NameMode name_mod_;
-
-  // Waku set to use for the text box in the case where name_mod_ == 1.
-  int name_waku_set_;
-
+  NameboxConfig namebox_config_;
   std::unique_ptr<TextWaku> namebox_waku_;
-
-  int name_font_size_in_pixels_;
-
-  int name_waku_dir_set_;
-
-  // Spacing between characters
-  int name_x_spacing_;
-
-  int horizontal_namebox_padding_;
-  int vertical_namebox_padding_;
-
-  int namebox_x_offset_;
-  int namebox_y_offset_;
-
-  int namebox_centering_;
-
-  int minimum_namebox_size_;
-
-  int name_size_;
-
-  std::optional<NameboxConfig::SiglusLayout> siglus_namebox_layout_;
 
   // Name glyph bounds, excluding the two-pixel shadow added by RenderText.
   Size GetNameboxTextSize() const;
 
-  // The number of characters in the window (or |minimum_namebox_size_|).
+  // The number of name characters, clamped to namebox_config_.minimum_size.
   int namebox_characters_;
 
   bool next_char_italic_;

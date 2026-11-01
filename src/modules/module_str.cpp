@@ -41,8 +41,8 @@
 #include "machine/rloperation/reference_types.hpp"
 #include "machine/rloperation/rlop_store.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
+#include "systems/text_window.hpp"
 #include "utilities/exception.hpp"
 #include "utilities/string_utilities.hpp"
 
@@ -582,8 +582,8 @@ struct Str_strout : public RLOpcode<StrConstant_T> {
 
         // Notify the TextSystem that the next character that will be printed
         // should be printed in italics.
-        TextPage& page = machine.GetSystem().text().GetCurrentPage();
-        page.NextCharIsItalic();
+        TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+        page.Submit(msgcmd::MarkItalic{});
       }
     }
 

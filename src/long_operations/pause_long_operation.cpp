@@ -29,7 +29,6 @@
 #include "systems/event_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 
@@ -42,15 +41,13 @@ namespace lop {
 PauseLongOperation::PauseLongOperation(RLMachine& machine)
     : LongOperation(), machine_(machine), is_done_(false) {
   TextSystem& text = machine_.GetSystem().text();
-  EventSystem& event = machine_.GetSystem().event();
 
   // Initialize Auto Mode (in case it's activated, or in case it gets
   // activated)
-  int numChars = text.GetCurrentPage().number_of_chars_on_page();
-  automode_time_ = EffectiveAutoTime(machine_.GetLocalConfig(),
-                                     machine_.GetGlobalConfig(), numChars);
-  time_at_last_pass_ = event.GetTicks();
-  total_time_ = 0;
+  int numChars = text.GetCurrentMwnd()->GetCharacterCount();
+  automode_time_ = std::chrono::milliseconds(EffectiveAutoTime(
+      machine_.GetLocalConfig(), machine_.GetGlobalConfig(), numChars));
+  time_at_last_pass_ = text.MessageTime();
 
   // We undo this in the destructor
   text.set_in_pause_state(true);
@@ -185,6 +182,10 @@ bool PauseLongOperation::OnKeyStateChanged(KeyCode keyCode, bool pressed) {
 
 Task<int> PauseLongOperation::Run(WaitContext& waits) {
   while (!is_done_) {
+    if (machine_.GetSystem().text().IsReadingBacklog()) {
+      co_await waits.Schedule(false);
+      continue;
+    }
     if (EffectiveAutoMode(machine_.GetLocalConfig(),
                           machine_.GetGlobalConfig()) &&
         AutomodeTimerFired() && !machine_.GetSystem().sound().KoePlaying())
@@ -200,8 +201,9 @@ Task<int> PauseLongOperation::Run(WaitContext& waits) {
 
 bool PauseLongOperation::AutomodeTimerFired() {
   int current_time = machine_.GetSystem().event().GetTicks();
-  int time_since_last_pass = current_time - time_at_last_pass_;
-  time_at_last_pass_ = current_time;
+  const auto message_time = machine_.GetSystem().text().MessageTime();
+  const auto time_since_last_pass = message_time - time_at_last_pass_;
+  time_at_last_pass_ = message_time;
 
   if (machine_.GetSystem().rlEvent().TimeOfLastMouseMove() <
       (current_time - 2000)) {
@@ -257,9 +259,9 @@ NewParagraphAfterLongop::NewParagraphAfterLongop(RLMachine& machine,
 NewParagraphAfterLongop::~NewParagraphAfterLongop() {}
 
 void NewParagraphAfterLongop::PerformAfterLongOperation(RLMachine& machine) {
-  TextPage& page = machine.GetSystem().text().GetCurrentPage();
-  page.ResetIndentation();
-  page.HardBrake();
+  TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+  page.Submit(msgcmd::ClearIndentation{});
+  page.Submit(msgcmd::HardBreak{});
 }
 
 }  // namespace lop

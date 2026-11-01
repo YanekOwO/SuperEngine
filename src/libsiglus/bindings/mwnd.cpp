@@ -36,7 +36,6 @@
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_factory.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_waku.hpp"
 #include "systems/text_window.hpp"
@@ -142,9 +141,7 @@ void BindMwnd(SiglusMachine& runtime) {
   auto get = [sys](const MwndHandle* h) -> std::shared_ptr<TextWindow> {
     return h->mwnd ? h->mwnd : sys->text().GetCurrentMwnd();
   };
-  auto page = [sys, get](const MwndHandle* h) -> TextPage& {
-    return sys->text().GetPageOnWindow(get(h));
-  };
+  auto page = [get](const MwndHandle* h) -> TextWindow& { return *get(h); };
   auto context = std::make_shared<lop::PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
   auto wait = [&runtime, get, context](
@@ -307,7 +304,7 @@ void BindMwnd(SiglusMachine& runtime) {
         const auto& config = sys->text().mwnd_config();
         const auto& defaults = config.GetWindow(window->window_number());
         const int msg_waku = packet.args.empty()
-                                 ? defaults.waku_set
+                                 ? defaults.textbox.waku_set
                                  : AsInt(packet.args[0]).value_or(0);
         const int name_waku =
             packet.args.size() < 2
@@ -320,7 +317,8 @@ void BindMwnd(SiglusMachine& runtime) {
         auto message = state(h);
         message->waku_file = waku.main_file;
         message->filter_file = waku.filter_file;
-        if (name_waku >= 0 && window->GetNameMod() == 1)
+        if (name_waku >= 0 && window->Layout().GetNameMode() ==
+                                  TextLayout::NameMode::SeparateWindow)
           window->SetNameboxWaku(
               name_waku, factory.CreateWaku(*sys, *window, name_waku, 0));
       },
@@ -328,8 +326,8 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("init_waku_file", [get, sys, state](MwndHandle* h) {
     auto window = get(h);
     const auto& config = sys->text().mwnd_config();
-    if (config.HasWaku(window->waku_set())) {
-      const auto& waku = config.GetWaku(window->waku_set());
+    if (config.HasWaku(window->GetTextboxConfig().waku_set)) {
+      const auto& waku = config.GetWaku(window->GetTextboxConfig().waku_set);
       window->SetWakuMainFile(waku.main_file);
       window->SetWakuFilterFile(waku.filter_file);
       state(h)->waku_file = waku.main_file;
@@ -345,8 +343,9 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("init_filter_file", [get, sys, state](MwndHandle* h) {
     auto window = get(h);
     const auto& config = sys->text().mwnd_config();
-    if (config.HasWaku(window->waku_set())) {
-      const auto& file = config.GetWaku(window->waku_set()).filter_file;
+    if (config.HasWaku(window->GetTextboxConfig().waku_set)) {
+      const auto& file =
+          config.GetWaku(window->GetTextboxConfig().waku_set).filter_file;
       window->SetWakuFilterFile(file);
       state(h)->filter_file = file;
     }
@@ -358,7 +357,7 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("get_filter_file",
            [state](MwndHandle* h) { return state(h)->filter_file; });
 
-  mwnd.def("msg_block", [get, sys, state, page](MwndHandle* h) {
+  mwnd.def("msg_block", [get, sys, state](MwndHandle* h) {
     auto message = state(h);
     if (message->block_started)
       return;
@@ -371,18 +370,22 @@ void BindMwnd(SiglusMachine& runtime) {
     }
     // Savepoints and read flags are not implemented in the Siglus runtime.
     message->block_started = true;
-    message->auto_mode_base_chars = page(h).number_of_chars_on_page();
+    message->auto_mode_base_chars = get(h)->GetCharacterCount();
   });
-  mwnd.def("msg_pp_block", [state, page](MwndHandle* h) {
-    state(h)->auto_mode_base_chars = page(h).number_of_chars_on_page();
+  mwnd.def("msg_pp_block", [state, get](MwndHandle* h) {
+    state(h)->auto_mode_base_chars = get(h)->GetCharacterCount();
   });
   mwnd.def("enable_multi_msg",
            [get](MwndHandle* h) { get(h)->BeginMultiMessage(); });
-  mwnd.def("next_msg", [get, page, cfg = &runtime.local_config](MwndHandle* h) {
-    if (cfg->multi_msg_mode)
-      get(h)->BeginMultiMessage();
-    page(h).NextMessage();
-  });
+  mwnd.def(
+      "next_msg", [get, page, sys, cfg = &runtime.local_config](MwndHandle* h) {
+        if (cfg->multi_msg_mode)
+          get(h)->BeginMultiMessage();
+        auto& window = page(h);
+        window.Submit(msgcmd::NextMessage{
+            sys->text().mwnd_config().GetWindow(window.window_number()).layout,
+            window.GetDefaultTextColor()});
+      });
   mwnd.def("msg_wait", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::MessageOnly);
   });
@@ -401,13 +404,16 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("page", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::Clear);
   });
-  mwnd.def("indent", [page](MwndHandle* h) { page(h).SetIndentation(); });
-  mwnd.def("clear_indent",
-           [page](MwndHandle* h) { page(h).ResetIndentation(); });
-  mwnd.def("nil", [page](MwndHandle* h) { page(h).HardBrake(); });
+  mwnd.def("indent",
+           [page](MwndHandle* h) { page(h).Submit(msgcmd::SetIndentation{}); });
+  mwnd.def("clear_indent", [page](MwndHandle* h) {
+    page(h).Submit(msgcmd::ClearIndentation{});
+  });
+  mwnd.def("nil",
+           [page](MwndHandle* h) { page(h).Submit(msgcmd::HardBreak{}); });
   mwnd.def("nl", [page](MwndHandle* h) {
-    page(h).ResetIndentation();
-    page(h).HardBrake();
+    page(h).Submit(msgcmd::ClearIndentation{});
+    page(h).Submit(msgcmd::HardBreak{});
   });
   auto clear = [state, page](MwndHandle* h) {
     state(h)->MarkMessageClearReady(page(h));
@@ -454,20 +460,21 @@ void BindMwnd(SiglusMachine& runtime) {
         const bool multi_message = sys->local_config().multi_msg_mode;
         if (multi_message)
           window->BeginMultiMessage();
-        window->PrepareMessageText(
-            [&text](TextPage& target) { target.Text(text); });
+        window->PrepareMessageText([&text](TextWindow& target) {
+          target.SubmitText(msgcmd::Text{text, {}});
+        });
         if (!multi_message)
           window->FlushMessageText();
       },
       sb::vararg);
   mwnd.def("ruby_start", [page, state](MwndHandle* h, std::string ruby) {
     state(h)->pending_ruby = std::move(ruby);
-    page(h).MarkRubyBegin();
+    page(h).Submit(msgcmd::RubyBegin{});
   });
   mwnd.def("ruby_end", [page, state](MwndHandle* h) {
     auto ruby = std::exchange(state(h)->pending_ruby, std::nullopt);
     if (ruby)
-      page(h).DisplayRubyText(*ruby);
+      page(h).Submit(msgcmd::RubyText{*ruby});
   });
   mwnd.def(
       "rep_pos",
@@ -477,16 +484,22 @@ void BindMwnd(SiglusMachine& runtime) {
             packet.args.empty() ? 0 : AsInt(packet.args[0]).value_or(0);
         const int y =
             packet.args.size() < 2 ? 0 : AsInt(packet.args[1]).value_or(0);
-        page(h).SetGlyphRenderOffset(Point(x, y));
+        page(h).Submit(msgcmd::SetGlyphRenderOffset{Point(x, y)});
       },
       sb::vararg);
-  mwnd.def("rep_pos_default",
-           [page](MwndHandle* h) { page(h).ResetGlyphRenderOffset(); });
+  mwnd.def("rep_pos_default", [page](MwndHandle* h) {
+    page(h).Submit(msgcmd::SetGlyphRenderOffset{Point(0, 0)});
+  });
   mwnd.def(
-      "size", [page](MwndHandle* h, int size) { page(h).FontSize(size); },
+      "size",
+      [page](MwndHandle* h, int size) {
+        page(h).Submit(msgcmd::SetFontSize{size});
+      },
       sb::arg("size"));
-  mwnd.def("size_default",
-           [page](MwndHandle* h) { page(h).DefaultFontSize(); });
+  mwnd.def("size_default", [page](MwndHandle* h) {
+    auto& window = page(h);
+    window.Submit(msgcmd::SetFontSize{window.GetDefaultFontSize()});
+  });
 
   auto play_koe = [sys, state, page](MwndHandle* h,
                                      std::vector<sr::Value> args) {
@@ -502,7 +515,7 @@ void BindMwnd(SiglusMachine& runtime) {
       sys->sound().KoePlay(params.koe, params.character);
     else
       sys->sound().KoePlay(params.koe);
-    page(h).KoeMarker(params.koe);
+    page(h).Submit(msgcmd::KoeMarker{params.koe});
   };
   mwnd.def("koe", play_koe, sb::vararg);
   auto wait_koe = [sys](sr::VM& vm, bool key_skip) {

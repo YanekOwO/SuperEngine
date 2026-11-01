@@ -71,9 +71,9 @@ SoundSystem& GetSystemObj(RLMachine& machine);
 template <>
 CGMTable& GetSystemObj(RLMachine& machine);
 
-// Equivalent to machine.system().text().GetCurrentPage().
+// Equivalent to machine.system().text().GetCurrentMwnd().
 template <>
-TextPage& GetSystemObj(RLMachine& machine);
+TextWindow& GetSystemObj(RLMachine& machine);
 
 }  // namespace getSystemObjImpl
 

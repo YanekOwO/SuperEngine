@@ -216,6 +216,11 @@ InteractionManager::InteractionManager(Stage& stage,
       input_(input),
       button_actions_(std::move(button_actions)) {}
 
+const InteractionManager::WindowList& InteractionManager::Windows(
+    int layer) const {
+  return window_source_ ? window_source_(layer) : stage_.mwnd[layer];
+}
+
 void InteractionManager::Update() {
   RefreshMwndButtons();
   if (captured_ && captured_enabled_ && clock_ && last_repeat_) {
@@ -230,8 +235,9 @@ void InteractionManager::Update() {
       EmitMwndButton(*captured_, MwndButtonEvent::Repeat);
     }
   }
-  for (int layer = kLayerFg; layer <= kLayerNext; ++layer)
-    UpdateLayer(layer);
+  if (!window_input_exclusive_ || !window_input_exclusive_())
+    for (int layer = kLayerFg; layer <= kLayerNext; ++layer)
+      UpdateLayer(layer);
   consumed_decide_ = false;
 }
 
@@ -299,7 +305,7 @@ void InteractionManager::UpdateLayer(int layer) {
   }
 
   int display_order = 1;
-  for (const auto& window : stage_.mwnd[layer]) {
+  for (const auto& window : Windows(layer)) {
     if (window) {
       const auto visit_waku = [&](TextWaku* waku, const Point& origin,
                                   int order) {
@@ -334,7 +340,7 @@ void InteractionManager::UpdateLayer(int layer) {
     if (object)
       ApplyButtonOverrides(*object, groups, button_actions_);
 
-  for (const auto& window : stage_.mwnd[layer]) {
+  for (const auto& window : Windows(layer)) {
     if (!window)
       continue;
     for (auto* waku : {window->GetTextboxWaku(), window->GetNameboxWaku()}) {
@@ -361,7 +367,7 @@ std::vector<InteractionManager::MwndButton>
 InteractionManager::CollectMwndButtons(int layer) {
   std::vector<MwndButton> result;
   std::size_t traversal = 0;
-  const auto windows = stage_.mwnd[layer];
+  const auto windows = Windows(layer);
   for (std::size_t window_id = 0; window_id < windows.size(); ++window_id) {
     const auto& window = windows[window_id];
     if (!window)

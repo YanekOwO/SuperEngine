@@ -64,6 +64,13 @@ class InteractionManager {
   // Called after InputListener, before message-wait listeners. Returns whether
   // this event belongs to a window control and must be consumed.
   bool HandleMwndButtonEvent(const Event& event);
+  using WindowList = std::vector<std::shared_ptr<TextWindow>>;
+  // The displayed windows may be a detached message-history view.
+  void SetWindowSource(std::function<const WindowList&(int)> source,
+                       std::function<bool()> exclusive_input = {}) {
+    window_source_ = std::move(source);
+    window_input_exclusive_ = std::move(exclusive_input);
+  }
 
  private:
   struct MwndButton {
@@ -79,6 +86,9 @@ class InteractionManager {
     std::tuple<int, int, int, int, int, int, int, std::size_t> sorter;
   };
   std::vector<MwndButton> CollectMwndButtons(int layer);
+  const WindowList& Windows(int layer) const;
+  std::function<const WindowList&(int)> window_source_;
+  std::function<bool()> window_input_exclusive_;
   std::optional<MwndButton> RefreshMwndButtons();
   void EmitMwndButton(const MwndButton&, MwndButtonEvent);
   void ApplyMwndButton(const MwndButton& button, bool foreground);

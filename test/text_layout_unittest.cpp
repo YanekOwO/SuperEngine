@@ -24,167 +24,364 @@
 #include <gtest/gtest.h>
 
 #include "core/text_layout.hpp"
-#include "utilities/string_utilities.hpp"
 
-class TextLayoutEngineTest : public ::testing::Test {
- protected:
-  static constexpr char kinsoku_char = 0x21;
+#include <stdexcept>
+#include <string>
+#include <vector>
 
-  static constexpr int font_size = 24;
-  static constexpr int ruby_size = 0;
-  static constexpr int x_spacing = 2, y_spacing = 3;
-  static constexpr int x_win_size = 4, y_win_size = 3;
+namespace {
 
-  // - x_window_size_in_chars = 4  => normal_width = 4*(24+2) = 104
-  // - extended_width = normal_width + default_font_size = 104 + 24 = 128
-  static constexpr int win_height =
-      y_win_size * (font_size + y_spacing + ruby_size);
-  static constexpr int win_width_normal = x_win_size * (font_size + x_spacing);
-  static constexpr int win_width_extended = win_width_normal + font_size;
+std::vector<Point> Positions(const TextLayout::Result& result) {
+  std::vector<Point> positions;
+  for (const auto& glyph : result.glyphs)
+    positions.push_back(glyph.position);
+  return positions;
+}
 
-  TextLayout engine =
-      TextLayout(win_height, win_width_normal, win_width_extended);
+TextLayout::FontMetrics Proportional(int advance) {
+  return {.monospace = false, .advance = [advance](int) { return advance; }};
+}
 
-  void SetUp() override {
-    engine.font_size = font_size;
-    engine.ruby_font_size = ruby_size;
-    engine.x_spacing = x_spacing;
-    engine.y_spacing = y_spacing;
+}  // namespace
+
+TEST(TextLayoutTest, ValidatesPhysicalExtentAndDefaultLayoutIsFull) {
+  EXPECT_THROW(TextLayout({}, Size(10, 10), 9), std::invalid_argument);
+  EXPECT_NO_THROW(TextLayout({}, Size(10, 10), 10));
+  TextLayout empty;
+  EXPECT_TRUE(empty.IsFull());
+  EXPECT_TRUE(empty.LayoutText("A", {}).glyphs.empty());
+}
+
+TEST(TextLayoutTest, CellGridRulesAndPhysicalExtentSurviveFontChanges) {
+  TextLayout::Settings settings{.font_size = 24,
+                                .ruby_font_size = 10,
+                                .x_spacing = 2,
+                                .y_spacing = 3,
+                                .ruby_spacing = 2};
+  auto real = TextLayout::FromCells(settings, Size(4, 3));
+  EXPECT_EQ(real.GetNormalSize(), Size(104, 111));
+  EXPECT_EQ(real.GetExtendedSize(), Size(128, 111));
+  EXPECT_EQ(real.GetInsertionPoint(), Point(0, 10));
+  EXPECT_EQ(real.GetLineHeight(), 37);
+  EXPECT_EQ(real.GetRubyTopPadding(), 0);
+
+  settings.engine = TextLayout::Engine::Siglus;
+  auto siglus = TextLayout::FromCells(settings, Size(4, 3));
+  EXPECT_EQ(siglus.GetNormalSize(), Size(102, 78));
+  EXPECT_EQ(siglus.GetInsertionPoint(), Point(0, 0));
+  EXPECT_EQ(siglus.GetLineHeight(), 27);
+  EXPECT_EQ(siglus.GetRubyTopPadding(), 12);
+  siglus.SetFontSize(40);
+  EXPECT_EQ(siglus.GetNormalSize(), Size(102, 78));
+  EXPECT_EQ(siglus.GetExtendedSize(), Size(126, 78));
+  EXPECT_EQ(siglus.GetLineHeight(), 43);
+  EXPECT_EQ(TextLayout::FromCells(settings, Size(0, -2)).GetNormalSize(),
+            Size(0, 0));
+}
+
+TEST(TextLayoutTest, ReturnsUtf8SourceSpansWithLegacyMonospaceAndCjkCells) {
+  TextLayout layout({.font_size = 24, .x_spacing = 2}, Size(100, 100), 124);
+  int measurements = 0;
+  TextLayout::FontMetrics metrics{.monospace = true, .advance = [&](int) {
+                                    ++measurements;
+                                    return 99;
+                                  }};
+  const auto result = layout.LayoutText("A漢", metrics);
+  ASSERT_EQ(result.glyphs.size(), 2);
+  EXPECT_EQ(result.consumed_bytes, 4);
+  EXPECT_EQ(result.glyphs[0].byte_offset, 0);
+  EXPECT_EQ(result.glyphs[0].byte_count, 1);
+  EXPECT_EQ(result.glyphs[1].byte_offset, 1);
+  EXPECT_EQ(result.glyphs[1].byte_count, 3);
+  EXPECT_EQ(Positions(result), (std::vector<Point>{Point(0, 0), Point(13, 0)}));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(39, 0));
+  EXPECT_EQ(measurements, 0);
+  EXPECT_FALSE(result.glyphs[0].baseline_from_top);
+}
+
+TEST(TextLayoutTest, MeasuresAsciiOnceAndUsesSameAdvanceForWordLookahead) {
+  TextLayout layout({.font_size = 20, .x_spacing = 2}, Size(60, 80), 80);
+  layout.SetInsertionPoint(Point(20, 0));
+  int measurements = 0;
+  TextLayout::FontMetrics metrics{.monospace = false, .advance = [&](int cp) {
+                                    ++measurements;
+                                    return cp == 'i' ? 3 : 17;
+                                  }};
+  const auto result = layout.LayoutText("iWW", metrics);
+  EXPECT_EQ(Positions(result),
+            (std::vector<Point>{Point(0, 20), Point(5, 20), Point(24, 20)}));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(43, 20));
+  EXPECT_EQ(measurements, 3);
+}
+
+TEST(TextLayoutTest, ProportionalFontDoesNotMeasureCjkCells) {
+  TextLayout layout({.font_size = 20, .x_spacing = 2}, Size(100, 100), 120);
+  int measurements = 0;
+  const auto result =
+      layout.LayoutText("漢i", {.monospace = false, .advance = [&](int cp) {
+                                  EXPECT_EQ(cp, 'i');
+                                  ++measurements;
+                                  return 3;
+                                }});
+  EXPECT_EQ(Positions(result), (std::vector<Point>{Point(0, 0), Point(22, 0)}));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(27, 0));
+  EXPECT_EQ(measurements, 1);
+}
+
+TEST(TextLayoutTest, SpacesAndKinsokuCanUseExtendedWidth) {
+  TextLayout layout({.font_size = 20}, Size(40, 60), 60);
+  layout.SetInsertionPoint(Point(40, 0));
+  const auto result = layout.LayoutText(" !漢", {});
+  EXPECT_EQ(Positions(result),
+            (std::vector<Point>{Point(40, 0), Point(50, 0), Point(0, 20)}));
+}
+
+TEST(TextLayoutTest, KinsokuLookaheadUsesMeasuredAdvances) {
+  TextLayout layout({.font_size = 20}, Size(50, 60), 60);
+  layout.SetInsertionPoint(Point(30, 0));
+  const auto result = layout.LayoutText("A!!", Proportional(12));
+  EXPECT_EQ(Positions(result),
+            (std::vector<Point>{Point(0, 20), Point(12, 20), Point(24, 20)}));
+}
+
+TEST(TextLayoutTest, OversizedRomanWordSplitsWithoutBlankOrOneCharacterLines) {
+  TextLayout layout({.font_size = 20}, Size(30, 100), 50);
+  const auto result = layout.LayoutText("abcdefgh", Proportional(10));
+  EXPECT_EQ(Positions(result),
+            (std::vector<Point>{Point(0, 0), Point(10, 0), Point(20, 0),
+                                Point(0, 20), Point(10, 20), Point(20, 20),
+                                Point(0, 40), Point(10, 40)}));
+}
+
+TEST(TextLayoutTest, OversizedRomanFallbackSurvivesSingleCharacterSubmissions) {
+  TextLayout batch({.font_size = 20}, Size(30, 100), 50);
+  batch.SetIndent(5);
+  batch.SetInsertionPoint(Point(10, 0));
+  TextLayout singles = batch;
+  const std::string source = "abcdefgh";
+  const auto expected = batch.LayoutText(source, Proportional(10));
+  std::vector<Point> positions;
+  for (std::size_t i = 0; i < source.size(); ++i) {
+    const auto result = singles.LayoutText(
+        std::string_view(source).substr(i, 1), Proportional(10),
+        std::string_view(source).substr(i + 1));
+    ASSERT_EQ(result.glyphs.size(), 1);
+    positions.push_back(result.glyphs[0].position);
   }
-};
-
-TEST_F(TextLayoutEngineTest, ChecksNormalWidth) {
-  EXPECT_THROW(TextLayout(10, 10, 9), std::invalid_argument);
-  EXPECT_NO_THROW(TextLayout(10, 10, 10));
+  EXPECT_EQ(positions, Positions(expected));
+  EXPECT_EQ(singles.GetInsertionPoint(), batch.GetInsertionPoint());
+  EXPECT_EQ(positions.front(), Point(5, 20));
 }
 
-TEST_F(TextLayoutEngineTest, WrappingWidth) {
-  {
-    const int w = engine.WidthFor(static_cast<int>('A'));  // 65
-    EXPECT_EQ(w, 13) << "wrapping width for western char should be half width";
+TEST(TextLayoutTest, OversizedGlyphIsPlacedOnceAtFreshLineForProgress) {
+  TextLayout layout({.font_size = 20}, Size(5, 60), 25);
+  const auto result = layout.LayoutText("漢字", {});
+  EXPECT_EQ(Positions(result), (std::vector<Point>{Point(0, 0), Point(0, 20)}));
+}
+
+TEST(TextLayoutTest, OverflowRejectsUtf8GlyphWithoutChangingCursorOrRuby) {
+  TextLayout layout({.font_size = 20}, Size(40, 20), 60);
+  layout.SetInsertionPoint(Point(40, 0));
+  layout.RubyBegin();
+  const auto result = layout.LayoutText("漢", {});
+  EXPECT_EQ(result.consumed_bytes, 0);
+  EXPECT_TRUE(result.glyphs.empty());
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(40, 0));
+  EXPECT_TRUE(layout.IsRubyActive());
+  layout.SetInsertionPoint(Point(0, 0));
+  const auto retry = layout.LayoutText("漢", {});
+  ASSERT_EQ(retry.glyphs.size(), 1);
+  EXPECT_EQ(retry.consumed_bytes, 3);
+}
+
+TEST(TextLayoutTest, AcceptedByteLimitRetainsRejectedSuffixForReplayLookahead) {
+  TextLayout layout({.font_size = 20}, Size(80, 40), 100);
+  layout.SetIndent(60);
+  layout.SetInsertionPoint(Point(20, 0));
+  TextLayout replay = layout;
+  TextLayout truncated = layout;
+  const std::string source = "漢、、、、";
+  const auto original = layout.LayoutText(source, {});
+  ASSERT_EQ(original.consumed_bytes, 6);
+  EXPECT_EQ(Positions(original),
+            (std::vector<Point>{Point(60, 20), Point(80, 20)}));
+  const auto repeated =
+      replay.LayoutText(source, {}, {}, original.consumed_bytes);
+  EXPECT_EQ(Positions(repeated), Positions(original));
+  EXPECT_EQ(replay.GetInsertionPoint(), layout.GetInsertionPoint());
+  EXPECT_NE(Positions(truncated.LayoutText(source.substr(0, 6), {})),
+            Positions(original));
+}
+
+TEST(TextLayoutTest, ByteLimitNeverSplitsUtf8Character) {
+  TextLayout layout({.font_size = 20}, Size(80, 40), 100);
+  const auto result = layout.LayoutText("A漢B", {}, {}, 3);
+  EXPECT_EQ(result.consumed_bytes, 1);
+  ASSERT_EQ(result.glyphs.size(), 1);
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(10, 0));
+}
+
+TEST(TextLayoutTest, SiglusPositiveSpacingLeavesFinalCellAvailable) {
+  auto layout = TextLayout::FromCells(
+      {.engine = TextLayout::Engine::Siglus, .font_size = 26, .x_spacing = 3},
+      Size(2, 1));
+  const auto result = layout.LayoutText("漢字語", {});
+  EXPECT_EQ(layout.GetNormalSize(), Size(55, 26));
+  EXPECT_EQ(Positions(result), (std::vector<Point>{Point(0, 0), Point(29, 0)}));
+  EXPECT_EQ(result.consumed_bytes, 6);
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(58, 0));
+}
+
+TEST(TextLayoutTest, SiglusMonospaceFitRemovesActualHalfCellSpacing) {
+  TextLayout layout(
+      {.engine = TextLayout::Engine::Siglus, .font_size = 24, .x_spacing = 2},
+      Size(35, 60), 59);
+  layout.SetInsertionPoint(Point(24, 0));
+  const auto result = layout.LayoutText("A", {});
+  ASSERT_EQ(result.glyphs.size(), 1);
+  EXPECT_EQ(result.glyphs[0].position, Point(0, 24));
+}
+
+TEST(TextLayoutTest, SiglusMonospaceRubyUsesOddAndNegativeSpacingContribution) {
+  for (int spacing : {3, -3}) {
+    SCOPED_TRACE(spacing);
+    TextLayout layout({.engine = TextLayout::Engine::Siglus,
+                       .font_size = 24,
+                       .ruby_font_size = 10,
+                       .x_spacing = spacing},
+                      Size(100, 100), 124);
+    layout.RubyBegin();
+    const auto result = layout.LayoutText("A", {});
+    ASSERT_EQ(result.glyphs.size(), 1);
+    // Native ASCII cell is 12px regardless of the rounded spacing contribution.
+    EXPECT_EQ(layout.RubyEnd("ruby", Size(8, 10)), Rect::REC(2, 0, 8, 10));
+    const int advance = spacing == 3 ? 13 : 10;
+    EXPECT_EQ(layout.GetInsertionPoint(), Point(advance, 0));
   }
-  {  // Any codepoint >= 127 should be treated full-width.
-    const int w = engine.WidthFor(0x3042 /* 'あ' */);
-    EXPECT_EQ(w, 26) << "wrapping width for non-ascii should be full width";
-  }
 }
 
-TEST_F(TextLayoutEngineTest, LineHeight) {
-  // line_height = font_size + y_spacing + ruby_size
-  EXPECT_EQ(engine.GetLineHeight(), ruby_size + font_size + y_spacing);
+TEST(TextLayoutTest, SiglusNegativeSpacingFitsMeasuredAsciiAndCjk) {
+  auto layout = TextLayout::FromCells(
+      {.engine = TextLayout::Engine::Siglus, .font_size = 20, .x_spacing = -3},
+      Size(2, 1));
+  const auto result = layout.LayoutText("漢AA", Proportional(10));
+  EXPECT_EQ(Positions(result),
+            (std::vector<Point>{Point(0, 0), Point(17, 0), Point(24, 0)}));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(31, 0));
 }
 
-TEST_F(TextLayoutEngineTest, IsFull) {
-  engine.insertion_y = 0;
-  EXPECT_FALSE(engine.IsFull());
-
-  engine.insertion_y = win_height - 1;
-  EXPECT_FALSE(engine.IsFull());
-
-  engine.insertion_y = win_height;
-  EXPECT_TRUE(engine.IsFull());
+TEST(TextLayoutTest, BaselineAndRenderOffsetArePrecomputedWithoutMovingCursor) {
+  TextLayout layout({.engine = TextLayout::Engine::Siglus,
+                     .font_size = 26,
+                     .ruby_font_size = 10,
+                     .ruby_spacing = 3},
+                    Size(100, 100), 126);
+  layout.SetGlyphRenderOffset(Point(5, -2));
+  const auto result = layout.LayoutText("漢", {});
+  ASSERT_EQ(result.glyphs.size(), 1);
+  EXPECT_EQ(result.glyphs[0].position, Point(5, 11));
+  EXPECT_EQ(result.glyphs[0].baseline_from_top, 22);
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(26, 0));
 }
 
-TEST_F(TextLayoutEngineTest, HardBreak) {
-  engine.SetIndent(50);
-
-  // Change current insertion to something else.
-  engine.insertion_x = 5;
-  engine.insertion_y = 10;
-
-  engine.HardBreak();
-  EXPECT_EQ(engine.insertion_x, 50) << "should jump back to indent_pixels";
-  EXPECT_EQ(engine.insertion_y, 10 + engine.GetLineHeight());
+TEST(TextLayoutTest, InlineNameAndFollowingQuoteDetermineIndentation) {
+  TextLayout layout({.font_size = 20}, Size(100, 100), 120);
+  const auto name = layout.LayoutName("AB", {});
+  EXPECT_EQ(name.consumed_bytes, 2);
+  EXPECT_EQ(layout.GetIndentation(), 20);
+  const auto quote = layout.LayoutText("「漢", {});
+  EXPECT_EQ(Positions(quote), (std::vector<Point>{Point(20, 0), Point(40, 0)}));
+  EXPECT_EQ(layout.GetIndentation(), 40);
+  layout.HardBreak();
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(40, 20));
 }
 
-TEST_F(TextLayoutEngineTest, LineBreak_KinsokuSpace) {
-  constexpr int space = 0x20;
-  const int cw = engine.WidthFor(space);
-
-  engine.insertion_x = win_width_extended - cw;
-
-  EXPECT_FALSE(engine.MustLineBreakFor(space, /*rest=*/std::string_view{}));
+TEST(TextLayoutTest, QuoteIndentationUsesCurrentNameModeAndSurvivesRejection) {
+  TextLayout layout({.font_size = 20}, Size(40, 20), 60);
+  layout.SetNameMode(TextLayout::NameMode::SeparateWindow);
+  EXPECT_TRUE(layout.LayoutName("AB", {}).glyphs.empty());
+  layout.SetInsertionPoint(Point(40, 0));
+  layout.SetNameMode(TextLayout::NameMode::Disable);
+  EXPECT_TRUE(layout.LayoutText("「", {}).glyphs.empty());
+  EXPECT_EQ(layout.GetIndentation(), 0);
+  layout.SetInsertionPoint(Point(0, 0));
+  ASSERT_EQ(layout.LayoutText("「", {}).glyphs.size(), 1);
+  EXPECT_EQ(layout.GetIndentation(), 20);
 }
 
-TEST_F(TextLayoutEngineTest, LineBreak_ImmediateOverflow) {
-  // Non-kinsoku ASCII 'A'
-  const int A = static_cast<int>('A');
-  const int cw = engine.WidthFor(A);  // 13
-  engine.insertion_x = win_width_normal - cw + 1;
-
-  EXPECT_TRUE(engine.MustLineBreakFor(A, /*rest=*/std::string_view{}));
+TEST(TextLayoutTest, SeparateNameDoesNotIndentFollowingQuote) {
+  TextLayout layout({.font_size = 20}, Size(100, 100), 120);
+  layout.SetNameMode(TextLayout::NameMode::SeparateWindow);
+  EXPECT_TRUE(layout.LayoutName("AB", {}).glyphs.empty());
+  ASSERT_EQ(layout.LayoutText("「", {}).glyphs.size(), 1);
+  EXPECT_EQ(layout.GetIndentation(), 0);
 }
 
-TEST_F(TextLayoutEngineTest, LineBreak_PeekOverKinsoku) {
-  const int A = static_cast<int>('A');
-  const int cw = engine.WidthFor(A);  // 13
-  engine.insertion_x = win_width_normal - cw;
-  // After putting 'A', final_x == normal_width == 104 (fits).
-  // Two more spaces (kinsoku) add 13 + 13 = 26, so 104 + 26 = 130 >
-  // extended(128) → break.
-
-  EXPECT_TRUE(IsKinsoku(kinsoku_char));
-  std::string rest(2, kinsoku_char);
-  EXPECT_TRUE(engine.MustLineBreakFor(A, rest))
-      << "Current char fits normally, but following kinsoku (spaces) push "
-         "beyond extended width -> should line break";
+TEST(TextLayoutTest,
+     RubyUsesMeasuredSpanAndNativeRasterSizeWithoutGlyphOffset) {
+  TextLayout layout({.engine = TextLayout::Engine::Siglus,
+                     .font_size = 20,
+                     .ruby_font_size = 10,
+                     .x_spacing = 2,
+                     .ruby_spacing = 3},
+                    Size(100, 100), 120);
+  layout.SetGlyphRenderOffset(Point(30, 40));
+  layout.RubyBegin();
+  const auto base = layout.LayoutText("AB", Proportional(7));
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(18, 0));
+  EXPECT_EQ(base.glyphs[0].position, Point(30, 53));
+  EXPECT_EQ(layout.RubyEnd("ruby", Size(6, 10)), Rect::REC(5, 0, 6, 10));
+  EXPECT_FALSE(layout.IsRubyActive());
 }
 
-TEST_F(TextLayoutEngineTest, LineBreak_PeekWithinExtended) {
-  const int A = static_cast<int>('A');
-  const int cw = engine.WidthFor(A);  // 13
-  engine.insertion_x = win_width_normal - cw;
-
-  std::string rest(1, kinsoku_char);
-  EXPECT_FALSE(engine.MustLineBreakFor(A, rest))
-      << "Current char fits normally, and a single space keeps us within "
-         "extended width -> no break";
+TEST(TextLayoutTest, EmptyRubyConsumesSpanAndCrossLineRubyIsRejected) {
+  TextLayout layout({.font_size = 20, .ruby_font_size = 10}, Size(100, 100),
+                    120);
+  layout.RubyBegin();
+  EXPECT_FALSE(layout.RubyEnd("", Size()));
+  EXPECT_FALSE(layout.IsRubyActive());
+  layout.RubyBegin();
+  ASSERT_EQ(layout.LayoutText("漢", {}).glyphs.size(), 1);
+  layout.HardBreak();
+  // Repositioning to the original row must not hide a crossed line.
+  layout.SetInsertionPoint(Point(40, 10));
+  EXPECT_FALSE(layout.RubyEnd("ruby", Size(20, 10)));
+  EXPECT_FALSE(layout.IsRubyActive());
 }
 
-TEST_F(TextLayoutEngineTest, RubySpanCoversBaseTextAndIsConsumed) {
-  engine.font_size = 35;
-  engine.ruby_font_size = 15;
-  engine.x_spacing = 0;
-  engine.Reset();
-
-  engine.RubyBegin();
-  ASSERT_TRUE(engine.PlaceCharacter(0x6319, std::nullopt, {}));  // 挙
-  ASSERT_TRUE(engine.PlaceCharacter(0x63aa, std::nullopt, {}));  // 措
-
-  const std::optional<Rect> area = engine.PlaceRubyText("きょそ");
-  ASSERT_TRUE(area);
-  EXPECT_EQ(*area, Rect(Point(0, 0), Point(70, 15)));
-  EXPECT_FALSE(engine.ruby_begin_x.has_value());
+TEST(TextLayoutTest, ResetPreservesOffsetStyleAndNameFollowingState) {
+  TextLayout layout({.font_size = 20, .ruby_font_size = 10}, Size(100, 100),
+                    120);
+  layout.SetGlyphRenderOffset(Point(4, 5));
+  layout.NameWithoutDisplay();
+  layout.SetIndent(50);
+  layout.RubyBegin();
+  layout.Reset();
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(0, 10));
+  EXPECT_EQ(layout.GetIndentation(), 0);
+  EXPECT_FALSE(layout.IsRubyActive());
+  const auto quote = layout.LayoutText("「", {});
+  EXPECT_EQ(quote.glyphs[0].position, Point(4, 15));
+  EXPECT_EQ(layout.GetIndentation(), 20);
 }
 
-TEST_F(TextLayoutEngineTest, EmptyRubyConsumesSpanWithoutPlacement) {
-  engine.ruby_font_size = 10;
-  engine.reserve_ruby_space = false;
-
-  for (int spacing : {0, 2}) {
-    for (bool has_base_text : {false, true}) {
-      SCOPED_TRACE(::testing::Message() << "spacing=" << spacing
-                                        << ", has_base_text=" << has_base_text);
-      engine.x_spacing = spacing;
-      engine.Reset();
-      engine.RubyBegin();
-      if (has_base_text) {
-        ASSERT_TRUE(engine.PlaceCharacter('x', std::nullopt, {}));
-      }
-
-      const Point insertion = engine.GetInsertionPoint();
-      EXPECT_FALSE(engine.PlaceRubyText(""));
-      EXPECT_FALSE(engine.ruby_begin_x.has_value());
-      EXPECT_EQ(engine.GetInsertionPoint(), insertion);
-
-      engine.RubyBegin();
-      ASSERT_TRUE(engine.PlaceCharacter('x', std::nullopt, {}));
-      const std::optional<Rect> area = engine.PlaceRubyText("ruby");
-      ASSERT_TRUE(area);
-      EXPECT_EQ(area->origin(),
-                Point(insertion.x(), insertion.y() - engine.ruby_font_size));
-      EXPECT_GT(area->size().width(), 0);
-      EXPECT_FALSE(engine.ruby_begin_x.has_value());
-    }
-  }
+TEST(TextLayoutTest, NextMessageRestoresDefaultsAndPreservesCursorAndNameMode) {
+  TextLayout defaults({.font_size = 20}, Size(100, 100), 120);
+  TextLayout layout = defaults;
+  layout.SetNameMode(TextLayout::NameMode::Disable);
+  layout.SetFontSize(30);
+  layout.SetInsertionPoint(Point(10, 20));
+  layout.SetGlyphRenderOffset(Point(5, 7));
+  layout.NameWithoutDisplay();
+  layout.SetIndent(10);
+  layout.RubyBegin();
+  layout.NextMessage(defaults);
+  EXPECT_EQ(layout.GetInsertionPoint(), Point(10, 20));
+  EXPECT_EQ(layout.GetNameMode(), TextLayout::NameMode::Disable);
+  EXPECT_EQ(layout.GetFontSize(), 20);
+  EXPECT_EQ(layout.GetGlyphRenderOffset(), Point(0, 0));
+  EXPECT_EQ(layout.GetIndentation(), 0);
+  EXPECT_FALSE(layout.IsRubyActive());
+  ASSERT_EQ(layout.LayoutText("「", {}).glyphs.size(), 1);
+  EXPECT_EQ(layout.GetIndentation(), 0);
 }

@@ -28,7 +28,6 @@
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "vm/future.hpp"
@@ -67,7 +66,7 @@ void BindTextout(SiglusMachine& runtime) {
     if (sys->local_config().multi_msg_mode)
       window->BeginMultiMessage();
     if (!name.empty())
-      text.GetCurrentPage().Name(name, "");
+      text.GetCurrentMwnd()->Submit(msgcmd::Name{name, ""});
   });
   m.def("__builtin_textout",
         [kt = runtime.kidoku_table,
@@ -84,8 +83,9 @@ void BindTextout(SiglusMachine& runtime) {
           if (to->localcfg_.multi_msg_mode) {
             auto window = to->sys_->text().GetCurrentMwnd();
             window->BeginMultiMessage();
-            window->PrepareMessageText(
-                [&text](TextPage& page) { page.Text(text); });
+            window->PrepareMessageText([&text](TextWindow& page) {
+              page.SubmitText(msgcmd::Text{text, {}});
+            });
             return lop::MakeResolvedFuture(*to->vm_.gc_);
           }
 

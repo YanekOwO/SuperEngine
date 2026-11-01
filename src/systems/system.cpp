@@ -126,7 +126,8 @@ System::System(Gameexe& gameexe,
   auto sound_impl = std::make_unique<SDLSoundImpl>();
   sound_system_ = std::make_shared<SoundSystem>(*this, std::move(sound_impl));
 
-  event_system_->AddListener(text_system_);
+  // After input tracking and window controls, before message-wait listeners.
+  event_system_->AddListener(17, text_system_);
 
   event_system_->AddListener(19, rlevent_handler_);
 }

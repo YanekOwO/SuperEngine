@@ -28,7 +28,6 @@
 #include "core/input.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 
@@ -156,9 +155,9 @@ std::shared_ptr<Selection> BuildSelection(
       w.message_state()->clear_ready = false;
     }
     s->sorter = w.sorter();
-    config.font_size = w.font_size_in_pixels();
-    config.x_spacing = w.Layout().x_spacing;
-    config.y_spacing = w.Layout().y_spacing;
+    config.font_size = w.Layout().GetFontSize();
+    config.x_spacing = w.Layout().GetXSpacing();
+    config.y_spacing = w.Layout().GetYSpacing();
     if (!reallive) {
       config.color =
           gexe("MWND", w.window_number(), "MOJI_COLOR").Int().value_or(-1);
@@ -181,8 +180,8 @@ std::shared_ptr<Selection> BuildSelection(
       s->button_action = *config.frame_actions;
     if (reallive) {
       auto current = text.GetCurrentMwnd();
-      s->filter_colour = current->GetColour();
-      s->filter_mode = current->GetIsFilter();
+      s->filter_colour = current->GetTextboxConfig().colour;
+      s->filter_mode = current->GetTextboxConfig().is_filter;
     }
   }
   s->config = config;
@@ -232,14 +231,15 @@ std::shared_ptr<Selection> BuildSelection(
       button_size = s->filter->GetSize();
     s->LayoutButtons(button_size, screen_size);
   } else {
-    const auto& waku = text.mwnd_config().GetWaku(s->window->waku_set());
+    const auto& waku =
+        text.mwnd_config().GetWaku(s->window->GetTextboxConfig().waku_set);
     const bool variable = waku.style != MwndConfig::WakuStyle::Fixed;
-    if (s->window->Layout().insertion_x != 0)
-      text.GetPageOnWindow(s->window).HardBrake();
-    const int start_y = s->window->Layout().insertion_y;
+    if (s->window->Layout().GetInsertionPoint().x() != 0)
+      s->window->Submit(msgcmd::HardBreak{});
+    const int start_y = s->window->Layout().GetInsertionPoint().y();
     const Size size =
         s->LayoutWindow(s->window->GetTextWindowSize(), config.font_size,
-                        s->window->line_height(), start_y, variable);
+                        s->window->Layout().GetLineHeight(), start_y, variable);
     if (variable)
       s->window->SetSelectionSize(size);
     s->window->SetVisible(true);

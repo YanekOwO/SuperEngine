@@ -27,80 +27,123 @@
 
 #include "core/rect.hpp"
 
+#include <cstddef>
+#include <functional>
 #include <optional>
 #include <string_view>
+#include <vector>
 
+// Message-text geometry, independent of fonts, surfaces and reveal timing.
+// Copies include all state needed to continue layout or replay a page.
 class TextLayout {
  public:
-  int font_size = 25, ruby_font_size = 0;
+  enum class Engine { RealLive, Siglus };
+  enum class NameMode { Inline, SeparateWindow, Disable };
 
-  // RealLive reserves a ruby band within every line. Siglus draws ruby above
-  // the character cell without changing the first row or the line advance.
-  bool reserve_ruby_space = true;
-  int ruby_spacing = 0;
+  struct Settings {
+    Engine engine = Engine::RealLive;
+    int font_size = 25;
+    int ruby_font_size = 0;
+    int x_spacing = 0;
+    int y_spacing = 0;
+    int ruby_spacing = 0;
+  };
 
-  int x_spacing = 0, y_spacing = 0;
+  // Supplies bare font advance; layout adds spacing for proportional ASCII.
+  struct FontMetrics {
+    bool monospace = true;
+    std::function<int(int)> advance;
+  };
 
-  // Mutable runtime layout state
-  //  Insertion point (relative to text area origin)
-  int insertion_x = 0, insertion_y = 0;
+  struct GlyphPlacement {
+    std::size_t byte_offset;
+    std::size_t byte_count;
+    Point position;
+    std::optional<int> baseline_from_top;
+  };
 
-  int indent_pixels = 0;
+  struct Result {
+    std::vector<GlyphPlacement> glyphs;
+    std::size_t consumed_bytes = 0;
+  };
 
-  std::optional<int> ruby_begin_x;
+  TextLayout() = default;
+  TextLayout(Settings settings, Size normal_size, int extended_width);
+  static TextLayout FromCells(Settings settings, Size cell_count);
 
- public:
-  TextLayout(int window_height,
-             int window_width_normal,
-             int window_width_extended);
+  // All accepted positions are determined before returning. Source beyond
+  // byte_limit remains available for lookahead, preserving partial replay.
+  // final_lookahead is used only at the last source character.
+  [[nodiscard]] Result LayoutText(
+      std::string_view source,
+      const FontMetrics& metrics,
+      std::string_view final_lookahead = {},
+      std::size_t byte_limit = std::string_view::npos);
+  [[nodiscard]] Result LayoutName(std::string_view source,
+                                  const FontMetrics& metrics,
+                                  std::string_view next = {});
+  void NameWithoutDisplay();
 
-  void Reset();
+  void SetNameMode(NameMode mode) { name_mode_ = mode; }
+  NameMode GetNameMode() const { return name_mode_; }
+  void SetFontSize(int size);
+  int GetFontSize() const { return settings_.font_size; }
+  int GetRubyFontSize() const { return settings_.ruby_font_size; }
+  int GetXSpacing() const { return settings_.x_spacing; }
+  int GetYSpacing() const { return settings_.y_spacing; }
 
-  [[nodiscard]] std::optional<Point> PlaceCharacter(int cur_codepoint,
-                                                    std::optional<int> width,
-                                                    std::string_view peek);
+  void SetInsertionPoint(Point point);
+  inline Point GetInsertionPoint() const { return insertion_; }
+  inline void SetIndent(int indent) { indent_pixels_ = indent; }
+  inline void SetIndentation() { SetIndent(insertion_.x()); }
+  inline void ClearIndentation() { SetIndent(0); }
+  inline int GetIndentation() const { return indent_pixels_; }
+
+  inline void SetGlyphRenderOffset(Point offset) {
+    glyph_render_offset_ = offset;
+  }
+  inline Point GetGlyphRenderOffset() const { return glyph_render_offset_; }
 
   void RubyBegin();
-  void RubyEnd();
-  [[nodiscard]] std::optional<Rect> PlaceRubyText(std::string_view utf8_ruby);
+  // Native-size raster rectangle centered over a same-line base span.
+  // Empty annotations close the span without placement.
+  [[nodiscard]] std::optional<Rect> RubyEnd(std::string_view text,
+                                            Size rendered_size);
+  bool IsRubyActive() const { return ruby_.has_value(); }
 
-  int WidthFor(int codepoint) const;
-
-  // Original MustLineBreak() logic, including:
-  // - Kinsoku/space squeeze allowance up to extended_width
-  // - Lookahead over subsequent kinsoku/roman-wrapping characters
-  bool MustLineBreakFor(int cur_codepoint, std::string_view peek) const;
-
-  // Advance to next line
+  // Clear cursor, indentation and ruby, retaining style and name-following
+  // state as the window-clear operation historically does.
+  void Reset();
   void HardBreak();
+  // Default style/geometry, at the previous cursor and current name mode.
+  void NextMessage(const TextLayout& defaults);
 
-  // Indentation snapshot from current insertion/wrapping X
-  void SetIndent(int indent);
-
-  [[nodiscard]] inline int GetLineHeight() const {
-    return font_size + y_spacing + (reserve_ruby_space ? ruby_font_size : 0);
-  }
-
-  // Extra surface storage above the logical text area for Siglus ruby.
-  [[nodiscard]] inline int GetRubyTopPadding() const {
-    return reserve_ruby_space ? 0 : ruby_font_size + ruby_spacing;
-  }
-
-  [[nodiscard]] inline bool IsFull() const {
-    return insertion_y >= window_height_;
-  }
-
-  inline Size GetNormalSize() const {
-    return Size(window_width_normal_, window_height_);
-  }
-  inline Size GetExtendedSize() const {
-    return Size(window_width_extended_, window_height_);
-  }
-
-  inline Point GetInsertionPoint() const {
-    return Point(insertion_x, insertion_y);
+  int GetLineHeight() const;
+  int GetRubyTopPadding() const;
+  bool IsFull() const { return insertion_.y() >= normal_size_.height(); }
+  Size GetNormalSize() const { return normal_size_; }
+  Size GetExtendedSize() const {
+    return Size(extended_width_, normal_size_.height());
   }
 
  private:
-  int window_height_, window_width_normal_, window_width_extended_;
+  struct RubySpan {
+    Point begin;
+    bool crossed_line = false;
+    bool has_base_text = false;
+  };
+
+  int AdvanceFor(int codepoint, const FontMetrics& metrics) const;
+
+  Settings settings_;
+  Size normal_size_;
+  int extended_width_ = 0;
+  Point insertion_;
+  int indent_pixels_ = 0;
+  Point glyph_render_offset_;
+  NameMode name_mode_ = NameMode::Inline;
+  bool last_token_was_name_ = false;
+  bool splitting_roman_run_ = false;
+  int last_trailing_spacing_ = 0;
+  std::optional<RubySpan> ruby_;
 };

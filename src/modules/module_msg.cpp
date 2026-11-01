@@ -40,7 +40,6 @@
 #include "machine/rloperation/default_value_t.hpp"
 #include "modules/config_operations.hpp"
 #include "systems/system.hpp"
-#include "systems/text_page.hpp"
 #include "systems/text_system.hpp"
 #include "systems/text_window.hpp"
 #include "utilities/string_utilities.hpp"
@@ -49,9 +48,9 @@ namespace {
 
 struct par : public RLOpcode<> {
   void operator()(RLMachine& machine) {
-    TextPage& page = machine.GetSystem().text().GetCurrentPage();
-    page.ResetIndentation();
-    page.HardBrake();
+    TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+    page.Submit(msgcmd::ClearIndentation{});
+    page.Submit(msgcmd::HardBreak{});
   }
 };
 
@@ -80,7 +79,9 @@ struct Msg_TextWindow : public RLOpcode<DefaultIntValue_T<0>> {
 struct FontColour
     : public RLOpcode<DefaultIntValue_T<0>, DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, int textColorNum, int shadowColorNum) {
-    machine.GetSystem().text().GetCurrentPage().FontColour(textColorNum);
+    Gameexe& gexe = machine.GetSystem().gameexe();
+    machine.GetSystem().text().GetCurrentMwnd()->Submit(msgcmd::SetFontColor{
+        RGBColour(gexe("COLOR_TABLE", textColorNum).ToIntVec())});
   }
 };
 
@@ -88,8 +89,9 @@ struct SetFontColour : public RLOpcode<DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, int textColorNum) {
     Gameexe& gexe = machine.GetSystem().gameexe();
     if (gexe("COLOR_TABLE", textColorNum).Exists()) {
-      machine.GetSystem().text().GetCurrentMwnd()->SetDefaultTextColor(
-          gexe("COLOR_TABLE", textColorNum).ToIntVec());
+      machine.GetSystem().text().GetCurrentMwnd()->Submit(
+          msgcmd::SetDefaultTextColor{
+              RGBColour(gexe("COLOR_TABLE", textColorNum).ToIntVec())});
     }
   }
 };
@@ -97,7 +99,8 @@ struct SetFontColour : public RLOpcode<DefaultIntValue_T<0>> {
 struct doruby_display : public RLOpcode<StrConstant_T> {
   void operator()(RLMachine& machine, std::string cpStr) {
     std::string utf8str = cp932toUTF8(cpStr, machine.GetTextEncoding());
-    machine.GetSystem().text().GetCurrentPage().DisplayRubyText(utf8str);
+    machine.GetSystem().text().GetCurrentMwnd()->Submit(
+        msgcmd::RubyText{utf8str});
   }
 };
 
@@ -163,9 +166,10 @@ struct page : public RLOpcode<> {
 
 struct TextPos : public RLOpcode<IntConstant_T, IntConstant_T> {
   void operator()(RLMachine& machine, int x, int y) {
-    TextPage& page = machine.GetSystem().text().GetCurrentPage();
-    page.SetInsertionPointX(x);
-    page.SetInsertionPointY(y);
+    TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+    page.Submit(
+        msgcmd::SetInsertion{Point(x, page.Layout().GetInsertionPoint().y())});
+    page.Submit(msgcmd::SetInsertion{Point(x, y)});
   }
 };
 
@@ -177,31 +181,35 @@ struct GetTextPos : public RLOpcode<IntReference_T, IntReference_T> {
         machine.GetSystem().text().GetCurrentMwnd();
 
     if (textWindow) {
-      *x = textWindow->insertion_point_x();
-      *y = textWindow->insertion_point_y();
+      const Point point = textWindow->Layout().GetInsertionPoint();
+      *x = point.x();
+      *y = point.y();
     }
   }
 };
 
 struct TextOffset : public RLOpcode<IntConstant_T, IntConstant_T> {
   void operator()(RLMachine& machine, int x, int y) {
-    TextPage& page = machine.GetSystem().text().GetCurrentPage();
-    page.Offset_insertion_point_x(x);
-    page.Offset_insertion_point_y(y);
+    TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+    Point point = page.Layout().GetInsertionPoint();
+    point.set_x(point.x() + x);
+    page.Submit(msgcmd::SetInsertion{point});
+    point.set_y(point.y() + y);
+    page.Submit(msgcmd::SetInsertion{point});
   }
 };
 
 struct FaceOpen : public RLOpcode<StrConstant_T, DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, std::string file, int index) {
-    TextPage& page = machine.GetSystem().text().GetCurrentPage();
-    page.FaceOpen(file, index);
+    TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+    page.Submit(msgcmd::FaceOpen{file, index});
   }
 };
 
 struct FaceClose : public RLOpcode<DefaultIntValue_T<0>> {
   void operator()(RLMachine& machine, int index) {
-    TextPage& page = machine.GetSystem().text().GetCurrentPage();
-    page.FaceClose(index);
+    TextWindow& page = *machine.GetSystem().text().GetCurrentMwnd();
+    page.Submit(msgcmd::FaceClose{index});
   }
 };
 
@@ -215,8 +223,15 @@ MsgModule::MsgModule() : RLModule("Msg", 0, 003) {
   AddUnsupportedOpcode(100, 0, "SetFontColour");
   AddOpcode(100, 1, "SetFontColour", new SetFontColour);
   AddOpcode(100, 2, "SetFontColour", new SetFontColour);
-  AddOpcode(101, 0, "FontSize", CallFunction(&TextPage::FontSize));
-  AddOpcode(101, 1, "FontSize", CallFunction(&TextPage::DefaultFontSize));
+  AddOpcode(101, 0, "FontSize",
+            new ConfigIntSetter([](RLMachine& machine, int size) {
+              machine.GetSystem().text().GetCurrentMwnd()->Submit(
+                  msgcmd::SetFontSize{size});
+            }));
+  AddOpcode(101, 1, "FontSize", new ConfigAction([](RLMachine& machine) {
+              auto window = machine.GetSystem().text().GetCurrentMwnd();
+              window->Submit(msgcmd::SetFontSize{window->GetDefaultFontSize()});
+            }));
 
   AddOpcode(102, 0, "TextWindow", new Msg_TextWindow);
   AddOpcode(102, 1, "TextWindow", new Msg_TextWindow);
@@ -250,7 +265,10 @@ MsgModule::MsgModule() : RLModule("Msg", 0, 003) {
   AddOpcode(111, 0, "activeWindow", ReturnIntValue(&TextSystem::active_window));
 
   AddOpcode(120, 0, "__doruby_on", new doruby_display);
-  AddOpcode(120, 1, "__doruby_off", CallFunction(&TextPage::MarkRubyBegin));
+  AddOpcode(120, 1, "__doruby_off", new ConfigAction([](RLMachine& machine) {
+              machine.GetSystem().text().GetCurrentMwnd()->Submit(
+                  msgcmd::RubyBegin{});
+            }));
 
   AddOpcode(151, 0, "msgHide", new msgHide);
   AddOpcode(152, 0, "msgClear", new msgClear);
@@ -258,23 +276,54 @@ MsgModule::MsgModule() : RLModule("Msg", 0, 003) {
   AddOpcode(161, 0, "msgHideAll", new msgHideAll);
   AddOpcode(162, 0, "msgClearAll", new msgClearAll);
   AddUnsupportedOpcode(170, 0, "msgHideAllTemp");
-  AddOpcode(201, 0, "br", CallFunction(&TextPage::HardBrake));
+  AddOpcode(201, 0, "br", new ConfigAction([](RLMachine& machine) {
+              machine.GetSystem().text().GetCurrentMwnd()->Submit(
+                  msgcmd::HardBreak{});
+            }));
   AddOpcode(205, 0, "spause", new spause);
   AddUnsupportedOpcode(206, 0, "spause2");
   AddUnsupportedOpcode(207, 0, "pause_all");
   AddOpcode(210, 0, "page", new page);
 
-  AddOpcode(300, 0, "SetIndent", CallFunction(&TextPage::SetIndentation));
-  AddOpcode(301, 0, "ClearIndent", CallFunction(&TextPage::ResetIndentation));
+  AddOpcode(300, 0, "SetIndent", new ConfigAction([](RLMachine& machine) {
+              machine.GetSystem().text().GetCurrentMwnd()->Submit(
+                  msgcmd::SetIndentation{});
+            }));
+  AddOpcode(301, 0, "ClearIndent", new ConfigAction([](RLMachine& machine) {
+              machine.GetSystem().text().GetCurrentMwnd()->Submit(
+                  msgcmd::ClearIndentation{});
+            }));
 
   AddOpcode(310, 0, "TextPos", new TextPos);
-  AddOpcode(311, 0, "TextPosX", CallFunction(&TextPage::SetInsertionPointX));
-  AddOpcode(312, 0, "TextPosY", CallFunction(&TextPage::SetInsertionPointY));
+  AddOpcode(311, 0, "TextPosX",
+            new ConfigIntSetter([](RLMachine& machine, int x) {
+              auto window = machine.GetSystem().text().GetCurrentMwnd();
+              Point point = window->Layout().GetInsertionPoint();
+              point.set_x(x);
+              window->Submit(msgcmd::SetInsertion{point});
+            }));
+  AddOpcode(312, 0, "TextPosY",
+            new ConfigIntSetter([](RLMachine& machine, int y) {
+              auto window = machine.GetSystem().text().GetCurrentMwnd();
+              Point point = window->Layout().GetInsertionPoint();
+              point.set_y(y);
+              window->Submit(msgcmd::SetInsertion{point});
+            }));
   AddOpcode(320, 0, "TextOffset", new TextOffset);
   AddOpcode(321, 0, "TextOffsetX",
-            CallFunction(&TextPage::Offset_insertion_point_x));
+            new ConfigIntSetter([](RLMachine& machine, int offset) {
+              auto window = machine.GetSystem().text().GetCurrentMwnd();
+              Point point = window->Layout().GetInsertionPoint();
+              point.set_x(point.x() + offset);
+              window->Submit(msgcmd::SetInsertion{point});
+            }));
   AddOpcode(322, 0, "TextOffsetY",
-            CallFunction(&TextPage::Offset_insertion_point_y));
+            new ConfigIntSetter([](RLMachine& machine, int offset) {
+              auto window = machine.GetSystem().text().GetCurrentMwnd();
+              Point point = window->Layout().GetInsertionPoint();
+              point.set_y(point.y() + offset);
+              window->Submit(msgcmd::SetInsertion{point});
+            }));
   AddOpcode(330, 0, "GetTextPos", new GetTextPos);
 
   AddUnsupportedOpcode(340, 0, "WindowLen");

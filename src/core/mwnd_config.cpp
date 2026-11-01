@@ -65,48 +65,6 @@ RGBColour ParseRGB(const std::vector<int>& values,
                    std::clamp(values[2], 0, 255));
 }
 
-TextLayout MakeLayout(int font_size,
-                      int count_x,
-                      int count_y,
-                      int space_x,
-                      int space_y,
-                      int ruby_size) {
-  const int height =
-      std::max(count_y, 0) * std::max(font_size + space_y + ruby_size, 0);
-  const int width = std::max(count_x, 0) * std::max(font_size + space_x, 0);
-  TextLayout layout(height, width, width + std::max(font_size, 0));
-  layout.font_size = font_size;
-  layout.ruby_font_size = ruby_size;
-  layout.x_spacing = space_x;
-  layout.y_spacing = space_y;
-  return layout;
-}
-
-TextLayout MakeSiglusLayout(int font_size,
-                            int count_x,
-                            int count_y,
-                            int space_x,
-                            int space_y,
-                            int ruby_size,
-                            int ruby_spacing) {
-  // Siglus counts spacing only between cells; ruby sits above the text.
-  const auto extent = [font_size](int count, int spacing) {
-    if (count <= 0)
-      return 0;
-    return std::max(count * font_size + (count - 1) * spacing, 0);
-  };
-  const int width = extent(count_x, space_x);
-  TextLayout layout(extent(count_y, space_y), width,
-                    width + std::max(font_size, 0));
-  layout.font_size = font_size;
-  layout.ruby_font_size = ruby_size;
-  layout.reserve_ruby_space = false;
-  layout.ruby_spacing = ruby_spacing;
-  layout.x_spacing = space_x;
-  layout.y_spacing = space_y;
-  return layout;
-}
-
 Size ReadRealliveScreenSize(Gameexe& gexe) {
   if (!gexe.Exists("SCREENSIZE_MOD"))
     return Size(800, 600);
@@ -272,33 +230,38 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
   for (int id : window_ids) {
     auto source = gexe("WINDOW", id);
     Window window;
-    window.screen_size = ReadRealliveScreenSize(gexe);
-    window.window_attr_mod = source("ATTR_MOD").Int().value_or(0);
-    const auto attr = window.window_attr_mod == 0
+    window.textbox.screen_size = ReadRealliveScreenSize(gexe);
+    window.textbox.window_attr_mod = source("ATTR_MOD").Int().value_or(0);
+    const auto attr = window.textbox.window_attr_mod == 0
                           ? result.window_attr_
                           : source("ATTR").IntVec().value_or(
                                 std::vector<int>{255, 255, 255, 255, 0});
-    window.colour = ParseRGBA(attr);
-    window.is_filter = attr.size() >= 5 && attr[4] != 0;
+    window.textbox.colour = ParseRGBA(attr);
+    window.textbox.is_filter = attr.size() >= 5 && attr[4] != 0;
     window.default_font_size = source("MOJI_SIZE").Int().value_or(25);
     const auto cnt =
         source("MOJI_CNT").IntVec().value_or(std::vector<int>{26, 3});
     const auto rep =
         source("MOJI_REP").IntVec().value_or(std::vector<int>{-1, 10});
     const int ruby = source("LUBY_SIZE").Int().value_or(0);
-    window.layout = MakeLayout(window.default_font_size, cnt[0], cnt[1], rep[0],
-                               rep[1], ruby);
+    window.layout =
+        TextLayout::FromCells({.engine = TextLayout::Engine::RealLive,
+                               .font_size = window.default_font_size,
+                               .ruby_font_size = ruby,
+                               .x_spacing = rep[0],
+                               .y_spacing = rep[1]},
+                              Size(cnt[0], cnt[1]));
     const auto padding =
         source("MOJI_POS").IntVec().value_or(std::vector<int>{20, 20, 20, 20});
-    window.upper_box_padding = padding[0];
-    window.lower_box_padding = padding[1];
-    window.left_box_padding = padding[2];
-    window.right_box_padding = padding[3];
+    window.textbox.upper_box_padding = padding[0];
+    window.textbox.lower_box_padding = padding[1];
+    window.textbox.left_box_padding = padding[2];
+    window.textbox.right_box_padding = padding[3];
     const auto position =
         source("POS").IntVec().value_or(std::vector<int>{0, 50, 400});
-    window.origin = position[0];
-    window.x_distance_from_origin = position[1];
-    window.y_distance_from_origin = position[2];
+    window.textbox.origin = position[0];
+    window.textbox.x_distance_from_origin = position[1];
+    window.textbox.y_distance_from_origin = position[2];
     window.default_colour =
         ParseRGB(gexe("COLOR_TABLE", 0)
                      .IntVec()
@@ -306,10 +269,10 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
     window.use_indentation = source("INDENT_USE").Int().value_or(1);
     const auto cursor =
         source("KEYCUR_MOD").IntVec().value_or(std::vector<int>{0, 0, 0});
-    window.keycursor_type = cursor[0];
-    window.keycursor_pos = Point(cursor[1], cursor[2]);
+    window.textbox.keycursor_type = cursor[0];
+    window.textbox.keycursor_pos = Point(cursor[1], cursor[2]);
     window.action_on_pause = source("R_COMMAND_MOD").Int().value_or(0);
-    window.waku_set = source("WAKU_SETNO").Int().value_or(0);
+    window.textbox.waku_set = source("WAKU_SETNO").Int().value_or(0);
     window.name_mod = source("NAME_MOD").Int().value_or(0);
     if (window.name_mod == 1 && source("NAME_WAKU_SETNO").Exists()) {
       window.namebox.has_waku = true;
@@ -346,7 +309,7 @@ MwndConfig MwndConfig::ParseReallive(Gameexe& gexe) {
 
   auto set_ids = FindIndices(gexe, "WAKU.", 1);
   for (const auto& entry : result.windows_)
-    set_ids.insert(entry.second.waku_set);
+    set_ids.insert(entry.second.textbox.waku_set);
   set_ids.insert(0);
   for (int set : set_ids) {
     auto set_source = gexe("WAKU", set);
@@ -536,30 +499,35 @@ MwndConfig MwndConfig::ParseSiglus(Gameexe& gexe) {
     name_waku = SiglusInt(gexe, id, "NAME_WAKU_NO").value_or(name_waku);
 
     Window window;
-    window.screen_size = GetSiglusScreenSize(gexe);
-    window.colour = configured_filter_colour;
+    window.textbox.screen_size = GetSiglusScreenSize(gexe);
+    window.textbox.colour = configured_filter_colour;
     window.default_font_size = font_size;
-    window.layout = MakeSiglusLayout(font_size, count_x, count_y, space_x,
-                                     space_y, ruby_size, ruby_spacing);
+    window.layout = TextLayout::FromCells({.engine = TextLayout::Engine::Siglus,
+                                           .font_size = font_size,
+                                           .ruby_font_size = ruby_size,
+                                           .x_spacing = space_x,
+                                           .y_spacing = space_y,
+                                           .ruby_spacing = ruby_spacing},
+                                          Size(count_x, count_y));
     if (extend_type == 1) {
-      window.upper_box_padding = margin_top;
-      window.lower_box_padding = margin_bottom;
-      window.left_box_padding = margin_left;
-      window.right_box_padding = margin_right;
+      window.textbox.upper_box_padding = margin_top;
+      window.textbox.lower_box_padding = margin_bottom;
+      window.textbox.left_box_padding = margin_left;
+      window.textbox.right_box_padding = margin_right;
     } else {
-      window.upper_box_padding = std::max(message_y, 0);
-      window.left_box_padding = std::max(message_x, 0);
-      window.right_box_padding = std::max(
+      window.textbox.upper_box_padding = std::max(message_y, 0);
+      window.textbox.left_box_padding = std::max(message_x, 0);
+      window.textbox.right_box_padding = std::max(
           window_width - message_x - window.layout.GetNormalSize().width(), 0);
-      window.lower_box_padding = std::max(
+      window.textbox.lower_box_padding = std::max(
           window_height - message_y - window.layout.GetNormalSize().height(),
           0);
     }
-    window.x_distance_from_origin = window_x;
-    window.y_distance_from_origin = window_y;
+    window.textbox.x_distance_from_origin = window_x;
+    window.textbox.y_distance_from_origin = window_y;
     window.default_colour = default_colour;
     window.action_on_pause = novel_mode;
-    window.waku_set = waku_no;
+    window.textbox.waku_set = waku_no;
     window.name_mod = name_mode == 2 ? 2 : (name_mode == 0 && name_waku >= 0);
     if (window.name_mod == 1 && name_waku >= 0) {
       window.namebox.siglus_layout = Namebox::SiglusLayout{

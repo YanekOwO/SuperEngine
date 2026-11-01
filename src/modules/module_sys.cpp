@@ -141,7 +141,7 @@ struct GetWakuAll : public RLStoreOpcode<> {
   int operator()(RLMachine& machine) {
     std::shared_ptr<TextWindow> window =
         machine.GetSystem().text().GetCurrentMwnd();
-    return window->waku_set();
+    return window->GetTextboxConfig().waku_set;
   }
 };
 
