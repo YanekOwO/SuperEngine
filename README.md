@@ -116,7 +116,7 @@ Before you begin, ensure you have the following libraries and utilities installe
 Clone the RLVM repository and initialize its submodules:
 
 ```bash
-git clone https://github.com/Mickey-snow/SuperEngine.git rlvm
+git clone https://github.com/YanekOwO/SuperEngine.git rlvm
 cd rlvm
 git submodule update --init --recursive
 ```
@@ -177,6 +177,12 @@ To run unit tests, additional dependencies are required:
    ```
 
 All tests should pass successfully.
+
+### Editing G00 Assets
+
+The `g00` CLI inspects G00 images, exports editable PNGs with region metadata,
+encodes PNGs and sprite sheets as lossless G00 files, and extracts individual
+sprites. See [tools/README.md](tools/README.md) for build instructions and examples.
 
 
 ## KNOWN ISSUES
