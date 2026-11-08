@@ -85,6 +85,8 @@ class GraphicsObjectOfFile : public GraphicsObjectData {
   virtual Animator* GetAnimator() override;
 
  protected:
+  Rect HitTestSourceRect(const GraphicsObject& go) const override;
+
   virtual std::shared_ptr<const SDLSurface> CurrentSurface(
       const GraphicsObject& go) const override;
   virtual Rect SrcRect(const GraphicsObject& go) const override;

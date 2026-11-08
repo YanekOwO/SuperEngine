@@ -261,4 +261,57 @@ TEST_F(SiglusObjectButtonTest, ActiveGroupConsumesDialogueClickEvent) {
   EXPECT_EQ(group->decided_button_no, 7);
 }
 
+TEST_F(SiglusObjectButtonTest, RectangleHitExcludesStoredCutPadding) {
+  // A cropped button uses its stored rectangle, including transparent pixels
+  // inside that rectangle, without capturing the surrounding logical canvas.
+  auto* raw = SDL_CreateSurface(20, 20, SDL_PIXELFORMAT_ARGB8888);
+  auto cropped = std::make_shared<SDLSurface>(
+      raw, std::vector<GrpRect>{{.rect = Rect::REC(0, 0, 20, 20),
+                                 .pixel_region = PixelRegion{
+                                     Rect::REC(8, 10, 4, 3), Point(-8, -10)}}});
+  cropped->Fill(RGBAColour::Clear());
+  Object().SetDrawer(std::make_unique<GraphicsObjectOfFile>("cut", cropped));
+  Run("a.set_button_alpha_test(0); a.set_scale(2000,2000); a.set_pos(30,40);");
+  input.mouse_pos = Point(48, 62);
+  interaction->Update();
+  ASSERT_EQ(group->hit_button_no, 7);
+  input.mouse_pos = Point(32, 42);
+  interaction->Update();
+  EXPECT_FALSE(group->hit_button_no);
+}
+
+TEST_F(SiglusObjectButtonTest, StoredCutHitTracksPatternAndOrigin) {
+  // The second atlas cut has a nonzero origin; its cropped hit rectangle
+  // follows the same placement and scaling as the rendered pixels.
+  auto* raw = SDL_CreateSurface(40, 40, SDL_PIXELFORMAT_ARGB8888);
+  auto cropped = std::make_shared<SDLSurface>(
+      raw, std::vector<GrpRect>{{.rect = Rect::REC(0, 0, 20, 20)},
+                                {.rect = Rect::REC(20, 20, 20, 20),
+                                 .originX = 2,
+                                 .originY = 3,
+                                 .pixel_region = PixelRegion{
+                                     Rect::REC(28, 30, 4, 3), Point(-6, -7)}}});
+  cropped->Fill(RGBAColour::Clear());
+  Object().SetDrawer(std::make_unique<GraphicsObjectOfFile>("cut", cropped));
+  Run("a.patno = 1; a.set_scale(2000,2000); a.set_pos(30,40);");
+  input.mouse_pos = Point(44, 56);
+  interaction->Update();
+  ASSERT_EQ(group->hit_button_no, 7);
+  input.mouse_pos = Point(32, 42);
+  interaction->Update();
+  EXPECT_FALSE(group->hit_button_no);
+}
+
+TEST_F(SiglusObjectButtonTest, EmptyStoredCutCannotCapturePointer) {
+  // An empty crop inside a nonempty logical canvas has no button hit area.
+  auto* raw = SDL_CreateSurface(20, 20, SDL_PIXELFORMAT_ARGB8888);
+  auto cropped = std::make_shared<SDLSurface>(
+      raw,
+      std::vector<GrpRect>{{.rect = Rect::REC(0, 0, 20, 20),
+                            .pixel_region = PixelRegion{Rect(), Point()}}});
+  Object().SetDrawer(std::make_unique<GraphicsObjectOfFile>("cut", cropped));
+  Press();
+  EXPECT_FALSE(group->hit_button_no);
+}
+
 }  // namespace

@@ -176,6 +176,13 @@ bool GraphicsObjectData::HitTest(const GraphicsObject& go,
 
   RenderGeometry geometry = BuildRenderGeometry(
       go, parent ? std::make_optional(parent->render_state) : std::nullopt);
+  const Rect hit_rect = geometry.src.Intersection(HitTestSourceRect(go));
+  if (hit_rect.is_degenerate())
+    return false;
+  geometry.local_x += hit_rect.x() - geometry.src.x();
+  geometry.local_y += hit_rect.y() - geometry.src.y();
+  geometry.src = hit_rect;
+  geometry.UpdateDstFromLocal();
   if (auto geo = ApplyClips(geometry, go, parent))
     geometry = *geo;
   else
@@ -215,6 +222,10 @@ bool GraphicsObjectData::HitTest(const GraphicsObject& go,
   source_y = std::clamp(source_y, geometry.src.y(), geometry.src.y2() - 1);
 
   return HitTestAtSource(go, Point(source_x, source_y), true);
+}
+
+Rect GraphicsObjectData::HitTestSourceRect(const GraphicsObject& go) const {
+  return SrcRect(go);
 }
 
 bool GraphicsObjectData::HitTestAtSource(const GraphicsObject& go,

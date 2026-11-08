@@ -122,6 +122,9 @@ class GraphicsObjectData {
       std::optional<RenderState> parent_state) const;
 
  protected:
+  // Stored pixels may occupy only part of an image's logical render canvas.
+  virtual Rect HitTestSourceRect(const GraphicsObject& go) const;
+
   // Tests a point after HitTest() has mapped it into this drawer's source
   // coordinate system. Drawers with custom rendering geometry can override
   // this without duplicating clipping, scaling, and rotation handling.

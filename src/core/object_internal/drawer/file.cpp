@@ -130,6 +130,15 @@ Rect GraphicsObjectOfFile::SrcRect(const GraphicsObject& go) const {
   return GraphicsObjectData::SrcRect(go);
 }
 
+Rect GraphicsObjectOfFile::HitTestSourceRect(const GraphicsObject& go) const {
+  if (!surface_)
+    return {};
+  const int pattern =
+      current_frame_ >= 0 ? current_frame_ : go.Param().GetPattNo();
+  const auto region = surface_->GetPixelRegion(pattern);
+  return region ? region->rect : Rect();
+}
+
 Point GraphicsObjectOfFile::DstOrigin(const GraphicsObject& go) const {
   if (!surface_)
     return {};
