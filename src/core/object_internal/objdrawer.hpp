@@ -84,7 +84,8 @@ class GraphicsObjectData {
   // so rotated and alpha-tested buttons behave like Siglus.
   bool HitTest(const GraphicsObject& go,
                const Point& point,
-               std::optional<ParentObjState> parent = {});
+               std::optional<ParentObjState> parent = {},
+               std::optional<bool> alpha_test = {});
 
   virtual std::unique_ptr<GraphicsObjectData> Clone() const = 0;
 

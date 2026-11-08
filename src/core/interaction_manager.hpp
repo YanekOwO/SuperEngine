@@ -107,6 +107,8 @@ class InteractionManager {
   bool last_decide_down_ = false;
   std::optional<Clock::timepoint_t> last_repeat_;
 
-  void UpdateGroup(Group& group, std::optional<int> hit_button_no);
+  void UpdateGroup(Group& group,
+                   std::optional<int> hit_button_no,
+                   std::optional<bool> captured_push_keep);
   void UpdateLayer(int layer);
 };

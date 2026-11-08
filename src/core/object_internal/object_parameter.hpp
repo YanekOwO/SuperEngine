@@ -136,6 +136,10 @@ struct ButtonProperties {
   int se = -1;
   int group = 0;
   int button_number = 0;
+  // Retain the captured press while the pointer is outside the button.
+  int push_keep = 0;
+  // Button hit sampling is independent of the rendering alpha-test option.
+  int alpha_test = 0;
 
   int state = 0;
 
@@ -167,12 +171,11 @@ struct ButtonProperties {
  private:
   friend class boost::serialization::access;
   void serialize(auto& ar, unsigned int version) {
-    // The override values are stuck here because I'm not sure about
-    // initialization otherwise.
-    ar & is_button & cut_no & action & se & group & button_number & state &
-        using_overides & pattern_override & x_offset_override &
-        y_offset_override & rep_tr_override & rep_bright_override &
-        rep_dark_override & config & call & hit_state & real_state & visible;
+    ar & is_button & cut_no & action & se & group & button_number & push_keep &
+        alpha_test & state & using_overides & pattern_override &
+        x_offset_override & y_offset_override & rep_tr_override &
+        rep_bright_override & rep_dark_override & config & call & hit_state &
+        real_state & visible;
   }
 };
 

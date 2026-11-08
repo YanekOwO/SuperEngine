@@ -37,6 +37,7 @@
 #include <cstddef>
 #include <optional>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -74,12 +75,15 @@ struct CandidateVisitor {
 
   // output, best candidates for each group
   std::vector<std::optional<HitCandidate>> candidates;
+  // button available status for each group
+  std::vector<std::unordered_map<int, bool>> available_buttons;
 
   CandidateVisitor(Point pos, const std::vector<std::shared_ptr<Group>>& grp)
       : mouse_pos(pos),
         groups(grp),
         traversal_order(0),
-        candidates(grp.size()) {}
+        candidates(grp.size()),
+        available_buttons(grp.size()) {}
 
   void Visit(GraphicsObject& object,
              std::optional<ParentObjState> parent,
@@ -100,23 +104,27 @@ struct CandidateVisitor {
     if (has_active_group && object.HasDrawer() && param.IsButton() &&
         param.GetButtonAction() >= 0 &&
         param.GetButtonState() != kButtonSelect &&
-        param.GetButtonState() != kButtonDisable && !param.click_disable &&
-        object.GetDrawer().HitTest(object, mouse_pos, parent)) {
-      const auto sorter =
-          owner_sorter.value_or(std::make_pair(param.z_order, param.z_layer));
-      HitCandidate candidate{.owner_order = sorter.first,
-                             .owner_layer = sorter.second,
-                             .display_order = display_order,
-                             .z_order = param.z_order,
-                             .z_layer = param.z_layer,
-                             .z_depth = param.z_depth,
-                             .object_id = object_id,
-                             .traversal_order = current_traversal_order,
-                             .button_no = param.GetButtonNumber()};
-      std::optional<HitCandidate>& best =
-          candidates[static_cast<std::size_t>(group_no)];
-      if (!best || *best < candidate)
-        best = candidate;
+        param.GetButtonState() != kButtonDisable && !param.click_disable) {
+      available_buttons[group_no][param.GetButtonNumber()] =
+          param.button.push_keep != 0;
+      if (object.GetDrawer().HitTest(object, mouse_pos, parent,
+                                     param.button.alpha_test != 0)) {
+        const auto sorter =
+            owner_sorter.value_or(std::make_pair(param.z_order, param.z_layer));
+        HitCandidate candidate{.owner_order = sorter.first,
+                               .owner_layer = sorter.second,
+                               .display_order = display_order,
+                               .z_order = param.z_order,
+                               .z_layer = param.z_layer,
+                               .z_depth = param.z_depth,
+                               .object_id = object_id,
+                               .traversal_order = current_traversal_order,
+                               .button_no = param.GetButtonNumber()};
+        std::optional<HitCandidate>& best =
+            candidates[static_cast<std::size_t>(group_no)];
+        if (!best || *best < candidate)
+          best = candidate;
+      }
     }
 
     if (!object.HasChildren())
@@ -242,7 +250,8 @@ void InteractionManager::Update() {
 }
 
 void InteractionManager::UpdateGroup(Group& group,
-                                     std::optional<int> hit_button_no) {
+                                     std::optional<int> hit_button_no,
+                                     std::optional<bool> captured_push_keep) {
   if (group.status == Group::Status::Disabled)
     return;
 
@@ -253,14 +262,15 @@ void InteractionManager::UpdateGroup(Group& group,
     decide = {};
     group.pressed_button_no.reset();
   }
+  if (!captured_push_keep)
+    group.pressed_button_no.reset();
   if (decide.on_down)
     group.pressed_button_no = group.hit_button_no;
 
   if (!decide.down && (decide.on_up || decide.down_up)) {
-    const std::optional<int> pressed =
-        group.pressed_button_no ? group.pressed_button_no : group.hit_button_no;
-    const bool should_decide =
-        pressed && group.hit_button_no && *pressed == *group.hit_button_no;
+    const std::optional<int> pressed = group.pressed_button_no;
+    const bool should_decide = pressed && (captured_push_keep.value_or(false) ||
+                                           group.hit_button_no == pressed);
     group.pressed_button_no.reset();
     if (should_decide) {
       group.status = Group::Status::Disabled;
@@ -273,8 +283,9 @@ void InteractionManager::UpdateGroup(Group& group,
     }
   }
 
-  if (decide.down && group.pressed_button_no && group.hit_button_no &&
-      *group.pressed_button_no == *group.hit_button_no) {
+  if (decide.down && group.pressed_button_no &&
+      (captured_push_keep.value_or(false) ||
+       group.pressed_button_no == group.hit_button_no)) {
     group.pushed_button_no = group.pressed_button_no;
   } else {
     group.pushed_button_no.reset();
@@ -333,7 +344,16 @@ void InteractionManager::UpdateLayer(int layer) {
     std::optional<int> hit_button_no;
     if (candidates[i])
       hit_button_no = candidates[i]->button_no;
-    UpdateGroup(*groups[i], hit_button_no);
+    const std::optional<int> pressed = groups[i]->pressed_button_no
+                                           ? groups[i]->pressed_button_no
+                                           : hit_button_no;
+    std::optional<bool> push_keep;
+    if (pressed.has_value()) {
+      if (auto it = visitor.available_buttons[i].find(*pressed);
+          it != visitor.available_buttons[i].end())
+        push_keep = it->second;
+    }
+    UpdateGroup(*groups[i], hit_button_no, push_keep);
   }
 
   for (auto& object : objects)
@@ -459,6 +479,9 @@ void InteractionManager::ApplyMwndButton(const MwndButton& button,
   if (foreground && button.visible && hovered_.lock() == object)
     hit = captured_ && captured_->object.lock() == object ? ButtonState::Push
                                                           : ButtonState::Hit;
+  if (foreground && button.visible && captured_enabled_ && captured_ &&
+      captured_->object.lock() == object && param.button.push_keep)
+    hit = ButtonState::Push;
   object->Param().button.hit_state = hit;
   ButtonState state = ButtonState::Normal;
   if (!button.presentation.enabled || param.GetButtonState() == kButtonDisable)
@@ -528,7 +551,8 @@ InteractionManager::RefreshMwndButtons() {
     if (param.IsButton() && action >= 0 &&
         static_cast<std::size_t>(action) < button_actions_.GetCount() &&
         !param.click_disable && object->HasDrawer() &&
-        object->GetDrawer().HitTest(*object, input_.mouse_pos, button.parent) &&
+        object->GetDrawer().HitTest(*object, input_.mouse_pos, button.parent,
+                                    param.button.alpha_test != 0) &&
         (!hit || hit->sorter < button.sorter))
       hit = button;
   }
@@ -586,9 +610,12 @@ bool InteractionManager::HandleMwndButtonEvent(const Event& event) {
     captured_.reset();
     swallow_decide_ = false;
     last_repeat_.reset();
-    if (captured && captured_enabled_ && hit &&
-        captured->object.lock() == hit->object.lock())
-      EmitMwndButton(*captured, MwndButtonEvent::Decide);
+    if (captured && captured_enabled_) {
+      const auto object = captured->object.lock();
+      if (object && (object->Param().button.push_keep ||
+                     (hit && object == hit->object.lock())))
+        EmitMwndButton(*captured, MwndButtonEvent::Decide);
+    }
     captured_enabled_ = false;
   }
   consumed_decide_ = consumed_decide_ || handled;

@@ -169,7 +169,8 @@ Rect GraphicsObjectData::DstRect(const GraphicsObject& go,
 
 bool GraphicsObjectData::HitTest(const GraphicsObject& go,
                                  const Point& point,
-                                 std::optional<ParentObjState> parent) {
+                                 std::optional<ParentObjState> parent,
+                                 std::optional<bool> alpha_test) {
   if (!HitTestAtSource(go, Point(), false))
     return false;
 
@@ -194,7 +195,7 @@ bool GraphicsObjectData::HitTest(const GraphicsObject& go,
       hit_y < geometry.dst.y() || hit_y >= geometry.dst.y2())
     return false;
 
-  if (!go.Param().alpha_test)
+  if (!alpha_test.value_or(go.Param().alpha_test != 0))
     return true;
 
   if (geometry.dst.width() == 0 || geometry.dst.height() == 0)

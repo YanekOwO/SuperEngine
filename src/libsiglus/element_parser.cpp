@@ -3601,13 +3601,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_button_pushkeep"));
             continue;
           case 119:
-            append_node(Type::Int, Member("get_button_pushkeep"));
+            append_callable("get_button_pushkeep", Type::Int);
             continue;
           case 175:
             append_node(Type::Callable, Member("set_button_alpha_test"));
             continue;
           case 176:
-            append_node(Type::Int, Member("get_button_alpha_test"));
+            append_callable("get_button_alpha_test", Type::Int);
             continue;
           case 95:
             append_callable("set_button_state_normal", Type::None);

@@ -1440,6 +1440,18 @@ void BindObject(SiglusMachine& runtime) {
         h->object->Param().SetButtonProperty(button);
       },
       sb::vararg);
+  object.def("set_button_pushkeep", [](ObjectHandle* h, int value) {
+    h->object->Param().button.push_keep = value;
+  });
+  object.def("get_button_pushkeep", [](ObjectHandle* h) {
+    return h->object->Param().button.push_keep;
+  });
+  object.def("set_button_alpha_test", [](ObjectHandle* h, int value) {
+    h->object->Param().button.alpha_test = value;
+  });
+  object.def("get_button_alpha_test", [](ObjectHandle* h) {
+    return h->object->Param().button.alpha_test;
+  });
   object.def("set_button_state_normal", [](ObjectHandle* h) {
     h->object->Param().SetButtonState(kBtnNormal);
   });
