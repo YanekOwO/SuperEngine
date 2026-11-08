@@ -23,10 +23,19 @@
 
 #pragma once
 
+#include "core/memory_internal/facade.hpp"
 #include "core/memory_internal/memory.hpp"
 
 #include <string>
 #include <vector>
+
+namespace serilang {
+struct Fiber;
+}
+namespace libsiglus {
+using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
+using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
+}  // namespace libsiglus
 
 namespace libsiglus::binding {
 
@@ -35,5 +44,14 @@ namespace libsiglus::binding {
 MemoryHandle MakeCallMemory(Memory& memory,
                             const std::vector<int>& integers = {},
                             const std::vector<std::string>& strings = {});
+
+struct IntBitView {
+  using reader_t = int (SiglusIntListFacade::*)(serilang::Fiber&, int);
+  using writer_t = void (SiglusIntListFacade::*)(serilang::Fiber&, int, int);
+
+  std::shared_ptr<SiglusIntListFacade> owner;
+  reader_t reader;
+  writer_t writer;
+};
 
 }  // namespace libsiglus::binding

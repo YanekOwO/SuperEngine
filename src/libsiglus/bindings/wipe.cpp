@@ -362,6 +362,7 @@ void BindWipe(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<SiglusWipe> wipe_cls(m, "Wipe", false);
+  RegisterBindingClass(runtime, wipe_cls);
   auto control = std::make_shared<SiglusWipe::Control>();
   auto wipe = wipe_cls.inst("wipe", runtime, control);
 

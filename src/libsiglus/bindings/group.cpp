@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/group.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/group.hpp"
@@ -41,10 +42,6 @@
 namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
-
-struct GroupHandle {
-  std::shared_ptr<Group> group;
-};
 
 static std::shared_ptr<Group> GetGroup(Stage* stage_state,
                                        int layer,
@@ -73,6 +70,7 @@ void BindGroup(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
   sb::class_<GroupHandle> group(m, "Group");
+  RegisterBindingClass(runtime, group);
   group.def(sb::init([stage_state](int layer, int index) {
               std::shared_ptr<Group> g = GetGroup(stage_state, layer, index);
               return std::make_unique<GroupHandle>(g);
@@ -150,11 +148,8 @@ void BindGroup(SiglusMachine& runtime) {
         h->group->cancel_priority = cancel_priority;
       });
 
-  struct GroupListHandle {
-    int layer;
-    int owner = 0;
-  };
   sb::class_<GroupListHandle> group_array(m, "GroupArray");
+  RegisterBindingClass(runtime, group_array);
   group_array.add_gc_root(group);
   group_array.def(
       sb::init([](int layer, int owner) {

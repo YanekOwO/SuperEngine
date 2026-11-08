@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "srbind/class_registry.hpp"
 #include "vm/value.hpp"
 
 #include <functional>
@@ -38,28 +39,12 @@ class VM;
 class Promise;
 struct Fiber;
 }  // namespace serilang
-namespace srbind {
-template <class T>
-class class_;
-}
-
-template <class... Ts>
-class IntListFacade;
-template <class... Ts>
-class StrListFacade;
-struct ActionReference;
 struct CaptureRequest;
-class Counter;
-struct CounterList;
 class EventListener;
-class GraphicsObject;
 struct SelState;
 class TextWindow;
 
 namespace libsiglus {
-using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
-using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
-
 class FrameRequestManager;
 namespace binding {
 class Loader;
@@ -90,20 +75,8 @@ struct SiglusMachine {
   inline const SiglusRuntime& host() const { return runtime_; }
   std::unique_ptr<serilang::VM> vm;
   std::unique_ptr<binding::Loader> loader;
-  std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;
-  std::shared_ptr<srbind::class_<SiglusStrListFacade>> slist_cls;
-  std::function<serilang::Value(std::shared_ptr<Counter>)> make_counter;
-  std::function<serilang::Value(std::shared_ptr<CounterList>)>
-      make_counter_list;
-  std::function<serilang::Value(std::shared_ptr<GraphicsObject>, int)>
-      make_owned_object;
-  std::function<serilang::Value(ActionReference, int)> make_owned_frame_action;
-  std::function<serilang::Value(std::shared_ptr<GraphicsObject>, int)>
-      make_owned_frame_action_list;
-  std::function<serilang::Value(std::shared_ptr<GraphicsObject>)> make_object;
-  std::function<serilang::Value(ActionReference)> make_frame_action;
-  std::function<serilang::Value(std::shared_ptr<GraphicsObject>)>
-      make_frame_action_list;
+
+  srbind::ClassRegistry class_registry;
 
  private:
   SiglusRuntime& runtime_;

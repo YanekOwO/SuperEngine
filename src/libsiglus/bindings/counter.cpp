@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/counter.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/counter.hpp"
@@ -43,18 +44,11 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-// A VM-facing owning reference to a Counter. Other Siglus elements use
-// this handle to expose the same native Counter type as the global list.
-struct CounterHandle {
-  std::shared_ptr<Counter> counter_;
-  int owner = -1;
-
-  std::shared_ptr<Counter> Get() const {
-    if (!counter_)
-      throw sr::RuntimeError("counter handle is null");
-    return counter_;
-  }
-};
+std::shared_ptr<Counter> CounterHandle::Get() const {
+  if (!counter_)
+    throw sr::RuntimeError("counter handle is null");
+  return counter_;
+}
 
 void BindCounter(SiglusMachine& runtime) {
   std::shared_ptr<CounterList> list = runtime.host().counter_list;
@@ -69,6 +63,7 @@ void BindCounter(SiglusMachine& runtime) {
   // ------------------------------------------------------------------------------
   // Counter
   sb::class_<CounterHandle> counter_class(m, "Counter");
+  RegisterBindingClass(runtime, counter_class);
   counter_class.def("set",
                     [](CounterHandle* h, int value) { h->Get()->Set(value); });
   counter_class.def("get",
@@ -120,18 +115,11 @@ void BindCounter(SiglusMachine& runtime) {
     return h->Get()->IsActive() ? 1 : 0;
   });
 
-  runtime.make_counter =
-      [counter_class](std::shared_ptr<Counter> counter) mutable -> sr::Value {
-    return sr::Value(counter_class.make_inst(std::move(counter)));
-  };
-
   // ------------------------------------------------------------------------------
   // CounterList
-  struct CounterListHandle {
-    std::shared_ptr<CounterList> list;
-    int owner = 0;
-  };
+
   sb::class_<CounterListHandle> list_class(m, "CounterList");
+  RegisterBindingClass(runtime, list_class);
   auto counter_list =
       list_class.inst("counter", list);  // top level |counter| element
   counter_list.def(
@@ -146,13 +134,6 @@ void BindCounter(SiglusMachine& runtime) {
   counter_list.def("size",
                    [](CounterListHandle* h) -> int { return h->list->size(); });
 
-  runtime.make_counter_list = [list_class, &runtime](
-                                  std::shared_ptr<CounterList> list) mutable {
-    const int owner =
-        runtime.host().excall && list == runtime.host().excall->counters ? 1
-                                                                         : 0;
-    return sr::Value(list_class.make_inst(std::move(list), owner));
-  };
   runtime.reset_local_memory.emplace_back([list] { list->Reset(); });
 }
 

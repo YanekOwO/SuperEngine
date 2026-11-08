@@ -24,6 +24,8 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/siglus_runtime.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
+#include "libsiglus/bindings/object.hpp"
 
 #include "core/frame_action_manager.hpp"
 #include "core/input.hpp"
@@ -142,12 +144,6 @@ FrameActionManager& SiglusRuntime::GetFrameActions(int owner) {
   return *excall->actions;
 }
 
-void SiglusRuntime::EnterExcall() { ++excall_depth_; }
-void SiglusRuntime::LeaveExcall() {
-  if (excall_depth_)
-    --excall_depth_;
-}
-
 void SiglusRuntime::Activate(SiglusMachine& machine) {
   selection_state = machine.selection_state;
   if (system) {
@@ -215,14 +211,16 @@ void SiglusRuntime::DispatchFrameAction(int owner,
       (reference.owner && types[1] != Type::Object)) {
     throw sr::RuntimeError("frame-action command has incompatible signature");
   }
+  if (!reference.action)
+    throw sr::RuntimeError("frame-action handle is null");
   std::vector<sr::Value> arguments;
-  arguments.emplace_back(owner
-                             ? machine.make_owned_frame_action(reference, owner)
-                             : machine.make_frame_action(reference));
+  arguments.emplace_back(
+      machine.class_registry.MakeInst<binding::FrameActionHandle>(
+          reference, &GetFrameActions(owner)));
   if (reference.owner)
     arguments.emplace_back(
-        owner ? machine.make_owned_object(reference.owner, owner)
-              : machine.make_object(reference.owner));
+        machine.class_registry.MakeInst<binding::ObjectHandle>(reference.owner,
+                                                               owner));
 
   std::size_t int_it = 0, str_it = 0;
   for (const auto type : types.subspan(prefix)) {
@@ -309,6 +307,7 @@ void SiglusRuntime::ApplyExcallRequests() {
     pending_excalls_.pop_front();
     if (request.caller && request.lifetime.expired())
       continue;
+
     auto machine = std::make_unique<SiglusMachine>(*this);
     machine->caller = request.caller;
     machine->caller_lifetime = request.lifetime;
@@ -332,8 +331,10 @@ void SiglusRuntime::ApplyExcallRequests() {
             if (result.has_value())
               (*vm->globals_)["%%entry_result"] = result.value();
           });
+
+      // enter excall
       excalls_.push_back(std::move(machine));
-      EnterExcall();
+      ++excall_depth_;
       Activate(ActiveMachine());
     } catch (const std::exception& e) {
       if (request.completion)
@@ -351,6 +352,7 @@ void SiglusRuntime::CollectCompletedExcalls() {
     resetting_ = false;
     Activate(*gameplay_);
   }
+
   while (!excalls_.empty() && excalls_.back()->entry_completion->HasResult()) {
     auto& machine = *excalls_.back();
     const auto& result = *machine.entry_completion->result;
@@ -371,8 +373,10 @@ void SiglusRuntime::CollectCompletedExcalls() {
     const auto error = !result.has_value() && !completion
                            ? std::optional<std::string>(result.error())
                            : std::nullopt;
+    // leave excall
     excalls_.pop_back();
-    LeaveExcall();
+    if (excall_depth_ > 0)
+      --excall_depth_;
     Activate(ActiveMachine());
     if (error)
       throw sr::UnhandledError(*error);

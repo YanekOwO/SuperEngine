@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/mask.hpp"
 #include "core/interpolation.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
@@ -45,22 +46,6 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-struct MaskHandle {
-  std::shared_ptr<MaskList> list_;
-  int index_;
-
-  Mask& Get() { return list_->At(index_); }
-  const Mask& Get() const { return list_->At(index_); }
-};
-
-struct MaskEventHandle {
-  MaskHandle mask_;
-  Mask::Parameter parameter_;
-  EventSystem* event_;
-
-  inline Mask& Get() { return mask_.Get(); }
-};
-
 void BindMask(SiglusMachine& runtime) {
   std::shared_ptr<MaskList> list = runtime.host().mask_list;
   if (!list)
@@ -75,6 +60,7 @@ void BindMask(SiglusMachine& runtime) {
   // ------------------------------------------------------------------------------
   // MaskEvent
   sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
+  RegisterBindingClass(runtime, event_class);
   for (const bool real_time : {false, true}) {
     auto make_counter = [&runtime, real_time] {
       auto counter = runtime.host().CreateCounter();
@@ -153,6 +139,7 @@ void BindMask(SiglusMachine& runtime) {
   // ------------------------------------------------------------------------------
   // Mask
   sb::class_<MaskHandle> mask_class(m, "Mask");
+  RegisterBindingClass(runtime, mask_class);
   mask_class.def("init", [](MaskHandle* mask) { mask->Get().Reset(); });
   mask_class.def(
       "create",
@@ -180,10 +167,9 @@ void BindMask(SiglusMachine& runtime) {
 
   // ------------------------------------------------------------------------------
   // MaskList
-  struct MaskListHandle {
-    std::shared_ptr<MaskList> list;
-  };
+
   sb::class_<MaskListHandle> list_class(m, "MaskList");
+  RegisterBindingClass(runtime, list_class);
   auto mask_list = list_class.inst("mask", list);  // top level |mask| element
   mask_list.def(
       "__getitem__",

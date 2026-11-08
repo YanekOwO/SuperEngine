@@ -108,18 +108,11 @@ static void PushCallFrame(Fiber& fiber,
   PushBanks(GetFiberMemory(fiber, memory), largs, kargs);
 }
 
-struct IntBitView {
-  using reader_t = int (SiglusIntListFacade::*)(Fiber&, int);
-  using writer_t = void (SiglusIntListFacade::*)(Fiber&, int, int);
-
-  std::shared_ptr<SiglusIntListFacade> owner;
-  reader_t reader;
-  writer_t writer;
-};
-
-void BindIntBitProperties(sb::module_& m,
+void BindIntBitProperties(SiglusMachine& rt,
+                          sb::module_& m,
                           sb::class_<SiglusIntListFacade>& ilist) {
   sb::class_<IntBitView> view(m, "__SiglusIntBitView");
+  RegisterBindingClass(rt, view);
   ilist.add_gc_root(view);
   view.def(
       "__getitem__",
@@ -206,35 +199,33 @@ void BindMemory(SiglusMachine& rt) {
     rt.host().memory = std::make_unique<Memory>();
   Memory& memory = *rt.host().memory;
 
-  auto ilist =
-      std::make_shared<sb::class_<SiglusIntListFacade>>(m, "__SiglusIntList");
-  rt.ilist_cls = ilist;
-  BindIntSequenceMethods(*ilist);
-  BindIntBitProperties(m, *ilist);
-  ilist->def("init", &SiglusIntListFacade::init);
+  sb::class_<SiglusIntListFacade> ilist(m, "__SiglusIntList");
+  RegisterBindingClass(rt, ilist);
+  BindIntSequenceMethods(ilist);
+  BindIntBitProperties(rt, m, ilist);
+  ilist.def("init", &SiglusIntListFacade::init);
 
-  auto slist =
-      std::make_shared<sb::class_<SiglusStrListFacade>>(m, "__SiglusStrList");
-  rt.slist_cls = slist;
-  BindStrSequenceMethods(*slist);
-  slist->def("init", &SiglusStrListFacade::init);
+  sb::class_<SiglusStrListFacade> slist(m, "__SiglusStrList");
+  RegisterBindingClass(rt, slist);
+  BindStrSequenceMethods(slist);
+  slist.def("init", &SiglusStrListFacade::init);
 
   m.def(
       "make_intlist",
-      [cls = ilist](VM& vm, int size) -> Value {
+      [&registry = rt.class_registry](VM& vm, int size) -> Value {
         auto getter = [storage = std::make_shared<std::vector<int>>()](
                           Fiber&) -> std::vector<int>& { return *storage; };
-        return cls->make_inst(std::move(getter), size);
+        return registry.MakeInst<SiglusIntListFacade>(std::move(getter), size);
       },
       sb::arg("size"));
   m.def(
       "make_strlist",
-      [cls = slist](VM& vm, int size) -> Value {
+      [&registry = rt.class_registry](VM& vm, int size) -> Value {
         auto getter = [storage = std::make_shared<std::vector<std::string>>()](
                           Fiber&) -> std::vector<std::string>& {
           return *storage;
         };
-        return cls->make_inst(std::move(getter), size);
+        return registry.MakeInst<SiglusStrListFacade>(std::move(getter), size);
       },
       sb::arg("size"));
 
@@ -244,13 +235,13 @@ void BindMemory(SiglusMachine& rt) {
     auto getter = [&memory, bank](Fiber& fiber) -> std::vector<int>& {
       return GetFiberMemory(fiber, memory).GetIntBankData(bank);
     };
-    ilist->inst(name, std::move(getter), 0);
+    ilist.inst(name, std::move(getter), 0);
   };
   auto bind_str_bank = [&](std::string_view name, StrBank bank) {
     auto getter = [&memory, bank](Fiber& fiber) -> std::vector<std::string>& {
       return GetFiberMemory(fiber, memory).GetStrBankData(bank);
     };
-    slist->inst(name, std::move(getter), 0);
+    slist.inst(name, std::move(getter), 0);
   };
 
   bind_int_bank("A", IntBank::A);

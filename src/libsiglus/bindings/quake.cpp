@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/quake.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/quake.hpp"
@@ -48,11 +49,6 @@
 namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
-
-struct QuakeHandle {
-  std::shared_ptr<QuakeState> quake;
-  int owner = 0;
-};
 
 static int ReadArg(const std::vector<sr::Value>& args,
                    std::size_t index,
@@ -136,6 +132,7 @@ void BindQuake(SiglusMachine& runtime) {
   System* system = runtime.host().system.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<QuakeHandle> quake(m, "Quake");
+  RegisterBindingClass(runtime, quake);
   quake.def(sb::init([screen_quakes, stage_state](int layer, int index) {
               std::shared_ptr<QuakeState> q;
               if (layer == -1) {
@@ -232,11 +229,8 @@ void BindQuake(SiglusMachine& runtime) {
       [](QuakeHandle* h, std::vector<sr::Value>) { return h->quake->Check(); },
       sb::vararg);
 
-  struct QuakeListHandle {
-    int layer;
-    int owner = 0;
-  };
   sb::class_<QuakeListHandle> quake_array(m, "QuakeArray");
+  RegisterBindingClass(runtime, quake_array);
   quake_array.add_gc_root(quake);
   quake_array.def(
       sb::init([](int layer, int owner) {
@@ -256,10 +250,8 @@ void BindQuake(SiglusMachine& runtime) {
       },
       sb::arg("index"));
 
-  struct ScreenQuakeListHandle {
-    std::shared_ptr<QuakeList> quakes;
-  };
   sb::class_<ScreenQuakeListHandle> screen_quake_array(m, "ScreenQuakeArray");
+  RegisterBindingClass(runtime, screen_quake_array);
   screen_quake_array.add_gc_root(quake);
   screen_quake_array.def(sb::init([screen_quakes] {
     return std::make_unique<ScreenQuakeListHandle>(screen_quakes);

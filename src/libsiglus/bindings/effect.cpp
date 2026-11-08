@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/effect.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/effect.hpp"
@@ -41,17 +42,6 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-struct EffectHandle {
-  std::shared_ptr<Effect> effect;
-  int owner = 0;
-};
-
-struct EffectEventHandle {
-  std::shared_ptr<Effect> effect;
-  int property;
-  int owner = 0;
-};
-
 void BindEffect(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   Stage* stage = runtime.host().stage.get();
@@ -60,6 +50,7 @@ void BindEffect(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
   sb::class_<EffectEventHandle> event(m, "EffectEvent", false);
+  RegisterBindingClass(runtime, event);
   for (const bool real_time : {false, true}) {
     auto make_counter = [&runtime, real_time](int owner) {
       auto counter = runtime.host().CreateCounter(owner);
@@ -135,6 +126,7 @@ void BindEffect(SiglusMachine& runtime) {
   event.def("wait_key", wait(true), sb::vararg);
 
   sb::class_<EffectHandle> effect(m, "Effect");
+  RegisterBindingClass(runtime, effect);
   effect.add_gc_root(event);
   effect.def(sb::init([stage](int layer, int index) {
                if (index < 0)
@@ -165,11 +157,8 @@ void BindEffect(SiglusMachine& runtime) {
     }
   }
 
-  struct EffectListHandle {
-    int layer;
-    int owner = 0;
-  };
   sb::class_<EffectListHandle> effect_array(m, "EffectArray");
+  RegisterBindingClass(runtime, effect_array);
   effect_array.add_gc_root(effect);
   effect_array.def(
       sb::init([](int layer, int owner) {
@@ -198,9 +187,9 @@ void BindEffect(SiglusMachine& runtime) {
       },
       sb::arg("size"));
 
-  struct ScreenEffectListHandle {};
   sb::class_<ScreenEffectListHandle> screen_effect_array(m,
                                                          "ScreenEffectArray");
+  RegisterBindingClass(runtime, screen_effect_array);
   screen_effect_array.add_gc_root(effect);
   screen_effect_array.def(
       sb::init([] { return std::make_unique<ScreenEffectListHandle>(); }));

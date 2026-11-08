@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/gexe.hpp"
 #include "core/gameexe.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "srbind/srbind.hpp"
@@ -42,19 +43,33 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 using namespace serilang;
 
-struct GameexeHandle {
-  std::shared_ptr<Gameexe> gexe;
-  void Clear() { *gexe = Gameexe(); }
-  void LoadFrom(std::string path) {
+void BindGexe(SiglusMachine& runtime) {
+  sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  sb::class_<GameexeHandle> gh(m, "gexe");
+  RegisterBindingClass(runtime, gh);
+
+  gh.def(sb::init(
+      [gexe = runtime.host().gameexe]() { return new GameexeHandle(gexe); }));
+
+  gh.def("clear", [](GameexeHandle* h) { *h->gexe = Gameexe(); });
+  gh.def("load_from", [](GameexeHandle* h, std::string path) {
     if (auto result = Gameexe::FromFile(std::filesystem::path(std::move(path))))
-      *gexe = result.value();
+      *h->gexe = result.value();
     else
       throw std::runtime_error(result.error().message);
-  }
-  std::string Get(std::string key) {
-    return Join(",", (*gexe)(key).ToStrVec());
-  }
-  void AddParse(std::string file) {
+  });
+  gh.def("__getitem__", [](GameexeHandle* h, std::string key) {
+    return Join(",", (*h->gexe)(key).ToStrVec());
+  });
+  gh.def("set",
+         [](GameexeHandle* h, std::string line) { h->gexe->parseLine(line); });
+  gh.def("get_range", [](GameexeHandle* h, std::string prefix) {
+    std::string result;
+    for (auto it : h->gexe->Filter(prefix))
+      result += std::format("{}={}\n", it.key(), Join(",", it.ToStrVec()));
+    return result;
+  });
+  gh.def("add_parse", [](GameexeHandle* h, std::string file) {
     std::ifstream ifs(file);
     if (!ifs)
       throw std::runtime_error("Cannot open file: " + file);
@@ -64,33 +79,11 @@ struct GameexeHandle {
       std::string_view line(&*part.begin(), std::ranges::distance(part));
       if (line.empty())
         continue;
-      auto result = gexe->ParseLine(line, -1);
+      auto result = h->gexe->ParseLine(line, -1);
       if (!result.has_value())
         throw std::runtime_error(result.error().GetDebugString());
     }
-  }
-  void Set(std::string line) { gexe->parseLine(line); }
-  std::string GetRange(std::string prefix) {
-    std::string result;
-    for (auto it : gexe->Filter(prefix))
-      result += std::format("{}={}\n", it.key(), Join(",", it.ToStrVec()));
-    return result;
-  }
-};
-
-void BindGexe(SiglusMachine& runtime) {
-  sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
-  sb::class_<GameexeHandle> gh(m, "gexe");
-
-  gh.def(sb::init(
-      [gexe = runtime.host().gameexe]() { return new GameexeHandle(gexe); }));
-
-  gh.def("clear", &GameexeHandle::Clear);
-  gh.def("load_from", &GameexeHandle::LoadFrom);
-  gh.def("__getitem__", &GameexeHandle::Get);
-  gh.def("set", &GameexeHandle::Set);
-  gh.def("get_range", &GameexeHandle::GetRange);
-  gh.def("add_parse", &GameexeHandle::AddParse);
+  });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "gexe", BindGexe)

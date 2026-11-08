@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/input.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "srbind/srbind.hpp"
@@ -34,6 +35,8 @@
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
+
+InputListener::State InputButton::Get() { return input->Get(source); }
 
 void BindInput(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
@@ -77,12 +80,9 @@ void BindInput(SiglusMachine& runtime) {
   });
 
   using Source = ScriptInput::Source;
-  struct InputButton {
-    Source source;
-    std::shared_ptr<ScriptInput> input;
-    InputListener::State Get() { return input->Get(source); }
-  };
+
   sb::class_<InputButton> key(m, "InputButton", false);
+  RegisterBindingClass(runtime, key);
   key.def("on_down", [](InputButton* ref) -> int {
     auto state = ref->Get();
     return state.on_down;

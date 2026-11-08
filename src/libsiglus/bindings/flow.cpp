@@ -97,6 +97,7 @@ void BindFlow(SiglusMachine& rt) {
           throw sr::RuntimeError("EX-call scene expects str or int");
         target.zlabel = zlabel;
         call.target = std::move(target);
+
         call.farcall = true;
         for (const auto& value :
              RequireList(integers, "EX-call L arguments")->items)
@@ -104,6 +105,7 @@ void BindFlow(SiglusMachine& rt) {
         for (const auto& value :
              RequireList(strings, "EX-call K arguments")->items)
           call.strings.push_back(value.Str());
+
         auto* future = rt.vm->gc_->Allocate<sr::Future>();
         future->promise = rt.host().CallExcall(rt, std::move(call));
         return future;

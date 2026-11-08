@@ -630,6 +630,7 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
 
   sb::class_<SiglusBgm> bgm_cls(m, "Bgm", false);
+  RegisterBindingClass(runtime, bgm_cls);
   auto bgm = bgm_cls.inst("bgm", runtime.host().system.get(), bgm_table);
   bgm.def(
       "play",
@@ -759,6 +760,7 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
 
   sb::class_<SiglusPcmch> pcmch(m, "__SiglusPcmch");
+  RegisterBindingClass(runtime, pcmch);
   pcmch.def(sb::init([sys = runtime.host().system.get()](
                          int channel) -> SiglusPcmch* {
               return new SiglusPcmch(sys, channel);

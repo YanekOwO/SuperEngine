@@ -417,17 +417,40 @@ TEST_F(SiglusExcallTest, MenuInputCannotCompleteAnUnderlyingPollingWait) {
 TEST_F(SiglusExcallTest, FreeCancelsPendingExcallPollingWork) {
   // Releasing EX storage cancels its native polling tasks on the next poll.
   Run("excall.alloc();");
-  runtime.EnterExcall();
+  gates["gate"] = std::make_shared<sr::Promise>();
+  ASSERT_TRUE(runtime.OpenExcall(Menu("menu", "await gate;")));
+  DriveScripts();
+  auto& machine = runtime.ActiveMachine();
+  auto time = std::make_unique<MockClock>(Clock::timepoint_t{});
+  auto* menu_clock = time.get();
+  machine.vm->scheduler_ =
+      sr::Scheduler(std::make_unique<sr::RecordingPoller>(), std::move(time));
   auto value = lop::MakePollingWaitFuture(
-      *runtime.GameplayMachine().vm, [] { return false; }, false, nullptr, 5ms,
-      {}, runtime.GameplayMachine().WaitScope(1));
+      *machine.vm, [] { return false; }, false, nullptr, 5ms, {},
+      machine.WaitScope(1));
   auto promise = value.Get<sr::Future*>()->promise;
+  runtime.FreeExcall();
+  menu_clock->AdvanceTime(5ms);
+  machine.vm->RunReadyUntilBlocked();
+  ASSERT_TRUE(promise->HasResult());
+  EXPECT_FALSE(promise->result->has_value());
+  gates["gate"]->Resolve(sr::nil);
+  DriveScripts();
+}
+
+TEST_F(SiglusExcallTest, FreeCancelsPollingOnExcallFrameActionCounter) {
+  // Poll an EX-owned counter from gameplay; freeing EX storage rejects its
+  // wait.
+  Run("excall.alloc(); pending = excall.frame_action.counter.wait(1);");
+  auto promise = runtime.GameplayMachine()
+                     .vm->globals_->at("pending")
+                     .Get<sr::Future*>()
+                     ->promise;
   runtime.FreeExcall();
   clock->AdvanceTime(5ms);
   runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   ASSERT_TRUE(promise->HasResult());
   EXPECT_FALSE(promise->result->has_value());
-  runtime.LeaveExcall();
 }
 
 TEST_F(SiglusExcallTest, MessageWindowReferenceRetainsItsStageOwner) {

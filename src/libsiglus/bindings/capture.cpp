@@ -24,6 +24,7 @@
 #include "libsiglus/bindings/capture.hpp"
 
 #include "core/memory_internal/facade.hpp"
+#include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "log/domain_logger.hpp"

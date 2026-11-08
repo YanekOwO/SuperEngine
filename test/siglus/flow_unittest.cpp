@@ -27,8 +27,10 @@
 #include "core/game_config.hpp"
 #include "core/input.hpp"
 #include "libsiglus/archive.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/memory.hpp"
+#include "libsiglus/bindings/object.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
@@ -1284,57 +1286,35 @@ TEST_F(FrameActionIntegrationTest, MissingFinalEntryResetsAction) {
   EXPECT_EQ(action->GetCounter()->Get(), 0);
 }
 
-TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
-  // Dispatch mixed arguments; the native action handle precedes typed values.
-  SetCommandSignature({Type::FrameAction, Type::Int, Type::String});
-  srbind::module_ bindings(callback->vm->gc_.get(),
-                           callback->vm->globals_.get());
-  bindings.def(
-      "replacement", [this](sr::Value handle, int number, std::string text) {
-        ++calls;
-        const auto* instance = handle.Get_if<sr::NativeInstance>();
-        ASSERT_NE(instance, nullptr);
-        EXPECT_EQ(sr::Value(instance->klass),
-                  callback->vm->builtins_->at("%%siglus_frame_action_class"));
-        EXPECT_EQ(number, 7);
-        EXPECT_EQ(text, "argument");
-        (*callback->vm->globals_)["observed_action"] = handle;
-      });
-  ReplaceEntry();
-  manager->global_action()->call.integers = {7};
-  manager->global_action()->call.strings = {"argument"};
-
-  Dispatch();
-
-  ASSERT_EQ(calls, 1);
-  Execute(*callback->vm, "observed_action.counter.set(47);");
-  EXPECT_EQ(manager->global_action()->counter->Get(), 47);
-}
-
 TEST_F(FrameActionIntegrationTest,
-       DispatchUsesObjectFactoryInstalledAfterBinding) {
-  // Install the owner factory after binding; place its result before arguments.
+       DispatchUsesCallbackRegistryForObjectArguments) {
+  // Dispatch an owned action; its callback-local object precedes typed
+  // arguments.
   SetCommandSignature(
       {Type::FrameAction, Type::Object, Type::Int, Type::String});
   manager->CancelGlobals();
   stage.objects.Resize(kLayerFg, 1);
   auto object = stage.objects.Get(kLayerFg, 0);
-  int converted = 0;
-  callback->make_object = [&](ActionOwner owner) {
-    ++converted;
-    EXPECT_EQ(owner, object);
-    return sr::Value(89);
-  };
   srbind::module_ bindings(callback->vm->gc_.get(),
                            callback->vm->globals_.get());
-  bindings.def("replacement", [this](sr::Value handle, int owner, int number,
-                                     std::string text) {
-    ++calls;
-    EXPECT_NE(handle.Get_if<sr::NativeInstance>(), nullptr);
-    EXPECT_EQ(owner, 89);
-    EXPECT_EQ(number, 7);
-    EXPECT_EQ(text, "argument");
-  });
+  srbind::class_<ObjectHandle> object_class(bindings, "CallbackObject", false);
+  RegisterBindingClass(*callback, object_class);
+  bindings.def(
+      "replacement",
+      [this, object, klass = object_class.native_class()](
+          sr::Value handle, sr::Value owner, int number, std::string text) {
+        ++calls;
+        EXPECT_NE(handle.Get_if<sr::NativeInstance>(), nullptr);
+        auto* instance = owner.Get_if<sr::NativeInstance>();
+        ASSERT_NE(instance, nullptr);
+        EXPECT_EQ(instance->klass, klass);
+        auto* native = instance->GetForeign<ObjectHandle>();
+        ASSERT_NE(native, nullptr);
+        EXPECT_EQ(native->object, object);
+        EXPECT_EQ(native->owner, 0);
+        EXPECT_EQ(number, 7);
+        EXPECT_EQ(text, "argument");
+      });
   ReplaceEntry();
   manager->Start({object->GetFrameAction(), object}, -1, false,
                  ScriptCall{.target = target,
@@ -1344,7 +1324,6 @@ TEST_F(FrameActionIntegrationTest,
   Dispatch();
 
   EXPECT_EQ(calls, 1);
-  EXPECT_EQ(converted, 1);
 }
 
 TEST_F(FrameActionIntegrationTest, DispatchReconstructsInterleavedArguments) {
@@ -1486,16 +1465,23 @@ TEST_F(FrameActionIntegrationTest,
   EXPECT_FALSE(manager->global_action()->end_action);
 }
 
-TEST_F(FrameActionIntegrationTest, NativeFactoriesSurviveGarbageCollection) {
-  // Remove global wrappers before collection; factories must retain class
-  // roots.
+TEST_F(FrameActionIntegrationTest, RegistryClassesSurviveGarbageCollection) {
+  // Remove global wrappers and collect; registry construction still yields
+  // usable handles.
   callback->vm->globals_->erase("frame_action");
   callback->vm->globals_->erase("frame_action_ch");
+  callback->vm->globals_->erase("counter");
+  callback->vm->globals_->erase("Counter");
+  callback->vm->globals_->erase("CounterList");
+  callback->vm->builtins_->erase("%%siglus_frame_action_class");
+  callback->vm->builtins_->erase("%%siglus_frame_action_list_class");
   callback->vm->CollectGarbage();
-  (*callback->vm->globals_)["retained_action"] = callback->make_frame_action(
-      ActionReference{manager->global_action(), {}});
+  (*callback->vm->globals_)["retained_action"] =
+      callback->class_registry.MakeInst<FrameActionHandle>(
+          ActionReference{manager->global_action(), {}}, manager.get());
   (*callback->vm->globals_)["retained_list"] =
-      callback->make_frame_action_list({});
+      callback->class_registry.MakeInst<FrameActionListHandle>(ActionOwner{},
+                                                               manager.get());
 
   Execute(*callback->vm, R"(
     retained_action.counter.set(23);

@@ -21,6 +21,10 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/excall.hpp"
+#include "libsiglus/bindings/counter.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
+#include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/memory_internal/facade.hpp"
@@ -36,45 +40,40 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
 
-namespace {
-struct ExcallHandle {
-  SiglusMachine* runtime;
-  int owner = 1;
-  void RequireExcall() const {
-    if (owner != 1)
-      throw sr::RuntimeError("EX-call lifecycle requires excall[1]");
-  }
-  void RequireAllocated() const {
-    if (owner == 1)
-      runtime->host().excall->RequireAllocated();
-  }
-};
-struct ScriptHandle {
-  Excall* state;
-};
-}  // namespace
+void ExcallHandle::RequireExcall() const {
+  if (owner != 1)
+    throw sr::RuntimeError("EX-call lifecycle requires excall[1]");
+}
+
+void ExcallHandle::RequireAllocated() const {
+  if (owner == 1)
+    runtime->host().excall->RequireAllocated();
+}
 
 void BindExcall(SiglusMachine& runtime) {
   runtime.host().InitializeExcall();
   auto& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  sb::class_<ScriptHandle> script(m, "ExcallScript", false);
-  script.def("set_font_name", [](ScriptHandle* h, std::string name) {
+  sb::class_<ExcallScriptHandle> script(m, "ExcallScript", false);
+  RegisterBindingClass(runtime, script);
+  script.def("set_font_name", [](ExcallScriptHandle* h, std::string name) {
     h->state->config.font_name = std::move(name);
   });
   script.def("get_font_name",
-             [](ScriptHandle* h) { return h->state->config.font_name; });
+             [](ExcallScriptHandle* h) { return h->state->config.font_name; });
   script.def("set_font_name_default",
-             [](ScriptHandle* h) { h->state->config.font_name.clear(); });
+             [](ExcallScriptHandle* h) { h->state->config.font_name.clear(); });
   const auto font = [&](const char* setter, const char* getter,
                         const char* reset, int LocalConfig::* field) {
-    script.def(setter, [field](ScriptHandle* h, int value) {
+    script.def(setter, [field](ExcallScriptHandle* h, int value) {
       h->state->config.*field = value;
     });
-    script.def(getter,
-               [field](ScriptHandle* h) { return h->state->config.*field; });
-    script.def(reset,
-               [field](ScriptHandle* h) { h->state->config.*field = -1; });
+    script.def(getter, [field](ExcallScriptHandle* h) {
+      return h->state->config.*field;
+    });
+    script.def(reset, [field](ExcallScriptHandle* h) {
+      h->state->config.*field = -1;
+    });
   };
   font("set_font_bold", "get_font_bold", "set_font_bold_default",
        &LocalConfig::font_futoku);
@@ -82,6 +81,7 @@ void BindExcall(SiglusMachine& runtime) {
        &LocalConfig::font_shadow);
 
   sb::class_<ExcallHandle> root(m, "Excall", false);
+  RegisterBindingClass(runtime, root);
   root.add_gc_root(script);
   root.inst("excall", &runtime, 1);
   root.def("__getitem__", [root](ExcallHandle* h, int owner) mutable {
@@ -128,7 +128,8 @@ void BindExcall(SiglusMachine& runtime) {
   };
   // Keep one per-VM flag facade available across EX resource allocations.
   (*vm.builtins_)["%%excall_flags"] =
-      sr::Value(runtime.ilist_cls->make_inst(std::move(flags), 0));
+      sr::Value(runtime.class_registry.MakeInst<SiglusIntListFacade>(
+          std::move(flags), 0));
   root.prop_r("F", [](ExcallHandle* h) -> sr::Value {
     h->RequireAllocated();
     if (h->owner == 0)
@@ -137,18 +138,21 @@ void BindExcall(SiglusMachine& runtime) {
   });
   root.prop_r("counter", [](ExcallHandle* h) -> sr::Value {
     h->RequireAllocated();
-    return h->owner == 0 ? h->runtime->vm->globals_->at("counter")
-                         : h->runtime->make_counter_list(
-                               h->runtime->host().excall->counters);
+    return h->owner == 0
+               ? h->runtime->vm->globals_->at("counter")
+               : sr::Value(
+                     h->runtime->class_registry.MakeInst<CounterListHandle>(
+                         h->runtime->host().excall->counters, 1));
   });
   root.prop_r("frame_action", [](ExcallHandle* h) {
     auto& actions = h->runtime->host().GetFrameActions(h->owner);
-    return h->runtime->make_owned_frame_action({actions.global_action(), {}},
-                                               h->owner);
+    return sr::Value(h->runtime->class_registry.MakeInst<FrameActionHandle>(
+        ActionReference{actions.global_action(), {}}, &actions));
   });
   root.prop_r("frame_action_ch", [](ExcallHandle* h) {
     h->RequireAllocated();
-    return h->runtime->make_owned_frame_action_list({}, h->owner);
+    return sr::Value(h->runtime->class_registry.MakeInst<FrameActionListHandle>(
+        ActionOwner{}, &h->runtime->host().GetFrameActions(h->owner)));
   });
   root.prop_r("script", [script](ExcallHandle* h) mutable {
     h->RequireAllocated();

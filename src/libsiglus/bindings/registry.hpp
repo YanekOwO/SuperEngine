@@ -25,11 +25,21 @@
 
 #include "libsiglus/siglus_runtime.hpp"
 #include "utilities/static_registry.hpp"
+#include "vm/vm.hpp"
 
 #include <functional>
 #include <string>
 
 namespace libsiglus::binding {
+
+// Native wrappers held by the registry are opaque to the VM's collector.
+// Keep their classes alive independently of script-visible global names.
+template <typename T>
+void RegisterBindingClass(SiglusMachine& machine, srbind::class_<T> klass) {
+  (*machine.vm->builtins_)[std::string("%%siglus_class:") + typeid(T).name()] =
+      klass.native_class();
+  machine.class_registry.Register(std::move(klass));
+}
 
 struct SiglusBindingRegistryTag;
 using BindFn = std::function<void(SiglusMachine&)>;

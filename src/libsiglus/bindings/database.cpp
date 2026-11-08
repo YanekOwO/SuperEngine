@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/database.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/database.hpp"
@@ -34,42 +35,41 @@ void BindDatabase(SiglusMachine& runtime) {
   if (!runtime.host().databases)
     throw std::runtime_error("database binding requires initialized databases");
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
-  struct Handle {
-    std::shared_ptr<const Database> table;
-  };
-  srbind::class_<Handle> table(m, "Database");
-  table.def("get_num", [](const Handle* h, int item, int column) {
+
+  srbind::class_<DatabaseHandle> table(m, "Database");
+  RegisterBindingClass(runtime, table);
+  table.def("get_num", [](const DatabaseHandle* h, int item, int column) {
     return h->table->GetNum(item, column);
   });
-  table.def("get_str", [](const Handle* h, int item, int column) {
+  table.def("get_str", [](const DatabaseHandle* h, int item, int column) {
     return h->table->GetStr(item, column);
   });
-  table.def("check_item", [](const Handle* h, int item) {
+  table.def("check_item", [](const DatabaseHandle* h, int item) {
     return h->table->CheckItem(item);
   });
-  table.def("check_column", [](const Handle* h, int column) {
+  table.def("check_column", [](const DatabaseHandle* h, int column) {
     return h->table->CheckColumn(column);
   });
-  table.def("find_num", [](const Handle* h, int column, int value) {
+  table.def("find_num", [](const DatabaseHandle* h, int column, int value) {
     return h->table->FindNum(column, value);
   });
-  table.def("find_str", [](const Handle* h, int column, std::string value) {
-    return h->table->FindStr(column, value);
-  });
+  table.def("find_str",
+            [](const DatabaseHandle* h, int column, std::string value) {
+              return h->table->FindStr(column, value);
+            });
   table.def("find_str_real",
-            [](const Handle* h, int column, std::string value) {
+            [](const DatabaseHandle* h, int column, std::string value) {
               return h->table->FindStrReal(column, value);
             });
 
-  struct ListHandle {
-    std::shared_ptr<const DatabaseList> list;
-  };
-  srbind::class_<ListHandle> list_class(m, "DatabaseList");
+  srbind::class_<DatabaseListHandle> list_class(m, "DatabaseList");
+  RegisterBindingClass(runtime, list_class);
   auto list = list_class.inst("database", runtime.host().databases);
-  list.def("size", [](const ListHandle* h) { return h->list->size(); });
-  list.def("__getitem__", [table](const ListHandle* h, int index) mutable {
-    return serilang::Value(table.make_inst(h->list->At(index)));
-  });
+  list.def("size", [](const DatabaseListHandle* h) { return h->list->size(); });
+  list.def("__getitem__",
+           [table](const DatabaseListHandle* h, int index) mutable {
+             return serilang::Value(table.make_inst(h->list->At(index)));
+           });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "1_database", BindDatabase)

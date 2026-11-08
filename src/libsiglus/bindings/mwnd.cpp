@@ -22,11 +22,13 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/mwnd.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/game_config.hpp"
 #include "core/object.hpp"
 #include "core/rect.hpp"
+#include "libsiglus/bindings/object.hpp"
 #include "libsiglus/bindings/selection.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
@@ -58,47 +60,6 @@ namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
 
-struct MwndObjectList {
-  enum class Kind { Object, Button, Face };
-
-  std::shared_ptr<TextWindow> window;
-  std::function<sr::Value(std::shared_ptr<GraphicsObject>)> make_object;
-  Kind kind = Kind::Object;
-
-  std::string Name() const {
-    if (kind == Kind::Face)
-      return "mwnd.face";
-    return kind == Kind::Button ? "mwnd.button" : "mwnd.object";
-  }
-
-  TextWaku& Resolve() const {
-    if (!window || !window->GetTextboxWaku())
-      throw sr::RuntimeError(Name() + " requires a message-window waku");
-    return *window->GetTextboxWaku();
-  }
-
-  sr::Value Get(int index) const {
-    auto& waku = Resolve();
-    if (index < 0 || static_cast<std::size_t>(index) >= Size())
-      throw sr::RuntimeError(Name() +
-                             " index out of range: " + std::to_string(index));
-    if (!make_object)
-      throw sr::RuntimeError(Name() + " requires the Object binding");
-    if (kind == Kind::Face)
-      return make_object(waku.TouchFace(index));
-    return make_object(kind == Kind::Button ? waku.TouchButton(index)
-                                            : waku.TouchObject(index));
-  }
-
-  std::size_t Size() const {
-    auto& waku = Resolve();
-    if (kind == Kind::Face)
-      return waku.faces_.size();
-    return kind == Kind::Button ? waku.button_objects_.size()
-                                : waku.objects_.size();
-  }
-};
-
 struct KoeCallParams {
   int koe = 0;
   int character = -1;
@@ -126,15 +87,38 @@ struct KoeCallParams {
   }
 };
 
-struct MwndHandle {
-  std::shared_ptr<TextWindow> mwnd;
-  int owner = 0;
-};
+std::string MwndObjectList::Name() const {
+  if (kind == Kind::Face)
+    return "mwnd.face";
+  return kind == Kind::Button ? "mwnd.button" : "mwnd.object";
+}
 
-struct MwndArrayHandle {
-  int layer = kLayerFg;
-  int owner = 0;
-};
+TextWaku& MwndObjectList::Resolve() const {
+  if (!window || !window->GetTextboxWaku())
+    throw serilang::RuntimeError(Name() + " requires a message-window waku");
+  return *window->GetTextboxWaku();
+}
+
+serilang::Value MwndObjectList::Get(int index) const {
+  auto& waku = Resolve();
+  if (index < 0 || static_cast<std::size_t>(index) >= Size())
+    throw serilang::RuntimeError(
+        Name() + " index out of range: " + std::to_string(index));
+  if (!make_object)
+    throw serilang::RuntimeError(Name() + " requires the Object binding");
+  if (kind == Kind::Face)
+    return make_object(waku.TouchFace(index));
+  return make_object(kind == Kind::Button ? waku.TouchButton(index)
+                                          : waku.TouchObject(index));
+}
+
+std::size_t MwndObjectList::Size() const {
+  auto& waku = Resolve();
+  if (kind == Kind::Face)
+    return waku.faces_.size();
+  return kind == Kind::Button ? waku.button_objects_.size()
+                              : waku.objects_.size();
+}
 
 void BindMwnd(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
@@ -199,6 +183,7 @@ void BindMwnd(SiglusMachine& runtime) {
         [&text = sys->text()]() -> int { return text.active_window(); });
 
   sb::class_<MwndHandle> mwnd(m, "Mwnd");
+  RegisterBindingClass(runtime, mwnd);
   mwnd.def(sb::init([sys](int index) {
              if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
                throw sr::RuntimeError("Invalid message-window number: " +
@@ -247,6 +232,7 @@ void BindMwnd(SiglusMachine& runtime) {
   bind_selection("selmsg_cancel", true, false);
 
   sb::class_<MwndArrayHandle> array(m, "MwndArray");
+  RegisterBindingClass(runtime, array);
   array.def(sb::init([](int layer, int owner) {
               if (layer < 0 || layer > 2 || owner < 0 || owner > 1)
                 throw sr::RuntimeError("Invalid message-window stage");
@@ -316,6 +302,7 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("end_close", [](MwndHandle*) {});
 
   sb::class_<MwndObjectList> object_list(m, "MwndObjectList", false);
+  RegisterBindingClass(runtime, object_list);
   object_list.def("__getitem__", &MwndObjectList::Get, sb::arg("index"));
   object_list.def("size", [](const MwndObjectList* list) {
     return static_cast<int>(list->Size());
@@ -335,8 +322,8 @@ void BindMwnd(SiglusMachine& runtime) {
         if (std::find(layer.begin(), layer.end(), window) != layer.end())
           owner = 1;
     return [&runtime, owner](std::shared_ptr<GraphicsObject> object) {
-      return owner ? runtime.make_owned_object(std::move(object), owner)
-                   : runtime.make_object(std::move(object));
+      return sr::Value(runtime.class_registry.MakeInst<ObjectHandle>(
+          std::move(object), owner));
     };
   };
   // The Object binding is installed after Mwnd. Resolve its factory on access.

@@ -53,6 +53,7 @@ void BindMsgbk(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<MessageBack> msgbk_cls(m, "Msgbk", false);
+  RegisterBindingClass(runtime, msgbk_cls);
   auto msgbk = msgbk_cls.inst("msgbk");
 
   msgbk.def(

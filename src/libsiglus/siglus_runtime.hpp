@@ -68,10 +68,6 @@ class Promise;
 struct Fiber;
 };  // namespace serilang
 
-template <class... Ts>
-class IntListFacade;
-template <class... Ts>
-class StrListFacade;
 struct ActionReference;
 class BgmTable;
 class DatabaseList;
@@ -82,9 +78,6 @@ class MaskList;
 class ScriptInput;
 
 namespace libsiglus {
-using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
-using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
-
 class Archive;
 class SiglusSceneRenderer;
 
@@ -116,8 +109,6 @@ struct SiglusRuntime {
   FrameActionManager& GetFrameActions(int owner = 0);
 
   bool IsExcall() const { return excall_depth_ != 0; }
-  void EnterExcall();
-  void LeaveExcall();
   void FreeExcall(bool finish_actions = true);
   void ResetExcall();
   bool syscom_enabled = true;

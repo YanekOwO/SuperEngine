@@ -22,6 +22,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/properties.hpp"
+#include "libsiglus/bindings/memory.hpp"
 
 #include "core/memory_internal/facade.hpp"
 #include "libsiglus/siglus_runtime.hpp"
@@ -59,18 +60,11 @@ static Values CopyList(Facade& source, sr::Fiber& fiber) {
 void BindProperties(SiglusMachine& machine) {
   auto& vm = *machine.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  auto integers = machine.ilist_cls;
-  auto strings = machine.slist_cls;
-  // Native helper captures are opaque to the GC. Retain their list classes
-  // even if script removes the public class names.
-  (*vm.builtins_)["%%siglus_property_integers"] = integers->native_class();
-  (*vm.builtins_)["%%siglus_property_strings"] = strings->native_class();
-
   PropertyStorage& storage = machine.host().properties;
   m.def(
       "__builtin_load_prop",
-      [&storage, integers, strings](sr::VM& vm, int scene,
-                                    int index) -> sr::Value {
+      [&storage, &registry = machine.class_registry](sr::VM& vm, int scene,
+                                                     int index) -> sr::Value {
         const auto& entry = storage.Get(scene, index);
         return std::visit(
             [&](const auto& value) -> sr::Value {
@@ -83,22 +77,23 @@ void BindProperties(SiglusMachine& machine) {
                 auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
                   return GetList<T>(storage, scene, index);
                 };
-                return integers->make_inst(std::move(getter),
-                                           entry.initial_size,
-                                           ListInitialization::Ready);
+                return registry.MakeInst<SiglusIntListFacade>(
+                    std::move(getter), entry.initial_size,
+                    ListInitialization::Ready);
               } else if constexpr (std::same_as<T, PropertyStorage::Strings>) {
                 auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
                   return GetList<T>(storage, scene, index);
                 };
-                return strings->make_inst(std::move(getter), entry.initial_size,
-                                          ListInitialization::Ready);
+                return registry.MakeInst<SiglusStrListFacade>(
+                    std::move(getter), entry.initial_size,
+                    ListInitialization::Ready);
               } else {
                 return value;
               }
             },
             entry.value);
       });
-  m.def("__builtin_store_prop", [&storage, integers, strings](
+  m.def("__builtin_store_prop", [&storage, &registry = machine.class_registry](
                                     sr::Fiber& fiber, int scene, int index,
                                     sr::Value value) {
     auto& destination = storage.Get(scene, index).value;
@@ -114,12 +109,14 @@ void BindProperties(SiglusMachine& machine) {
       destination = std::monostate{};
     else if (const auto* native = value.Get_if<sr::NativeInstance>();
              native && native->foreign &&
-             native->klass == integers->native_class())
+             native->klass ==
+                 registry.GetClass<SiglusIntListFacade>().native_class())
       destination = CopyList<PropertyStorage::Integers>(
           *native->GetForeign<SiglusIntListFacade>(), fiber);
     else if (const auto* native = value.Get_if<sr::NativeInstance>();
              native && native->foreign &&
-             native->klass == strings->native_class())
+             native->klass ==
+                 registry.GetClass<SiglusStrListFacade>().native_class())
       destination = CopyList<PropertyStorage::Strings>(
           *native->GetForeign<SiglusStrListFacade>(), fiber);
     else

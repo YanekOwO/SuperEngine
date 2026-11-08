@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/g00buf.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/image_resources.hpp"
@@ -42,27 +43,21 @@ void BindG00buf(SiglusMachine& runtime) {
   auto images = runtime.host().images;
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
 
-  struct Handle {
-    std::shared_ptr<ImageResources> images;
-    int index;
-  };
-  srbind::class_<Handle> buffer(m, "G00buf");
-  buffer.def("load", [](Handle* h, std::string filename) {
+  srbind::class_<G00bufHandle> buffer(m, "G00buf");
+  RegisterBindingClass(runtime, buffer);
+  buffer.def("load", [](G00bufHandle* h, std::string filename) {
     h->images->PreloadImage(h->index, filename);
   });
   buffer.def("free",
-             [](Handle* h) { h->images->ClearPreloadedImage(h->index); });
+             [](G00bufHandle* h) { h->images->ClearPreloadedImage(h->index); });
 
-  struct ListHandle {
-    std::shared_ptr<ImageResources> images;
-    int count;
-  };
-  srbind::class_<ListHandle> list_class(m, "G00bufList");
+  srbind::class_<G00bufListHandle> list_class(m, "G00bufList");
+  RegisterBindingClass(runtime, list_class);
   auto list = list_class.inst("g00buf", images, count);
-  list.def("size", [](const ListHandle* h) { return h->count; });
+  list.def("size", [](const G00bufListHandle* h) { return h->count; });
   list.def("free_all",
-           [](ListHandle* h) { h->images->ClearPreloadedImages(); });
-  list.def("__getitem__", [buffer](ListHandle* h, int index) mutable {
+           [](G00bufListHandle* h) { h->images->ClearPreloadedImages(); });
+  list.def("__getitem__", [buffer](G00bufListHandle* h, int index) mutable {
     if (index < 0 || index >= h->count)
       throw std::out_of_range(
           std::format("g00buf index {} out of range", index));

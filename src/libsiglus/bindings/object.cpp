@@ -21,6 +21,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/object.hpp"
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/avdec/gan.hpp"
@@ -40,7 +41,9 @@
 #include "core/object_internal/object_mutator.hpp"
 #include "core/object_internal/object_parameter.hpp"
 #include "core/stage.hpp"
+#include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
+#include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
@@ -70,49 +73,6 @@
 namespace libsiglus::binding {
 namespace sb = srbind;
 namespace sr = serilang;
-
-struct ObjectHandle {
-  std::shared_ptr<GraphicsObject> object;
-  int owner = 0;
-};
-
-struct ObjectListHandle {
-  int layer;
-  int owner = 0;
-};
-
-struct ObjectChildListHandle {
-  std::shared_ptr<GraphicsObject> object;
-  int owner = 0;
-};
-
-struct ObjectEventHandle {
-  std::shared_ptr<GraphicsObject> object;
-  std::string name;
-  std::function<int(const ObjectParameter&)> getter;
-  std::function<void(ObjectParameter&, int)> setter;
-  int owner = 0;
-};
-
-struct ObjectRepnoEventHandle {
-  using Getter = std::function<int(const ObjectParameter&, int)>;
-  using Setter = std::function<void(ObjectParameter&, int, int)>;
-
-  std::shared_ptr<GraphicsObject> object;
-  int repno;
-  std::string name;
-  Getter getter;
-  Setter setter;
-  int owner = 0;
-};
-
-struct ObjectRepnoEventListHandle {
-  std::shared_ptr<GraphicsObject> object;
-  std::string name;
-  ObjectRepnoEventHandle::Getter getter;
-  ObjectRepnoEventHandle::Setter setter;
-  int owner = 0;
-};
 
 constexpr int kBtnNormal = static_cast<int>(ButtonState::Normal);
 constexpr int kBtnSelect = static_cast<int>(ButtonState::Select);
@@ -761,8 +721,6 @@ void BindObject(SiglusMachine& runtime) {
   Stage* stage_state = runtime.host().stage.get();
   if (!stage_state)
     throw std::runtime_error("Object requires a stage buffer");
-  if (!runtime.make_frame_action || !runtime.make_frame_action_list)
-    throw std::runtime_error("Object binding requires frame-action bindings");
   System* system = runtime.host().system.get();
   auto backend =
       runtime.host().presenter ? runtime.host().presenter->backend() : nullptr;
@@ -770,9 +728,13 @@ void BindObject(SiglusMachine& runtime) {
   AssetScanner* asset_scanner = runtime.host().asset_scanner.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<ObjectHandle> object(m, "Object");
+  RegisterBindingClass(runtime, object);
   sb::class_<ObjectChildListHandle> child(m, "ObjectChild", false);
+  RegisterBindingClass(runtime, child);
   sb::class_<ObjectEventHandle> event(m, "ObjectEvent", false);
+  RegisterBindingClass(runtime, event);
   sb::class_<ObjectRepnoEventHandle> repno_event(m, "ObjectRepnoEvent", false);
+  RegisterBindingClass(runtime, repno_event);
   sb::class_<ObjectRepnoEventListHandle> repno_event_list(
       m, "ObjectRepnoEventList", false);
   object.def(
@@ -787,6 +749,7 @@ void BindObject(SiglusMachine& runtime) {
       sb::arg("owner") = 0);
 
   sb::class_<ObjectListHandle> object_array(m, "ObjectArray");
+  RegisterBindingClass(runtime, object_array);
   object_array.add_gc_root(object);
   object_array.def(
       sb::init([](int layer, int owner) {
@@ -845,35 +808,26 @@ void BindObject(SiglusMachine& runtime) {
     return sr::Value(child.make_inst(h->object, h->owner));
   });
 
-  // Runtime C++ factories are opaque to the VM's garbage collector.
-  (*vm.builtins_)["%%siglus_object_class"] = object.native_class();
-  runtime.make_owned_object = [object](ActionOwner owner, int context) mutable {
-    return sr::Value(object.make_inst(std::move(owner), context));
-  };
-  runtime.make_object = [&runtime](ActionOwner owner) {
-    return runtime.make_owned_object(std::move(owner), 0);
-  };
-  object.prop_r("frame_action", [make_action = runtime.make_owned_frame_action](
-                                    ObjectHandle* h) {
-    return make_action(ActionReference{h->object->GetFrameAction(), h->object},
-                       h->owner);
+  object.prop_r("frame_action", [&runtime](ObjectHandle* h) {
+    return sr::Value(runtime.class_registry.MakeInst<FrameActionHandle>(
+        ActionReference{h->object->GetFrameAction(), h->object},
+        &runtime.host().GetFrameActions(h->owner)));
   });
-  object.prop_r(
-      "frame_action_ch",
-      [make_list = runtime.make_owned_frame_action_list](ObjectHandle* h) {
-        return make_list(h->object, h->owner);
-      });
+  object.prop_r("frame_action_ch", [&runtime](ObjectHandle* h) {
+    return sr::Value(runtime.class_registry.MakeInst<FrameActionListHandle>(
+        h->object, &runtime.host().GetFrameActions(h->owner)));
+  });
 
   auto ilist_param = [&](const char* name, auto member) {
-    object.add_gc_root(*runtime.ilist_cls);
-    object.prop_r(
-        name, [ilist = *runtime.ilist_cls, member](ObjectHandle* h) mutable {
-          auto getter = [object = h->object,
-                         member](sr::Fiber&) -> std::vector<int>& {
-            return std::invoke(member, object->Param());
-          };
-          return sr::Value(ilist.make_inst(std::move(getter)));
-        });
+    object.prop_r(name, [&registry = runtime.class_registry,
+                         member](ObjectHandle* h) mutable {
+      auto getter = [object = h->object,
+                     member](sr::Fiber&) -> std::vector<int>& {
+        return std::invoke(member, object->Param());
+      };
+      return sr::Value(
+          registry.MakeInst<SiglusIntListFacade>(std::move(getter)));
+    });
   };
   ilist_param("F", &ObjectParameter::F);
   ilist_param("x_rep", &ObjectParameter::adjustment_offsets_x);
