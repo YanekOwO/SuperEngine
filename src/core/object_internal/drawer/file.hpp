@@ -70,6 +70,9 @@ class GraphicsObjectOfFile : public GraphicsObjectData {
   virtual int PixelWidth(const GraphicsObject& rp) override;
   virtual int PixelHeight(const GraphicsObject& rp) override;
 
+  // Original cut dimensions, including padding; absent cuts have zero size.
+  Size PatternSize(int cut_no) const;
+
   RGBAColour GetPixelColor(Point point, int cut_no) const override;
 
   virtual std::unique_ptr<GraphicsObjectData> Clone() const override;

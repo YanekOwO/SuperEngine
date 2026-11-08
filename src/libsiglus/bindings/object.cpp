@@ -1332,6 +1332,8 @@ void BindObject(SiglusMachine& runtime) {
       [](const ObjectHandle* h, int cut_no) {
         if (const auto* drawer = h->object->GetDrawer<NumberDrawer>())
           return drawer->PatternSize(cut_no).width();
+        if (const auto* drawer = h->object->GetDrawer<GraphicsObjectOfFile>())
+          return drawer->PatternSize(cut_no).width();
         return h->object->PixelWidth();
       },
       sb::arg("cut_no") = 0);
@@ -1339,6 +1341,8 @@ void BindObject(SiglusMachine& runtime) {
       "get_size_y",
       [](const ObjectHandle* h, int cut_no) {
         if (const auto* drawer = h->object->GetDrawer<NumberDrawer>())
+          return drawer->PatternSize(cut_no).height();
+        if (const auto* drawer = h->object->GetDrawer<GraphicsObjectOfFile>())
           return drawer->PatternSize(cut_no).height();
         return h->object->PixelHeight();
       },

@@ -80,6 +80,12 @@ int GraphicsObjectOfFile::PixelHeight(const GraphicsObject& rp) {
   return int(param.GetHeightScaleFactor() * height);
 }
 
+Size GraphicsObjectOfFile::PatternSize(int cut_no) const {
+  if (!surface_ || cut_no < 0 || cut_no >= surface_->GetNumPatterns())
+    return {};
+  return surface_->GetPattern(cut_no).rect.size();
+}
+
 std::unique_ptr<GraphicsObjectData> GraphicsObjectOfFile::Clone() const {
   return std::make_unique<GraphicsObjectOfFile>(*this);
 }
