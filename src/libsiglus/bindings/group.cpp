@@ -27,11 +27,16 @@
 #include "vm/serialization.hpp"
 
 #include "core/group.hpp"
+#include "core/input.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/siglus_runtime.hpp"
+#include "long_operations/siglus_group_selection.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
+#include "systems/system.hpp"
 #include "vm/exception.hpp"
+#include "vm/future.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -70,15 +75,26 @@ void BindGroup(SiglusMachine& runtime) {
   if (!stage_state)
     throw std::runtime_error("Group requires a stage");
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
+  auto pending = std::make_shared<lop::PendingCoroutineTasks>();
+  auto consume = [&runtime] {
+    if (runtime.host().input_event_listener)
+      runtime.host().input_event_listener->ClearState();
+    if (runtime.host().script_input)
+      runtime.host().script_input->Clear();
+  };
 
   sb::class_<GroupHandle> group(m, "Group");
   RegisterBindingClass(runtime, group);
-  group.def_serialization([](const GroupHandle& h,
-                             serilang::ObjectWriter& out) { out.Put(h.group); },
-                          [](serilang::ObjectReader& in) {
-                            auto group = in.Get<std::shared_ptr<Group>>();
-                            return std::make_unique<GroupHandle>(group);
-                          });
+  group.def_serialization(
+      [](const GroupHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.group);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto group = in.Get<std::shared_ptr<Group>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<GroupHandle>(group, owner);
+      });
 
   group.def(sb::init([stage_state](int layer, int index) {
               std::shared_ptr<Group> g = GetGroup(stage_state, layer, index);
@@ -87,7 +103,8 @@ void BindGroup(SiglusMachine& runtime) {
             sb::arg("layer") = static_cast<int>(kLayerFg),
             sb::arg("index") = 0);
   group.def("init", [](GroupHandle* h) { h->group->Reset(); });
-  group.def("start", [](GroupHandle* h) {
+  group.def("start", [consume](GroupHandle* h) {
+    consume();
     Group& g = *h->group;
     g.InitSel();
     g.status = Group::Status::Active;
@@ -101,7 +118,8 @@ void BindGroup(SiglusMachine& runtime) {
   });
   group.def(
       "start_cancel",
-      [](GroupHandle* h, std::vector<sr::Value> raw_args) {
+      [consume](GroupHandle* h, std::vector<sr::Value> raw_args) {
+        consume();
         Group& g = *h->group;
         g.InitSel();
         g.status = Group::Status::Active;
@@ -109,25 +127,32 @@ void BindGroup(SiglusMachine& runtime) {
         g.cancel_se = FirstOptionalInt(std::move(raw_args));
       },
       sb::vararg);
+  auto select = [&runtime, pending, consume](GroupHandle* h, sr::VM& vm,
+                                             bool cancel,
+                                             std::vector<sr::Value> raw_args) {
+    consume();
+    Group& g = *h->group;
+    g.InitSel();
+    g.status = Group::Status::Waiting;
+    g.cancel_enabled = cancel;
+    g.cancel_se = FirstOptionalInt(std::move(raw_args));
+    auto wait = std::make_unique<lop::SiglusGroupSelection>(h->group, consume);
+    auto* events = runtime.host().system
+                       ? runtime.host().system->event_ptr().get()
+                       : nullptr;
+    return sr::Value(pending->MakeFuture(vm, std::move(wait), events, {},
+                                         runtime.WaitScope(h->owner)));
+  };
   group.def(
       "sel",
-      [](GroupHandle* h, std::vector<sr::Value> raw_args) -> sr::Value {
-        Group& g = *h->group;
-        g.InitSel();
-        g.status = Group::Status::Waiting;
-        g.cancel_se = FirstOptionalInt(std::move(raw_args));
-        throw sr::RuntimeError("TODO: group.sel not implemented yet");
+      [select](GroupHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+        return select(h, vm, false, std::move(args));
       },
       sb::vararg);
   group.def(
       "sel_cancel",
-      [](GroupHandle* h, std::vector<sr::Value> raw_args) -> sr::Value {
-        Group& g = *h->group;
-        g.InitSel();
-        g.status = Group::Status::Waiting;
-        g.cancel_enabled = true;
-        g.cancel_se = FirstOptionalInt(std::move(raw_args));
-        throw sr::RuntimeError("TODO: group.sel_cancel not implemented yet");
+      [select](GroupHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+        return select(h, vm, true, std::move(args));
       },
       sb::vararg);
   group.def("get_hit_no", [](GroupHandle* h) {
@@ -184,7 +209,7 @@ void BindGroup(SiglusMachine& runtime) {
       [&runtime, group](GroupListHandle* h, int index) mutable {
         std::shared_ptr<Group> g =
             GetGroup(&runtime.host().GetStage(h->owner), h->layer, index);
-        sr::NativeInstance* inst = group.make_inst(g);
+        sr::NativeInstance* inst = group.make_inst(g, h->owner);
         return sr::Value(inst);
       },
       sb::arg("index"));

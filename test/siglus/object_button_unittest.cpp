@@ -193,4 +193,72 @@ TEST_F(SiglusObjectButtonTest, ClearButtonResetsAlphaTest) {
             0);
 }
 
+TEST_F(SiglusObjectButtonTest, TopmostGroupOwnsOverlappingButton) {
+  // Two groups overlap; only the visually topmost button captures the click.
+  runtime.stage->groups[kLayerFg].resize(2);
+  auto other = runtime.stage->groups.Get(kLayerFg, 1);
+  other->status = Group::Status::Active;
+  auto button = std::make_shared<GraphicsObject>(Object().Clone());
+  button->Param().button.group = 1;
+  button->Param().button.button_number = 9;
+  runtime.stage->objects[kLayerFg][1] = std::move(button);
+  Press();
+  Release();
+  EXPECT_FALSE(group->decided_button_no);
+  EXPECT_EQ(other->decided_button_no, 9);
+}
+
+TEST_F(SiglusObjectButtonTest, CancelUsesHighestPriorityOnce) {
+  // One cancel reaches the highest-priority group and plays its sound once.
+  runtime.stage->groups[kLayerFg].resize(2);
+  auto other = runtime.stage->groups.Get(kLayerFg, 1);
+  other->status = Group::Status::Waiting;
+  other->cancel_enabled = group->cancel_enabled = true;
+  other->cancel_priority = 2;
+  other->cancel_se = 8;
+  std::vector<int> sounds;
+  interaction->SetGroupHandlers([&](int se) { sounds.push_back(se); }, {});
+  input.cancel = {.on_up = true, .down_up = true};
+  interaction->Update();
+  interaction->Update();
+  EXPECT_EQ(other->result, Group::Result::Canceled);
+  EXPECT_EQ(group->status, Group::Status::Active);
+  EXPECT_EQ(sounds, std::vector<int>({8}));
+}
+
+TEST_F(SiglusObjectButtonTest, BackgroundGroupDoesNotTakeInput) {
+  // Foreground interaction must leave a background group available after a
+  // click.
+  runtime.stage->groups[kLayerBg].resize(1);
+  auto background = runtime.stage->groups.Get(kLayerBg, 0);
+  background->status = Group::Status::Active;
+  runtime.stage->objects[kLayerBg][0] =
+      std::make_shared<GraphicsObject>(Object().Clone());
+  Press();
+  Release();
+  EXPECT_EQ(group->decided_button_no, 7);
+  EXPECT_FALSE(background->decided_button_no);
+}
+
+TEST_F(SiglusObjectButtonTest, DecisionConsumesInput) {
+  // A completed selection clears the shared input and invokes script-input
+  // consumption before another control can see the release.
+  int consumed = 0;
+  interaction->SetGroupHandlers({}, [&] { ++consumed; });
+  Press();
+  Release();
+  EXPECT_EQ(consumed, 1);
+  EXPECT_FALSE(input.decide.on_up);
+  EXPECT_FALSE(input.decide.down_up);
+}
+
+TEST_F(SiglusObjectButtonTest, ActiveGroupConsumesDialogueClickEvent) {
+  // A group owns click events before lower-priority dialogue waits receive
+  // them, while its live input remains available to the selection update.
+  EXPECT_TRUE(interaction->HandleMwndButtonEvent(MouseDown{MouseButton::LEFT}));
+  Press();
+  Release();
+  EXPECT_EQ(group->decided_button_no, 7);
+}
+
 }  // namespace

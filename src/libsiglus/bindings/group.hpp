@@ -31,6 +31,7 @@ namespace libsiglus::binding {
 
 struct GroupHandle {
   std::shared_ptr<Group> group;
+  int owner = 0;
 };
 
 struct GroupListHandle {

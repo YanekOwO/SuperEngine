@@ -43,6 +43,7 @@ class Promise;
 
 class TextWindow;
 class Selection;
+class Group;
 
 namespace libsiglus {
 struct SiglusMachine;
@@ -84,6 +85,13 @@ struct SelectionWaitOperationState {
   friend class boost::serialization::access;
   void serialize(auto& ar, unsigned int) { ar & selection; }
 };
+struct GroupSelectionOperationState {
+  std::shared_ptr<Group> group;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) { ar & group; }
+};
 struct WipeOperationState {
   int duration = 0;
   InterpolationMode interpolation = InterpolationMode::Linear;
@@ -116,6 +124,7 @@ struct MovieOperationState {
 using NativeOperationState = std::variant<TextoutOperationState,
                                           MessageWaitOperationState,
                                           SelectionWaitOperationState,
+                                          GroupSelectionOperationState,
                                           WipeOperationState,
                                           MovieOperationState>;
 NativeOperationState CaptureNativeOperation(lop::LongOperation& operation,

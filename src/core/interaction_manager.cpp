@@ -249,11 +249,12 @@ void InteractionManager::Update() {
   consumed_decide_ = false;
 }
 
-void InteractionManager::UpdateGroup(Group& group,
+bool InteractionManager::UpdateGroup(Group& group,
                                      std::optional<int> hit_button_no,
-                                     std::optional<bool> captured_push_keep) {
+                                     std::optional<bool> captured_push_keep,
+                                     bool can_cancel) {
   if (group.status == Group::Status::Disabled)
-    return;
+    return false;
 
   group.hit_button_no = hit_button_no;
 
@@ -279,7 +280,7 @@ void InteractionManager::UpdateGroup(Group& group,
       group.result = Group::Result::Decided;
       group.result_button_no = *pressed;
       group.ClearTransientInteraction();
-      return;
+      return true;
     }
   }
 
@@ -292,8 +293,7 @@ void InteractionManager::UpdateGroup(Group& group,
   }
 
   const InputListener::State& cancel = input_.cancel;
-  if (group.cancel_enabled && !cancel.down &&
-      (cancel.on_up || cancel.down_up)) {
+  if (can_cancel && !cancel.down && (cancel.on_up || cancel.down_up)) {
     const int result_button = group.hit_button_no.value_or(-1);
     group.status = Group::Status::Disabled;
     group.cancel_enabled = false;
@@ -301,7 +301,11 @@ void InteractionManager::UpdateGroup(Group& group,
     group.result = Group::Result::Canceled;
     group.result_button_no = result_button;
     group.ClearTransientInteraction();
+    if (group_sound_ && group.cancel_se && *group.cancel_se >= 0)
+      group_sound_(*group.cancel_se);
+    return true;
   }
+  return false;
 }
 
 void InteractionManager::UpdateLayer(int layer) {
@@ -337,23 +341,46 @@ void InteractionManager::UpdateLayer(int layer) {
   }
 
   auto candidates = std::move(visitor.candidates);
-
+  std::optional<std::size_t> hit_group, cancel_group;
   for (std::size_t i = 0; i < groups.size(); ++i) {
-    if (!groups[i])
+    if (!groups[i] || groups[i]->status == Group::Status::Disabled)
       continue;
-    std::optional<int> hit_button_no;
-    if (candidates[i])
-      hit_button_no = candidates[i]->button_no;
-    const std::optional<int> pressed = groups[i]->pressed_button_no
-                                           ? groups[i]->pressed_button_no
-                                           : hit_button_no;
-    std::optional<bool> push_keep;
-    if (pressed.has_value()) {
-      if (auto it = visitor.available_buttons[i].find(*pressed);
-          it != visitor.available_buttons[i].end())
-        push_keep = it->second;
+    if (candidates[i] &&
+        (!hit_group || *candidates[*hit_group] < *candidates[i]))
+      hit_group = i;
+    if (groups[i]->cancel_enabled &&
+        (!cancel_group ||
+         groups[i]->cancel_priority > groups[*cancel_group]->cancel_priority))
+      cancel_group = i;
+  }
+
+  bool consumed = false;
+  if (layer == kLayerFg) {
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+      if (!groups[i])
+        continue;
+      std::optional<int> hit_button_no;
+      if (hit_group == i)
+        hit_button_no = candidates[i]->button_no;
+      const std::optional<int> pressed = groups[i]->pressed_button_no
+                                             ? groups[i]->pressed_button_no
+                                             : hit_button_no;
+      std::optional<bool> push_keep;
+      if (pressed.has_value()) {
+        if (auto it = visitor.available_buttons[i].find(*pressed);
+            it != visitor.available_buttons[i].end())
+          push_keep = it->second;
+      }
+      consumed |= UpdateGroup(*groups[i], hit_button_no, push_keep,
+                              !consumed && cancel_group == i);
+      if (consumed)
+        consumed_decide_ = true;
     }
-    UpdateGroup(*groups[i], hit_button_no, push_keep);
+  }
+  if (consumed) {
+    input_.ClearState();
+    if (group_consume_)
+      group_consume_();
   }
 
   for (auto& object : objects)
@@ -585,8 +612,23 @@ bool InteractionManager::HandleMwndButtonEvent(const Event& event) {
           return false;
       },
       event);
-  if (!decide_event)
-    return false;
+  const bool group_active =
+      std::ranges::any_of(stage_.groups[kLayerFg], [](const auto& group) {
+        return group && group->status != Group::Status::Disabled;
+      });
+  if (!decide_event) {
+    const bool cancel_event = std::visit(
+        [](const auto& item) {
+          using T = std::decay_t<decltype(item)>;
+          if constexpr (std::same_as<T, MouseDown> || std::same_as<T, MouseUp>)
+            return item.button == MouseButton::RIGHT;
+          else if constexpr (std::same_as<T, KeyDown> || std::same_as<T, KeyUp>)
+            return IsCancelKey(item.code);
+          return false;
+        },
+        event);
+    return group_active && cancel_event;
+  }
   auto hit = RefreshMwndButtons();
   const bool down = input_.decide.down;
   const bool edge = down != last_decide_down_;
@@ -620,5 +662,5 @@ bool InteractionManager::HandleMwndButtonEvent(const Event& event) {
   }
   consumed_decide_ = consumed_decide_ || handled;
   RefreshMwndButtons();
-  return handled;
+  return handled || group_active;
 }

@@ -31,6 +31,7 @@
 #include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
+#include "core/group.hpp"
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/kidoku_table.hpp"
@@ -413,6 +414,11 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
     SiglusRuntime& runtime;
     explicit SystemEventListener(SiglusRuntime& rt) : runtime(rt) {}
     void OnEvent(std::shared_ptr<Event> event) override {
+      const bool group_cancel = std::ranges::any_of(
+          runtime.stage->groups[kLayerFg], [](const auto& group) {
+            return group && group->status != Group::Status::Disabled &&
+                   group->cancel_enabled;
+          });
       if (std::visit(
               [&](auto& event) -> bool {
                 using T = std::decay_t<decltype(event)>;
@@ -422,13 +428,13 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
                 }
                 if constexpr (std::same_as<T, MouseDown>) {
                   if (event.button == MouseButton::RIGHT &&
-                      !runtime.IsExcall() && runtime.syscom_enabled &&
-                      !runtime.local_config.ignore_r)
+                      !runtime.IsExcall() && !group_cancel &&
+                      runtime.syscom_enabled && !runtime.local_config.ignore_r)
                     return runtime.OpenExcallScene("CANCEL_SCENE");
                 }
                 if constexpr (std::same_as<T, KeyDown>) {
                   if (event.code == KeyCode::ESCAPE && !runtime.IsExcall() &&
-                      runtime.syscom_enabled)
+                      !group_cancel && runtime.syscom_enabled)
                     return runtime.OpenExcallScene("CANCEL_SCENE");
                 }
                 if constexpr (std::same_as<T, VideoExpose>) {
@@ -478,6 +484,9 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
   rt.excall_interaction_manager = std::make_unique<InteractionManager>(
       rt.excall->stage, *input, ButtonActionTable::ParseSiglus(gexe));
   const auto bind_buttons = [&](InteractionManager& interaction) {
+    interaction.SetGroupHandlers(
+        [sound = &rt.system->sound()](int se) { sound->PlaySe(se); },
+        [&rt] { rt.script_input->Clear(); });
     interaction.SetMwndButtonHandlers(
         [text = &rt.system->text(), button_config](const GraphicsObject& object,
                                                    int slot) {

@@ -24,8 +24,10 @@
 #include "libsiglus/native_operation_serialization.hpp"
 
 #include "core/avdec/ffmpeg.hpp"
+#include "core/input.hpp"
 #include "libsiglus/execution_serialization.hpp"
 #include "libsiglus/siglus_runtime.hpp"
+#include "long_operations/siglus_group_selection.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
 #include "long_operations/siglus_textout.hpp"
@@ -116,6 +118,24 @@ std::unique_ptr<LongOperation> WaitForSelection::RestoreCheckpoint(
       [&machine](std::shared_ptr<Selection> selection) {
         machine.host().CancelSelection(std::move(selection));
       });
+}
+
+libsiglus::GroupSelectionOperationState SiglusGroupSelection::CaptureCheckpoint(
+    libsiglus::ExecutionWriter&) const {
+  return {group_};
+}
+std::unique_ptr<LongOperation> SiglusGroupSelection::RestoreCheckpoint(
+    libsiglus::SiglusMachine& machine,
+    libsiglus::ExecutionReader&,
+    const libsiglus::GroupSelectionOperationState& state) {
+  if (!state.group)
+    throw std::runtime_error("Saved group selection has no group");
+  return std::make_unique<SiglusGroupSelection>(state.group, [&machine] {
+    if (machine.host().input_event_listener)
+      machine.host().input_event_listener->ClearState();
+    if (machine.host().script_input)
+      machine.host().script_input->Clear();
+  });
 }
 
 libsiglus::WipeOperationState SiglusWipeOperation::CaptureCheckpoint(
@@ -238,6 +258,7 @@ NativeOperationState CaptureNativeOperation(lop::LongOperation& operation,
   CAPTURE(SiglusTextoutOperation)
   CAPTURE(SiglusMwndWaitOperation)
   CAPTURE(WaitForSelection)
+  CAPTURE(SiglusGroupSelection)
   CAPTURE(SiglusWipeOperation)
   CAPTURE(SiglusMovieOperation)
 #undef CAPTURE
@@ -260,6 +281,9 @@ std::unique_ptr<lop::LongOperation> RestoreNativeOperation(
         else if constexpr (std::is_same_v<T, SelectionWaitOperationState>)
           return lop::WaitForSelection::RestoreCheckpoint(machine, execution,
                                                           state);
+        else if constexpr (std::is_same_v<T, GroupSelectionOperationState>)
+          return lop::SiglusGroupSelection::RestoreCheckpoint(machine,
+                                                              execution, state);
         else if constexpr (std::is_same_v<T, WipeOperationState>)
           return lop::SiglusWipeOperation::RestoreCheckpoint(machine, execution,
                                                              state);

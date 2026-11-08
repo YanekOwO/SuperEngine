@@ -2721,10 +2721,10 @@ AccessChain ElementParser::make_chain(AccessChain result,
       case Type::Group:
         switch (key) {
           case 0:
-            append_callable("sel", Type::None);
+            append_callable("sel", Type::Int, AWAIT);
             continue;
           case 1:
-            append_callable("sel_cancel", Type::None);
+            append_callable("sel_cancel", Type::Int, AWAIT);
             continue;
           case 4:
             append_callable("init", Type::None);

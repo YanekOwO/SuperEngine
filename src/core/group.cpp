@@ -31,6 +31,8 @@ void Group::Reset() {
 }
 
 void Group::InitSel() {
+  cancel_priority = 0;
+  cancel_se.reset();
   result = Result::None;
   result_button_no.reset();
   decided_button_no.reset();

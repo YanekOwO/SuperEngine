@@ -47,6 +47,11 @@ class InteractionManager {
                      ButtonActionTable button_actions);
 
   void Update();
+  void SetGroupHandlers(std::function<void(int)> play_sound,
+                        std::function<void()> consume_input) {
+    group_sound_ = std::move(play_sound);
+    group_consume_ = std::move(consume_input);
+  }
   struct ButtonPresentation {
     bool visible = true;
     bool enabled = true;
@@ -107,8 +112,11 @@ class InteractionManager {
   bool last_decide_down_ = false;
   std::optional<Clock::timepoint_t> last_repeat_;
 
-  void UpdateGroup(Group& group,
+  std::function<void(int)> group_sound_;
+  std::function<void()> group_consume_;
+  bool UpdateGroup(Group& group,
                    std::optional<int> hit_button_no,
-                   std::optional<bool> captured_push_keep);
+                   std::optional<bool> captured_push_keep,
+                   bool can_cancel);
   void UpdateLayer(int layer);
 };
