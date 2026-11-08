@@ -2179,43 +2179,43 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_sound_onoff"));
             continue;
           case 40:
-            append_node(Type::None, Member("set_all_volume_default"));
+            append_callable("set_all_volume_default");
             continue;
           case 24:
-            append_node(Type::None, Member("set_bgm_volume_default"));
+            append_callable("set_bgm_volume_default");
             continue;
           case 27:
-            append_node(Type::None, Member("set_koe_volume_default"));
+            append_callable("set_koe_volume_default");
             continue;
           case 30:
-            append_node(Type::None, Member("set_pcm_volume_default"));
+            append_callable("set_pcm_volume_default");
             continue;
           case 33:
-            append_node(Type::None, Member("set_se_volume_default"));
+            append_callable("set_se_volume_default");
             continue;
           case 264:
-            append_node(Type::None, Member("set_mov_volume_default"));
+            append_callable("set_mov_volume_default");
             continue;
           case 278:
             append_node(Type::Callable, Member("set_sound_volume_default"));
             continue;
           case 101:
-            append_node(Type::None, Member("set_all_onoff_default"));
+            append_callable("set_all_onoff_default");
             continue;
           case 102:
-            append_node(Type::None, Member("set_bgm_onoff_default"));
+            append_callable("set_bgm_onoff_default");
             continue;
           case 103:
-            append_node(Type::None, Member("set_koe_onoff_default"));
+            append_callable("set_koe_onoff_default");
             continue;
           case 104:
-            append_node(Type::None, Member("set_pcm_onoff_default"));
+            append_callable("set_pcm_onoff_default");
             continue;
           case 105:
-            append_node(Type::None, Member("set_se_onoff_default"));
+            append_callable("set_se_onoff_default");
             continue;
           case 267:
-            append_node(Type::None, Member("set_mov_onoff_default"));
+            append_callable("set_mov_onoff_default");
             continue;
           case 281:
             append_node(Type::Callable, Member("set_sound_onoff_default"));
@@ -2269,10 +2269,10 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_bgmfade_onoff"));
             continue;
           case 95:
-            append_node(Type::None, Member("set_bgmfade_volume_default"));
+            append_callable("set_bgmfade_volume_default");
             continue;
           case 106:
-            append_node(Type::None, Member("set_bgmfade_onoff_default"));
+            append_callable("set_bgmfade_onoff_default");
             continue;
           case 96:
             append_callable("get_bgmfade_volume", Type::Int);
@@ -2349,7 +2349,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_message_speed"));
             continue;
           case 47:
-            append_node(Type::None, Member("set_message_speed_default"));
+            append_callable("set_message_speed_default");
             continue;
           case 48:
             append_callable("get_message_speed", Type::Int);
@@ -2358,7 +2358,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_message_nowait"));
             continue;
           case 107:
-            append_node(Type::None, Member("set_message_nowait_default"));
+            append_callable("set_message_nowait_default");
             continue;
           case 50:
             append_callable("get_message_nowait", Type::Int);
@@ -2367,7 +2367,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_auto_mode_moji_wait"));
             continue;
           case 52:
-            append_node(Type::None, Member("set_auto_mode_moji_wait_default"));
+            append_callable("set_auto_mode_moji_wait_default");
             continue;
           case 53:
             append_callable("get_auto_mode_moji_wait", Type::Int);
@@ -2376,7 +2376,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_auto_mode_min_wait"));
             continue;
           case 55:
-            append_node(Type::None, Member("set_auto_mode_min_wait_default"));
+            append_callable("set_auto_mode_min_wait_default");
             continue;
           case 56:
             append_callable("get_auto_mode_min_wait", Type::Int);
@@ -2423,7 +2423,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_filter_color_b_default"));
             continue;
           case 90:
-            append_node(Type::None, Member("set_filter_color_a_default"));
+            append_callable("set_filter_color_a_default");
             continue;
           case 84:
             append_callable("get_filter_color_r", Type::Int);

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2025 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -214,6 +215,158 @@ TEST_F(ElementParserTest, SyscomEndGameExistFlagReturnsItsStoredValue) {
   auto parsed = chain(63, 247);
   EXPECT_EQ(parsed, "syscom.get_exist_endgame()");
   EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+}
+
+TEST_F(ElementParserTest, SyscomAllVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare master-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 40);
+  EXPECT_EQ(parsed, "syscom.set_all_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomBgmVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare BGM-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 24);
+  EXPECT_EQ(parsed, "syscom.set_bgm_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomKoeVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare voice-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 27);
+  EXPECT_EQ(parsed, "syscom.set_koe_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomPcmVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare PCM-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 30);
+  EXPECT_EQ(parsed, "syscom.set_pcm_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomSeVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare sound-effect-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 33);
+  EXPECT_EQ(parsed, "syscom.set_se_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomMovVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare movie-volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 264);
+  EXPECT_EQ(parsed, "syscom.set_mov_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomAllOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare master-audio enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 101);
+  EXPECT_EQ(parsed, "syscom.set_all_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomBgmOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare BGM enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 102);
+  EXPECT_EQ(parsed, "syscom.set_bgm_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomKoeOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare voice enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 103);
+  EXPECT_EQ(parsed, "syscom.set_koe_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomPcmOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare PCM enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 104);
+  EXPECT_EQ(parsed, "syscom.set_pcm_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomSeOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare sound-effect enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 105);
+  EXPECT_EQ(parsed, "syscom.set_se_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomMovOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare movie-audio enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 267);
+  EXPECT_EQ(parsed, "syscom.set_mov_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomBgmFadeVolumeDefaultIsAnImplicitVoidCall) {
+  // A bare voice-ducking volume reset element becomes an implicit void call.
+  auto parsed = chain(63, 95);
+  EXPECT_EQ(parsed, "syscom.set_bgmfade_volume_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomBgmFadeOnOffDefaultIsAnImplicitVoidCall) {
+  // A bare voice-ducking enable reset element becomes an implicit void call.
+  auto parsed = chain(63, 106);
+  EXPECT_EQ(parsed, "syscom.set_bgmfade_onoff_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomMessageSpeedDefaultIsAnImplicitVoidCall) {
+  // A bare message-speed reset element becomes an implicit void call.
+  auto parsed = chain(63, 47);
+  EXPECT_EQ(parsed, "syscom.set_message_speed_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomMessageNowaitDefaultIsAnImplicitVoidCall) {
+  // A bare message-nowait reset element becomes an implicit void call.
+  auto parsed = chain(63, 107);
+  EXPECT_EQ(parsed, "syscom.set_message_nowait_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomAutoModeMojiWaitDefaultIsAnImplicitVoidCall) {
+  // A bare per-character auto-wait reset element becomes an implicit void call.
+  auto parsed = chain(63, 52);
+  EXPECT_EQ(parsed, "syscom.set_auto_mode_moji_wait_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomAutoModeMinWaitDefaultIsAnImplicitVoidCall) {
+  // A bare minimum auto-wait reset element becomes an implicit void call.
+  auto parsed = chain(63, 55);
+  EXPECT_EQ(parsed, "syscom.set_auto_mode_min_wait_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, SyscomFilterColorAlphaDefaultIsAnImplicitVoidCall) {
+  // A bare filter-alpha reset element becomes an implicit void call.
+  auto parsed = chain(63, 90);
+  EXPECT_EQ(parsed, "syscom.set_filter_color_a_default()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
 }
 
 TEST_F(ElementParserTest, MemoryBank) {
