@@ -273,15 +273,23 @@ void BindCaptureFiles(SiglusMachine& runtime) {
   });
   syscom.def("destroy_capture_buffer",
              [captures] { captures->DestroyBuffer(); });
-  syscom.def("capture_to_capture_buffer", [&runtime](int x, int y) {
-    return runtime.RequestCapture(
-        {.kind = CaptureKind::Buffer, .offset = Point(x, y)});
-  });
-  syscom.def("capture_to_png", [&runtime](int x, int y, std::string name) {
-    return runtime.RequestCapture({.kind = CaptureKind::Buffer,
-                                   .offset = Point(x, y),
-                                   .png_name = std::move(name)});
-  });
+
+  syscom.def(
+      "capture_to_capture_buffer",
+      [&runtime](int x, int y, std::string name) {
+        return runtime.RequestCapture({.kind = CaptureKind::Buffer,
+                                       .offset = Point(x, y),
+                                       .png_name = std::move(name)});
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("name") = "");
+  syscom.def(
+      "capture_to_png",
+      [&runtime](int x, int y, std::string name) {
+        return runtime.RequestCapture({.kind = CaptureKind::Buffer,
+                                       .offset = Point(x, y),
+                                       .png_name = std::move(name)});
+      },
+      sb::arg("x"), sb::arg("y"), sb::arg("name") = "");
   syscom.def(
       "save_capture_buffer_to_file",
       [&runtime, captures, platform = runtime.host().platform_implementor](
