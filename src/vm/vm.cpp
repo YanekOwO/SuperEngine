@@ -339,8 +339,12 @@ void VM::InvokeUntilBlocked(Value callback,
 }
 
 void VM::CollectGarbage() {
+  if (gc_->CollectionDeferred())
+    return;
   gc_->UnmarkAll();
   GCVisitor collector(*gc_);
+  for (auto& [name, value] : binding_symbols_)
+    collector.MarkSub(value);
   collector.MarkSub(last_);
   collector.MarkSub(main_fiber_);
   for (auto& [k, v] : *globals_)
@@ -982,6 +986,7 @@ void VM::ExecuteFiber(Fiber* fib) {
           }
 
           fib->state = FiberState::Suspended;
+          fib->awaited = awaited;
           auto cb = [lifetime = std::weak_ptr(callback_lifetime_),
                      completion = std::weak_ptr(fib->completion_promise),
                      vm = this, fib, awaited_fib = awaited.Get_if<Fiber>()](
@@ -989,6 +994,7 @@ void VM::ExecuteFiber(Fiber* fib) {
             const auto owner = completion.lock();
             if (lifetime.expired() || !owner || owner->HasResult())
               return;
+            fib->awaited.reset();
             if (result.has_value())
               push(fib->op_stack, result.value());
             else
@@ -1098,6 +1104,32 @@ bool VM::Await(Value& awaiter,
   scheduler_.PushMicroTask(await_fib);
 
   return true;
+}
+
+void VM::RestoreAwait(Fiber& fiber) {
+  if (!fiber.awaited || fiber.state != FiberState::Suspended)
+    throw std::invalid_argument("restored fiber has no suspended await");
+  Value awaited = *fiber.awaited;
+  auto completion = std::weak_ptr(fiber.completion_promise);
+  auto waker = [this, lifetime = std::weak_ptr(callback_lifetime_), completion,
+                fib = &fiber](const expected<Value, std::string>& result) {
+    const auto owner = completion.lock();
+    if (lifetime.expired() || !owner || owner->HasResult())
+      return;
+    fib->awaited.reset();
+    if (result.has_value())
+      helper::push(fib->op_stack, result.value());
+    else
+      Error(*fib, result.error());
+    scheduler_.PushMicroTask(fib);
+  };
+  auto promise = get_promise(awaited);
+  if (!promise)
+    throw std::invalid_argument("restored awaitable has no promise");
+  // Producer activation belongs to the host's commit step, so restoring a
+  // dependency must not run initial_await or schedule the producing fiber.
+  if (promise->AddWaker(std::move(waker)))
+    TrackPendingPromise(std::move(promise));
 }
 
 void VM::TrackPendingPromise(std::shared_ptr<Promise> promise) {

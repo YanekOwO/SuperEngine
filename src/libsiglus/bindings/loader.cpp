@@ -122,6 +122,19 @@ sr::Value Loader::ResolveScriptCall(const ScriptCall& call) {
   return ResolveZlabelEntry(*mod, scene.zlabel);
 }
 
+std::optional<int> Loader::SceneId(const sr::Function* function) const {
+  if (!function || !function->globals)
+    return std::nullopt;
+  const auto found = commands_by_globals_.find(function->globals.get());
+  if (found == commands_by_globals_.end())
+    return std::nullopt;
+  return found->second.scene_id;
+}
+
+sr::Function* Loader::Dispatcher(int scene) {
+  return Load(scene)->globals->at("%%dispatch").Get<sr::Function*>();
+}
+
 sr::Module* Loader::Load(int scene) {
   if (scene < 0 ||
       static_cast<std::size_t>(scene) >= archive_.GetScenarioCount()) {

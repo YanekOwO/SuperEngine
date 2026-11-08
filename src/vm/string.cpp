@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "vm/string.hpp"
+#include "vm/serialization.hpp"
 
 #include "utilities/string_utilities.hpp"
 #include "vm/object.hpp"
@@ -81,6 +82,18 @@ class StringMethod : public IObject {
 
   StringMethod(const String* self, StringMethodKind kind)
       : self_(self), kind_(kind) {}
+
+  void Save(ObjectWriter& out) const override {
+    out.Write(const_cast<String*>(self_));
+    out.Put(kind_);
+  }
+  void Load(ObjectReader& in) override {
+    self_ = in.Read().Get<String*>();
+    kind_ = in.Get<StringMethodKind>();
+    if (kind_ < static_cast<StringMethodKind>(0) ||
+        kind_ > StringMethodKind::ToNum)
+      throw std::runtime_error("invalid saved collection method");
+  }
 
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
@@ -581,4 +594,13 @@ void String::MarkRoots(GCVisitor& visitor) {
 
 std::optional<bool> String::Bool() const { return !str_.empty(); }
 
+void RegisterStringSerialization(ObjectTypes& types) {
+  types.Register<String>(
+      "String", [](GarbageCollector& gc) { return gc.Allocate<String>(""); });
+  types.Register<StringMethod>("StringMethod", [](GarbageCollector& gc) {
+    return gc.Allocate<StringMethod>(nullptr, static_cast<StringMethodKind>(0));
+  });
+}
+void String::Save(ObjectWriter& out) const { out.Text(str_); }
+void String::Load(ObjectReader& in) { str_ = in.Text(); }
 }  // namespace serilang

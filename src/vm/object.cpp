@@ -24,15 +24,16 @@
 
 #include "vm/object.hpp"
 
-#include "utilities/string_utilities.hpp"
 #include "vm/function.hpp"
 #include "vm/promise.hpp"
+#include "vm/serialization.hpp"
 #include "vm/string.hpp"
 #include "vm/upvalue.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <optional>
@@ -249,13 +250,13 @@ void NativeClass::Call(VM& vm,
 NativeInstance::NativeInstance(NativeClass* klass_) : klass(klass_) {}
 
 NativeInstance::~NativeInstance() {
-  if (klass->finalize && foreign)
+  if (klass && klass->finalize && foreign)
     klass->finalize(foreign);
 }
 
 void NativeInstance::MarkRoots(GCVisitor& visitor) {
   visitor.MarkSub(klass);
-  if (klass->trace && foreign)
+  if (klass && klass->trace && foreign)
     klass->trace(visitor, foreign);
 }
 
@@ -336,6 +337,8 @@ Fiber::Fiber(size_t reserve) : state(FiberState::New) {
 }
 
 void Fiber::MarkRoots(GCVisitor& visitor) {
+  if (awaited)
+    visitor.MarkSub(*awaited);
   // mark completion promise's payload
   for (IObject* it : completion_promise->roots)
     visitor.MarkSub(it);
@@ -529,4 +532,176 @@ void BoundMethod::Call(VM& vm,
   method.Call(vm, f, nargs + additional_args.size(), nkwargs, mode);
 }
 
+void Code::Save(ObjectWriter& out) const {
+  out.Text({reinterpret_cast<const char*>(code.data()), code.size()});
+  out.Sequence(const_pool, [&](const auto& v) { out.Write(v); });
+  out.Sequence(fast_locals, [&](const auto& v) { out.Text(v); });
+  out.Sequence(line_offset, [&](const auto& v) {
+    out.Put(v.first);
+    out.Put(v.second);
+  });
+}
+void Code::Load(ObjectReader& in) {
+  auto bytes = in.Text();
+  code.resize(bytes.size());
+  std::memcpy(code.data(), bytes.data(), bytes.size());
+  for (auto n = in.Count(); n; --n)
+    const_pool.push_back(in.Read());
+  for (auto n = in.Count(); n; --n)
+    fast_locals.push_back(in.Text());
+  for (auto n = in.Count(); n; --n) {
+    auto line = in.Get<int>();
+    auto offset = in.Get<uint32_t>();
+    line_offset.emplace(line, offset);
+  }
+}
+void Class::Save(ObjectWriter& out) const {
+  out.Text(name);
+  out.MapValue(memfns);
+  out.MapValue(fields);
+  out.Sequence(properties, [&](const auto& entry) {
+    out.Text(entry.first);
+    out.Write(entry.second.getter);
+    out.Write(entry.second.setter);
+  });
+}
+void Class::Load(ObjectReader& in) {
+  name = in.Text();
+  for (auto n = in.Count(); n; --n) {
+    auto key = in.Text();
+    memfns.emplace(std::move(key), in.Read().Get<Function*>());
+  }
+  in.MapValue(fields);
+  for (auto n = in.Count(); n; --n) {
+    auto key = in.Text();
+    auto getter = in.Read();
+    auto setter = in.Read();
+    properties.emplace(std::move(key), Property{getter, setter});
+  }
+}
+void Instance::Save(ObjectWriter& out) const {
+  out.Write(klass);
+  out.MapValue(fields);
+}
+void Instance::Load(ObjectReader& in) {
+  klass = in.Read().Get<Class*>();
+  in.MapValue(fields);
+}
+void NativeInstance::Save(ObjectWriter& out) const {
+  if (!klass || !klass->save)
+    throw std::runtime_error("native class has no serializer");
+  out.Write(klass);
+  klass->save(out, foreign);
+}
+void NativeInstance::Load(ObjectReader& in) {
+  klass = in.Read().Get<NativeClass*>();
+  if (!klass->load)
+    throw std::runtime_error("native class has no deserializer: " +
+                             klass->name);
+  klass->load(in, *this);
+}
+void BoundMethod::Save(ObjectWriter& out) const {
+  out.Write(method);
+  out.Sequence(additional_args, [&](const auto& value) { out.Write(value); });
+}
+void BoundMethod::Load(ObjectReader& in) {
+  method = in.Read();
+  for (auto n = in.Count(); n; --n)
+    additional_args.push_back(in.Read());
+}
+void Module::Save(ObjectWriter& out) const {
+  out.Text(name);
+  out.WriteNamespace(globals);
+}
+void Module::Load(ObjectReader& in) {
+  name = in.Text();
+  globals = in.ReadNamespace();
+  if (!globals)
+    throw std::runtime_error("saved module has no namespace");
+}
+
+void Fiber::Save(ObjectWriter& out) const {
+  if (!native_call_roots.empty())
+    throw std::runtime_error("checkpoint requested inside a native invocation");
+  out.Put<uint8_t>(static_cast<uint8_t>(state));
+  out.Put<uint8_t>(discard_result);
+  out.WritePromise(completion_promise);
+  out.Put<uint8_t>(awaited.has_value());
+  if (awaited)
+    out.Write(*awaited);
+  out.Put<uint32_t>(op_stack.size());
+  for (size_t i = 0; i < op_stack.size(); ++i)
+    out.Write(this == out.stack_override.fiber && i == out.stack_override.index
+                  ? out.stack_override.value
+                  : op_stack[i]);
+  out.Sequence(frames, [&](const auto& frame) {
+    out.Write(frame.fn);
+    out.Put(frame.ip);
+    out.Put<uint32_t>(frame.bp);
+    out.Put<uint8_t>(static_cast<uint8_t>(frame.result_mode));
+    out.Sequence(frame.handlers, [&](const auto& h) {
+      out.Put(h.handler_ip);
+      out.Put<uint32_t>(h.stack_top);
+    });
+    out.Sequence(frame.fast_locals, [&](const auto& local) {
+      out.Put<uint8_t>(local.has_value());
+      if (local)
+        out.Write(*local);
+    });
+  });
+  if (!open_upvalues.empty())
+    throw std::runtime_error("open upvalues do not support serialization");
+  out.Put(usrdata.has_value());
+  if (usrdata.has_value()) {
+    if (!out.hooks.save_userdata)
+      throw std::runtime_error("fiber userdata has no serializer");
+    out.hooks.save_userdata(out, usrdata);
+  }
+}
+void Fiber::Load(ObjectReader& in) {
+  state = static_cast<FiberState>(in.Get<uint8_t>());
+  if (state < FiberState::New || state > FiberState::Dead)
+    throw std::runtime_error("invalid saved fiber state");
+  discard_result = in.Get<uint8_t>();
+  auto completion = in.ReadPromise();
+  if (!completion)
+    throw std::runtime_error("saved fiber has no completion promise");
+  completion_promise = std::move(completion);
+  if (in.Get<uint8_t>())
+    awaited = in.Read();
+  for (auto n = in.Count(); n; --n)
+    op_stack.push_back(in.Read());
+  for (auto n = in.Count(); n; --n) {
+    CallFrame frame;
+    frame.fn = in.Read().Get<Function*>();
+    frame.ip = in.Get<uint32_t>();
+    frame.bp = in.Get<uint32_t>();
+    frame.result_mode = static_cast<CallResultMode>(in.Get<uint8_t>());
+    if (frame.result_mode != CallResultMode::Keep &&
+        frame.result_mode != CallResultMode::Discard)
+      throw std::runtime_error("invalid saved call result mode");
+    for (auto k = in.Count(); k; --k) {
+      auto ip = in.Get<uint32_t>();
+      auto top = in.Get<uint32_t>();
+      frame.handlers.push_back({ip, top});
+    }
+    for (auto k = in.Count(); k; --k) {
+      if (in.Get<uint8_t>())
+        frame.fast_locals.emplace_back(in.Read());
+      else
+        frame.fast_locals.emplace_back(std::nullopt);
+    }
+    frames.push_back(std::move(frame));
+  }
+  if (in.Get<bool>()) {
+    if (!in.hooks.load_userdata)
+      throw std::runtime_error("fiber userdata has no deserializer");
+    usrdata = in.hooks.load_userdata(in);
+  }
+  if (awaited) {
+    if (state != FiberState::Suspended)
+      throw std::runtime_error("awaiting saved fiber is not suspended");
+    in.AwaitLater(*this);
+  }
+}
 }  // namespace serilang

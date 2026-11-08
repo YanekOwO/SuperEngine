@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "vm/dict.hpp"
+#include "vm/serialization.hpp"
 
 #include "vm/exception.hpp"
 #include "vm/gc.hpp"
@@ -204,6 +205,18 @@ class DictMethod final : public IObject {
   static constexpr inline ObjType objtype = ObjType::BoundMethod;
 
   DictMethod(Dict* self, DictMethodKind kind) : self_(self), kind_(kind) {}
+
+  void Save(ObjectWriter& out) const override {
+    out.Write(const_cast<Dict*>(self_));
+    out.Put(kind_);
+  }
+  void Load(ObjectReader& in) override {
+    self_ = in.Read().Get<Dict*>();
+    kind_ = in.Get<DictMethodKind>();
+    if (kind_ < static_cast<DictMethodKind>(0) ||
+        kind_ > DictMethodKind::Values)
+      throw std::runtime_error("invalid saved collection method");
+  }
 
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
@@ -561,4 +574,27 @@ void Dict::SetItem(VM& vm, Fiber& f) {
   }
 }
 
+void RegisterDictSerialization(ObjectTypes& types) {
+  types.Register<Dict>(
+      "Dict", [](GarbageCollector& gc) { return gc.Allocate<Dict>(); });
+  types.Register<DictMethod>("DictMethod", [](GarbageCollector& gc) {
+    return gc.Allocate<DictMethod>(nullptr, static_cast<DictMethodKind>(0));
+  });
+}
+void Dict::Save(ObjectWriter& out) const {
+  out.Sequence(map, [&](const auto& v) {
+    out.Write(v.first);
+    out.Write(v.second);
+  });
+  out.Sequence(order, [&](const auto& v) { out.Write(v); });
+}
+void Dict::Load(ObjectReader& in) {
+  for (auto n = in.Count(); n; --n) {
+    auto key = in.Read();
+    auto value = in.Read();
+    map.emplace(key, value);
+  }
+  for (auto n = in.Count(); n; --n)
+    order.push_back(in.Read());
+}
 }  // namespace serilang

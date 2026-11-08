@@ -55,6 +55,13 @@ class Scheduler {
   Scheduler(std::unique_ptr<IPoller> poller = std::make_unique<IPoller>(),
             std::unique_ptr<Clock> clock = std::make_unique<Clock>());
 
+  struct ReadyTasks {
+    std::vector<Fiber*> tasks;
+    std::vector<Fiber*> microtasks;
+  };
+  ReadyTasks GetReadyTasks() const;
+  void RestoreReadyTasks(ReadyTasks tasks);
+
   bool IsIdle() const noexcept;
   Clock::timepoint_t GetTime() const;
 

@@ -34,9 +34,11 @@ struct GCVisitor;
 class VM;
 
 struct String : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::String;
 
-  const std::string str_;
+  std::string str_;
 
   inline String(std::string str) : str_(std::move(str)) {}
 

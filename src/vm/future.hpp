@@ -38,6 +38,8 @@ struct GCVisitor;
 class VM;
 
 struct Future : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Future;
 
   std::shared_ptr<Promise> promise;

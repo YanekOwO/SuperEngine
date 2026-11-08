@@ -28,6 +28,7 @@
 #include "vm/object.hpp"
 #include "vm/vm.hpp"
 
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -61,6 +62,10 @@ class Loader {
                                       const std::string& command_name);
   serilang::Value ResolveSceneEntry(std::string scene_name, int zlabel);
   serilang::Value ResolveScriptCall(const ScriptCall& call);
+
+  // Stable scene identities replace collector addresses in saved execution.
+  std::optional<int> SceneId(const serilang::Function* function) const;
+  serilang::Function* Dispatcher(int scene);
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);

@@ -58,11 +58,23 @@ class FrameRequestManager {
   // Cancel queued and active requests.
   void Reset();
 
- private:
+ public:
   struct FrameRequest {
     std::shared_ptr<serilang::Promise> promise;
     bool advance_script_input;
   };
+  struct SavedState {
+    std::vector<FrameRequest> pending, active;
+  };
+  SavedState SaveState() const {
+    return {pending_frame_requests_, active_frame_requests_};
+  }
+  void RestoreState(SavedState state) {
+    pending_frame_requests_ = std::move(state.pending);
+    active_frame_requests_ = std::move(state.active);
+  }
+
+ private:
   std::shared_ptr<serilang::Promise> QueueFrame(bool advance_script_input);
 
   MakePendingPromise make_pending_promise_;

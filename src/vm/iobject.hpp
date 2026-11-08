@@ -33,6 +33,8 @@
 
 namespace serilang {
 struct Fiber;
+class ObjectWriter;
+class ObjectReader;
 
 struct GCVisitor;
 
@@ -43,6 +45,10 @@ class IObject {
   virtual ~IObject() = default;
   constexpr virtual ObjType Type() const noexcept = 0;
   constexpr virtual size_t Size() const noexcept = 0;
+
+  // The graph reader allocates and registers an empty object before Load.
+  virtual void Save(ObjectWriter&) const;
+  virtual void Load(ObjectReader&);
 
   virtual void MarkRoots(GCVisitor& visitor) = 0;
 

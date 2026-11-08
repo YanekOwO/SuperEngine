@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "vm/list.hpp"
+#include "vm/serialization.hpp"
 
 #include "utilities/string_utilities.hpp"
 #include "vm/dict.hpp"
@@ -118,6 +119,17 @@ class ListMethod final : public IObject {
   static constexpr inline ObjType objtype = ObjType::BoundMethod;
 
   ListMethod(List* self, ListMethodKind kind) : self_(self), kind_(kind) {}
+
+  void Save(ObjectWriter& out) const override {
+    out.Write(const_cast<List*>(self_));
+    out.Put(kind_);
+  }
+  void Load(ObjectReader& in) override {
+    self_ = in.Read().Get<List*>();
+    kind_ = in.Get<ListMethodKind>();
+    if (kind_ < static_cast<ListMethodKind>(0) || kind_ > ListMethodKind::Sort)
+      throw std::runtime_error("invalid saved collection method");
+  }
 
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
@@ -462,4 +474,18 @@ void List::SetItem(VM& vm, Fiber& f) {
   items[index] = std::move(val);
 }
 
+void RegisterListSerialization(ObjectTypes& types) {
+  types.Register<List>(
+      "List", [](GarbageCollector& gc) { return gc.Allocate<List>(); });
+  types.Register<ListMethod>("ListMethod", [](GarbageCollector& gc) {
+    return gc.Allocate<ListMethod>(nullptr, static_cast<ListMethodKind>(0));
+  });
+}
+void List::Save(ObjectWriter& out) const {
+  out.Sequence(items, [&](const auto& v) { out.Write(v); });
+}
+void List::Load(ObjectReader& in) {
+  for (auto n = in.Count(); n; --n)
+    items.push_back(in.Read());
+}
 }  // namespace serilang

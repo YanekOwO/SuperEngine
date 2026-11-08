@@ -47,6 +47,15 @@ Scheduler::Scheduler(std::unique_ptr<IPoller> poller,
                      std::unique_ptr<Clock> clock)
     : poller_(std::move(poller)), clock_(std::move(clock)) {}
 
+Scheduler::ReadyTasks Scheduler::GetReadyTasks() const {
+  return {{runq_.begin(), runq_.end()}, {microq_.begin(), microq_.end()}};
+}
+
+void Scheduler::RestoreReadyTasks(ReadyTasks tasks) {
+  runq_.assign(tasks.tasks.begin(), tasks.tasks.end());
+  microq_.assign(tasks.microtasks.begin(), tasks.microtasks.end());
+}
+
 bool Scheduler::IsIdle() const noexcept {
   return microq_.empty() && runq_.empty();
 }

@@ -33,6 +33,8 @@
 namespace serilang {
 
 struct List : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::List;
 
   std::vector<Value> items;

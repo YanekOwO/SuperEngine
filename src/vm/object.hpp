@@ -48,6 +48,8 @@
 namespace serilang {
 
 struct Code final : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Code;
   constexpr ObjType Type() const noexcept final { return objtype; }
   constexpr size_t Size() const noexcept final { return sizeof(*this); }
@@ -115,6 +117,8 @@ struct Property {
 };
 
 struct Class : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Class;
 
   std::string name;
@@ -138,6 +142,8 @@ struct Class : public IObject {
 };
 
 struct Instance : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Instance;
 
   Class* klass;
@@ -181,6 +187,8 @@ struct NativeClass : public IObject {
   transparent_hashmap<Property> properties;
 
   std::vector<Value> gc_roots;
+  std::function<void(ObjectWriter&, const void*)> save;
+  std::function<void(ObjectReader&, NativeInstance&)> load;
   finalize_fn finalize = nullptr;
   trace_fn trace = nullptr;
   await_poll_fn await_poll = nullptr;
@@ -202,6 +210,8 @@ struct NativeClass : public IObject {
 };
 
 struct NativeInstance : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::NativeInstance;
 
   NativeClass* klass;
@@ -240,6 +250,8 @@ enum class FiberState { New, Running, Suspended, Dead };
 struct Upvalue;
 
 struct Fiber : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Fiber;
 
   explicit Fiber(size_t reserve = 64);
@@ -248,6 +260,8 @@ struct Fiber : public IObject {
   std::vector<CallFrame> frames;
   // Native argument conversion can remove operands before C++ code runs.
   std::vector<Value> native_call_roots;
+  // Retain the awaitable so a suspended continuation can rebuild its waker.
+  std::optional<Value> awaited;
   FiberState state;
 
   // Internal promise that represents this fiber's completion.
@@ -286,6 +300,8 @@ struct Fiber : public IObject {
 };
 
 struct Module : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Module;
 
   std::string name;
@@ -340,6 +356,8 @@ class NativeFunction : public IObject {
 };
 
 struct BoundMethod : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::BoundMethod;
 
   std::vector<Value> additional_args;

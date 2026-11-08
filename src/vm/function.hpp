@@ -54,6 +54,8 @@ struct ArgumentList {
 };
 
 struct Function : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Function;
 
   Code* chunk;

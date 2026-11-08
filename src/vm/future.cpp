@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "vm/future.hpp"
+#include "vm/serialization.hpp"
 
 #include "srbind/srbind.hpp"
 #include "vm/gc.hpp"
@@ -198,6 +199,13 @@ void InstallAsyncBuiltins(VM& vm) {
       "Race", +[](VM& vm, std::vector<Value> awaitables) {
         return async_builtin::Race(vm, std::move(awaitables));
       });
+}
+
+void Future::Save(ObjectWriter& out) const { out.WritePromise(promise); }
+void Future::Load(ObjectReader& in) {
+  promise = in.ReadPromise();
+  if (!promise)
+    throw std::runtime_error("saved future has no promise");
 }
 
 }  // namespace serilang

@@ -69,6 +69,9 @@ class VM {
               std::unordered_map<std::string, Value> globals,
               std::unordered_map<std::string, Value> builtins);
 
+  void Save(ObjectWriter& writer) const;
+  void Load(ObjectReader& reader);
+
   Fiber* AddFiber(Code* entry);
   Fiber* ScheduleExecute(Function* fn);
   Fiber* ScheduleExecute(Value callable);
@@ -119,6 +122,9 @@ class VM {
       Value& awaited,
       std::function<void(const expected<Value, std::string>&)> result_callback);
 
+  // Reattach an already suspended fiber after restoring its awaitable.
+  void RestoreAwait(Fiber& fiber);
+
   void TrackPendingPromise(std::shared_ptr<Promise> promise);
   std::size_t CountPendingPromises();
 
@@ -135,6 +141,9 @@ class VM {
 
   std::shared_ptr<std::unordered_map<std::string, Value>> globals_, builtins_;
   std::unordered_map<std::string, Module*> module_cache_;
+
+  // Frozen native definitions remain rooted when scripts overwrite globals.
+  std::unordered_map<std::string, Value> binding_symbols_;
 
   Scheduler scheduler_;
 

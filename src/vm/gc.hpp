@@ -50,6 +50,19 @@ struct GCHeader {
 
 class GarbageCollector {
  public:
+  class CollectionGuard {
+   public:
+    explicit CollectionGuard(GarbageCollector& gc) : gc_(gc) {
+      ++gc_.collection_guards_;
+    }
+    ~CollectionGuard() { --gc_.collection_guards_; }
+    CollectionGuard(const CollectionGuard&) = delete;
+    CollectionGuard& operator=(const CollectionGuard&) = delete;
+
+   private:
+    GarbageCollector& gc_;
+  };
+  bool CollectionDeferred() const { return collection_guards_ != 0; }
   GarbageCollector() = default;
   ~GarbageCollector();
 
@@ -75,6 +88,7 @@ class GarbageCollector {
  private:
   IObject* gc_list_ = nullptr;
   size_t allocated_bytes_ = 0;
+  size_t collection_guards_ = 0;
 };
 
 }  // namespace serilang

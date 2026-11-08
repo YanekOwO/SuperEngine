@@ -74,4 +74,11 @@ std::size_t IObject::Hash() const {
 
 std::optional<bool> IObject::Bool() const { return std::nullopt; }
 
+void IObject::Save(ObjectWriter&) const {
+  throw std::runtime_error("object does not support serialization: " + Desc());
+}
+void IObject::Load(ObjectReader&) {
+  throw std::runtime_error("object does not support deserialization: " +
+                           Desc());
+}
 }  // namespace serilang

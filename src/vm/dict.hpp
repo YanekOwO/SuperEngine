@@ -33,6 +33,8 @@
 namespace serilang {
 
 struct Dict : public IObject {
+  void Save(ObjectWriter&) const override;
+  void Load(ObjectReader&) override;
   static constexpr inline ObjType objtype = ObjType::Dict;
 
   using map_t = std::unordered_map<Value, Value>;

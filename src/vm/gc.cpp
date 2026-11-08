@@ -80,6 +80,8 @@ void GarbageCollector::UnmarkAll() const {
 }
 
 void GarbageCollector::Sweep() {
+  if (CollectionDeferred())
+    return;
   IObject** cur = &gc_list_;
   while (*cur) {
     IObject* obj = *cur;

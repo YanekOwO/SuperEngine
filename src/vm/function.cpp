@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "vm/function.hpp"
+#include "vm/serialization.hpp"
 
 #include "vm/dict.hpp"
 #include "vm/gc.hpp"
@@ -171,6 +172,42 @@ void Function::Call(VM& vm,
   frame.bp = base;
   frame.result_mode = mode;
   frame.fast_locals = std::move(local_stack);
+}
+
+void Function::Save(ObjectWriter& out) const {
+  out.Write(chunk);
+  out.Put(entry);
+  const auto& a = arglist;
+  out.Put(a.nparam);
+  out.Put(a.has_vararg);
+  out.Put(a.has_kwarg);
+  out.Sequence(a.param_index, [&](const auto& v) {
+    out.Text(v.first);
+    out.Put<uint32_t>(v.second);
+  });
+  out.Sequence(a.defaults, [&](const auto& v) {
+    out.Put<uint32_t>(v.first);
+    out.Write(v.second);
+  });
+  out.WriteNamespace(globals);
+}
+void Function::Load(ObjectReader& in) {
+  chunk = in.Read().Get<Code*>();
+  entry = in.Get<uint32_t>();
+  auto& a = arglist;
+  a.nparam = in.Get<uint32_t>();
+  a.has_vararg = in.Get<bool>();
+  a.has_kwarg = in.Get<bool>();
+  for (auto n = in.Count(); n; --n) {
+    auto name = in.Text();
+    auto index = in.Get<uint32_t>();
+    a.param_index.emplace(name, index);
+  }
+  for (auto n = in.Count(); n; --n) {
+    auto index = in.Get<uint32_t>();
+    a.defaults.emplace(index, in.Read());
+  }
+  globals = in.ReadNamespace();
 }
 
 }  // namespace serilang

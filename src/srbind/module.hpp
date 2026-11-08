@@ -266,6 +266,24 @@ class class_ {
 
   inline serilang::NativeClass* native_class() const { return cls_; }
 
+  template <class Save, class Load>
+  class_& def_serialization(Save save, Load load) {
+    cls_->save = [save = std::move(save)](serilang::ObjectWriter& writer,
+                                          const void* payload) {
+      if (!payload)
+        throw type_error("cannot save a null native payload");
+      save(*static_cast<const T*>(payload), writer);
+    };
+    cls_->load = [load = std::move(load)](serilang::ObjectReader& reader,
+                                          serilang::NativeInstance& instance) {
+      std::unique_ptr<T> payload = load(reader);
+      if (!payload)
+        throw type_error("native deserializer returned a null payload");
+      instance.SetForeign(payload.release());
+    };
+    return *this;
+  }
+
   template <class Child>
   class_& add_gc_root(class_<Child>& child_class) {
     if (child_class.gc_ != gc_)
