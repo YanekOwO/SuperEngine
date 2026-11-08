@@ -38,8 +38,7 @@ using namespace std::chrono_literals;
 
 struct ActionCall {
   ActionReference reference;
-  FrameAction::Target target;
-  std::vector<FrameAction::Argument> arguments;
+  ScriptCall request;
   bool active;
   bool end_action;
   int time;
@@ -49,19 +48,18 @@ struct FakeExec {
   std::vector<ActionCall> calls;
   FrameActionManager::Exec on_exec;
 
-  void operator()(const ActionReference& reference,
-                  FrameAction::Target target) {
+  void operator()(const ActionReference& reference, ScriptCall request) {
     const auto& action = *reference.action;
-    calls.push_back({reference, target, action.arguments, action.IsActive(),
-                     action.end_action, action.counter->Get()});
+    calls.push_back({reference, request, action.IsActive(), action.end_action,
+                     action.counter->Get()});
     if (on_exec)
-      on_exec(reference, target);
+      on_exec(reference, request);
   }
 };
 
 static void ExpectReset(const FrameAction& action) {
   EXPECT_FALSE(action.IsActive());
-  EXPECT_TRUE(action.arguments.empty());
+  EXPECT_EQ(action.call, ScriptCall{});
   EXPECT_EQ(action.end_time, 0);
   EXPECT_FALSE(action.end_action);
   ASSERT_NE(action.counter, nullptr);
@@ -76,13 +74,11 @@ class FrameActionManagerTest : public ::testing::Test {
   FakeExec exec;
   FrameActionManager manager{stage, config, 2};
   ActionReference action{manager.global_action(), {}};
-  const FrameAction::Target target{2, 5};
+  const CmdTarget target{2, 5};
 
   void SetUp() override {
-    manager.SetExec(
-        [this](const ActionReference& reference, FrameAction::Target selected) {
-          exec(reference, selected);
-        });
+    manager.SetExec([this](const ActionReference& reference,
+                           ScriptCall selected) { exec(reference, selected); });
   }
 
   ActionReference Channel(int index = 0) {
@@ -101,12 +97,13 @@ TEST_F(FrameActionManagerTest, StartInitializesWithoutExecuting) {
   auto counter = action.action->GetCounter();
   counter->Set(37);
   action.action->end_action = true;
-  const std::vector<FrameAction::Argument> arguments{7, std::string("value")};
+  const ScriptCall request{
+      .target = target, .integers = {7}, .strings = {"value"}};
 
-  manager.Start(action, 100, false, target, arguments);
+  manager.Start(action, 100, false, request);
 
-  EXPECT_EQ(action.action->target, target);
-  EXPECT_EQ(action.action->arguments, arguments);
+  EXPECT_EQ(std::get<CmdTarget>(action.action->call.target), target);
+  EXPECT_EQ(action.action->call, request);
   EXPECT_EQ(action.action->end_time, 100);
   EXPECT_FALSE(action.action->end_action);
   EXPECT_EQ(action.action->counter, counter);
@@ -117,15 +114,32 @@ TEST_F(FrameActionManagerTest, StartInitializesWithoutExecuting) {
 
 TEST_F(FrameActionManagerTest, StartSelectsGameTime) {
   // Give the clocks different deltas; a game-time action uses the game delta.
-  manager.Start(action, -1, false, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 1);
   EXPECT_EQ(exec.calls[0].time, 20);
 }
 
+TEST_F(FrameActionManagerTest, DispatchRetainsCallWhenActionIsReset) {
+  // Reset the slot inside its callback; the dispatched snapshot keeps its data.
+  const ScriptCall request{
+      .target = target, .integers = {7}, .strings = {"saved"}};
+  manager.Start(action, -1, false, request);
+  exec.on_exec = [&](const ActionReference& reference, ScriptCall selected) {
+    reference.action->Reset();
+    EXPECT_EQ(selected, request);
+  };
+
+  manager.AdvanceAndDispatch(1ms, 1ms);
+
+  ASSERT_EQ(exec.calls.size(), 1);
+  EXPECT_EQ(exec.calls[0].request, request);
+  ExpectReset(*action.action);
+}
+
 TEST_F(FrameActionManagerTest, StartSelectsRealTime) {
   // Give the clocks different deltas; a real-time action uses the real delta.
-  manager.Start(action, -1, true, target, {});
+  manager.Start(action, -1, true, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 1);
   EXPECT_EQ(exec.calls[0].time, 3);
@@ -134,18 +148,20 @@ TEST_F(FrameActionManagerTest, StartSelectsRealTime) {
 TEST_F(FrameActionManagerTest,
        RestartFinalizesPreviousActionBeforeReplacement) {
   // Replace a running command; its final call must still see its old arguments.
-  manager.Start(action, 10, false, target, {7});
-  const FrameAction::Target replacement{3, 9};
-  manager.Start(action, 20, true, replacement, {std::string("new")});
+  manager.Start(action, 10, false,
+                ScriptCall{.target = target, .integers = {7}});
+  const CmdTarget replacement{3, 9};
+  manager.Start(
+      action, 20, true,
+      ScriptCall{.target = replacement, .strings = {std::string("new")}});
 
   ASSERT_EQ(exec.calls.size(), 1);
-  EXPECT_EQ(exec.calls[0].target, target);
-  EXPECT_EQ(exec.calls[0].arguments, (std::vector<FrameAction::Argument>{7}));
+  EXPECT_EQ(std::get<CmdTarget>(exec.calls[0].request.target), target);
+  EXPECT_EQ(exec.calls[0].request.integers, (std::vector<int>{7}));
   EXPECT_TRUE(exec.calls[0].end_action);
   EXPECT_EQ(exec.calls[0].time, 10);
-  EXPECT_EQ(action.action->target, replacement);
-  EXPECT_EQ(action.action->arguments,
-            (std::vector<FrameAction::Argument>{std::string("new")}));
+  EXPECT_EQ(std::get<CmdTarget>(action.action->call.target), replacement);
+  EXPECT_EQ(action.action->call.strings, (std::vector<std::string>{"new"}));
   EXPECT_EQ(action.action->end_time, 20);
   EXPECT_EQ(action.action->counter->Get(), 0);
   EXPECT_FALSE(action.action->end_action);
@@ -153,22 +169,23 @@ TEST_F(FrameActionManagerTest,
 
 TEST_F(FrameActionManagerTest, FailedRestartDoesNotInstallReplacement) {
   // Fail the old final call during restart; leave the slot reset, not replaced.
-  manager.Start(action, 10, false, target, {});
-  exec.on_exec = [](const ActionReference&, FrameAction::Target) {
+  manager.Start(action, 10, false, ScriptCall{.target = target});
+  exec.on_exec = [](const ActionReference&, ScriptCall) {
     throw std::runtime_error("execution failed");
   };
 
   EXPECT_THROW(
-      manager.Start(action, 20, false, (FrameAction::Target{3, 9}), {}),
+      manager.Start(action, 20, false, ScriptCall{.target = (CmdTarget{3, 9})}),
       std::runtime_error);
   ASSERT_EQ(exec.calls.size(), 1);
-  EXPECT_EQ(exec.calls[0].target, target);
+  EXPECT_EQ(std::get<CmdTarget>(exec.calls[0].request.target), target);
   ExpectReset(*action.action);
 }
 
 TEST_F(FrameActionManagerTest, EndFinalizesOnceAndResetsRetainedState) {
   // End a running action twice; expose final state once and retain its counter.
-  manager.Start(action, 10, false, target, {7});
+  manager.Start(action, 10, false,
+                ScriptCall{.target = target, .integers = {7}});
   auto counter = action.action->counter;
   counter->Set(20);
   manager.End(action);
@@ -177,8 +194,8 @@ TEST_F(FrameActionManagerTest, EndFinalizesOnceAndResetsRetainedState) {
   ASSERT_EQ(exec.calls.size(), 1);
   const auto& call = exec.calls[0];
   EXPECT_EQ(call.reference.action, action.action);
-  EXPECT_EQ(call.target, target);
-  EXPECT_EQ(call.arguments, (std::vector<FrameAction::Argument>{7}));
+  EXPECT_EQ(std::get<CmdTarget>(call.request.target), target);
+  EXPECT_EQ(call.request.integers, (std::vector<int>{7}));
   EXPECT_FALSE(call.active);
   EXPECT_TRUE(call.end_action);
   EXPECT_EQ(call.time, 10);
@@ -188,7 +205,7 @@ TEST_F(FrameActionManagerTest, EndFinalizesOnceAndResetsRetainedState) {
 
 TEST_F(FrameActionManagerTest, EndClampsIndefiniteDurationToZero) {
   // Explicitly end an indefinite action; the final counter value must be zero.
-  manager.Start(action, -1, false, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
   action.action->counter->Set(30);
   manager.End(action);
   ASSERT_EQ(exec.calls.size(), 1);
@@ -197,7 +214,7 @@ TEST_F(FrameActionManagerTest, EndClampsIndefiniteDurationToZero) {
 
 TEST_F(FrameActionManagerTest, EndInactiveActionResetsWithoutExecuting) {
   // End a slot with only stale state; clear it without invoking exec.
-  action.action->arguments = {7};
+  action.action->call.integers = {7};
   action.action->end_time = 12;
   action.action->end_action = true;
   action.action->GetCounter()->StartGame();
@@ -209,8 +226,9 @@ TEST_F(FrameActionManagerTest, EndInactiveActionResetsWithoutExecuting) {
 
 TEST_F(FrameActionManagerTest, FinalExecutionFailureStillResetsAction) {
   // Throw from final execution; propagate the error after clearing all state.
-  manager.Start(action, 10, false, target, {7});
-  exec.on_exec = [](const ActionReference&, FrameAction::Target) {
+  manager.Start(action, 10, false,
+                ScriptCall{.target = target, .integers = {7}});
+  exec.on_exec = [](const ActionReference&, ScriptCall) {
     throw std::runtime_error("execution failed");
   };
   EXPECT_THROW(manager.End(action), std::runtime_error);
@@ -220,9 +238,10 @@ TEST_F(FrameActionManagerTest, FinalExecutionFailureStillResetsAction) {
 TEST_F(FrameActionManagerTest, FinalCallbackCannotKeepReplacementInSameSlot) {
   // Start a replacement from the final callback; final cleanup clears that
   // slot.
-  manager.Start(action, 10, false, target, {});
-  exec.on_exec = [this](const ActionReference& reference, FrameAction::Target) {
-    manager.Start(reference, -1, false, {3, 9}, {7});
+  manager.Start(action, 10, false, ScriptCall{.target = target});
+  exec.on_exec = [this](const ActionReference& reference, ScriptCall) {
+    manager.Start(reference, -1, false,
+                  ScriptCall{.target = CmdTarget{3, 9}, .integers = {7}});
   };
   manager.End(action);
   ASSERT_EQ(exec.calls.size(), 1);
@@ -231,13 +250,14 @@ TEST_F(FrameActionManagerTest, FinalCallbackCannotKeepReplacementInSameSlot) {
 
 TEST_F(FrameActionManagerTest, DispatchFailureLeavesActionActive) {
   // Throw from a regular callback; propagate the error without finalizing.
-  manager.Start(action, -1, false, target, {7});
-  exec.on_exec = [](const ActionReference&, FrameAction::Target) {
+  manager.Start(action, -1, false,
+                ScriptCall{.target = target, .integers = {7}});
+  exec.on_exec = [](const ActionReference&, ScriptCall) {
     throw std::runtime_error("execution failed");
   };
   EXPECT_THROW(manager.AdvanceAndDispatch(3ms, 20ms), std::runtime_error);
-  EXPECT_EQ(action.action->target, target);
-  EXPECT_EQ(action.action->arguments, (std::vector<FrameAction::Argument>{7}));
+  EXPECT_EQ(std::get<CmdTarget>(action.action->call.target), target);
+  EXPECT_EQ(action.action->call.integers, (std::vector<int>{7}));
   EXPECT_EQ(action.action->counter->Get(), 20);
   EXPECT_FALSE(action.action->end_action);
 }
@@ -246,15 +266,16 @@ TEST_F(FrameActionManagerTest, DispatchVisitsGlobalThenChannelsWithoutOwners) {
   // Start the global and two channels; dispatch them in order with no owner.
   const std::vector<ActionReference> references{action, Channel(0), Channel(1)};
   for (const auto& reference : references)
-    manager.Start(reference, -1, false, target, {7});
+    manager.Start(reference, -1, false,
+                  ScriptCall{.target = target, .integers = {7}});
   manager.AdvanceAndDispatch(1ms, 2ms);
 
   ASSERT_EQ(exec.calls.size(), references.size());
   for (std::size_t i = 0; i < references.size(); ++i) {
     EXPECT_EQ(exec.calls[i].reference.action, references[i].action);
     EXPECT_EQ(exec.calls[i].reference.owner, nullptr);
-    EXPECT_EQ(exec.calls[i].target, target);
-    EXPECT_EQ(exec.calls[i].arguments, (std::vector<FrameAction::Argument>{7}));
+    EXPECT_EQ(std::get<CmdTarget>(exec.calls[i].request.target), target);
+    EXPECT_EQ(exec.calls[i].request.integers, (std::vector<int>{7}));
     EXPECT_TRUE(exec.calls[i].active);
     EXPECT_FALSE(exec.calls[i].end_action);
   }
@@ -276,7 +297,7 @@ TEST_F(FrameActionManagerTest, DispatchVisitsObjectChannelsAndChildrenByLayer) {
     references.push_back({child->GetFrameAction(), child});
   }
   for (const auto& reference : references)
-    manager.Start(reference, -1, false, target, {});
+    manager.Start(reference, -1, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(1ms, 2ms);
 
   ASSERT_EQ(exec.calls.size(), references.size());
@@ -292,8 +313,8 @@ TEST_F(FrameActionManagerTest, AdvancesAllCountersBeforeFirstCallback) {
   auto channel = Channel();
   auto object = Object();
   for (const auto& reference : {action, channel, object})
-    manager.Start(reference, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference&, FrameAction::Target) {
+    manager.Start(reference, -1, false, ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference&, ScriptCall) {
     EXPECT_EQ(channel.action->counter->Get(), 20);
     EXPECT_EQ(object.action->counter->Get(), 20);
   };
@@ -314,8 +335,8 @@ TEST_F(FrameActionManagerTest, AdvancesCounterWithoutActiveAction) {
 TEST_F(FrameActionManagerTest, NegativeDeltasDoNotAdvanceActions) {
   // Advance game and real actions with negative deltas; both remain at zero.
   auto channel = Channel();
-  manager.Start(action, -1, false, target, {});
-  manager.Start(channel, -1, true, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  manager.Start(channel, -1, true, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(-3ms, -20ms);
   ASSERT_EQ(exec.calls.size(), 2);
   EXPECT_EQ(exec.calls[0].time, 0);
@@ -326,8 +347,8 @@ TEST_F(FrameActionManagerTest, TimeStopFreezesAllClocksButStillDispatches) {
   // Stop global time with both kinds of action active; execute without
   // advancing.
   auto object = Object();
-  manager.Start(action, -1, false, target, {});
-  manager.Start(object, -1, true, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  manager.Start(object, -1, true, ScriptCall{.target = target});
   config.time_stop = true;
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 2);
@@ -341,7 +362,7 @@ TEST_F(FrameActionManagerTest, FrameActionStopAffectsOnlyGlobalClocks) {
   auto channel = Channel();
   auto object = Object();
   for (const auto& reference : {action, channel, object})
-    manager.Start(reference, -1, false, target, {});
+    manager.Start(reference, -1, false, ScriptCall{.target = target});
   config.frame_action_time_stop = true;
   manager.AdvanceAndDispatch(3ms, 20ms);
   EXPECT_EQ(action.action->counter->Get(), 0);
@@ -359,8 +380,8 @@ TEST_F(FrameActionManagerTest, FrameActionStopAffectsOnlyGlobalClocks) {
 TEST_F(FrameActionManagerTest, StageStopAffectsOnlyObjectClocks) {
   // Replace the live configuration after stage stop; objects must resume too.
   auto object = Object();
-  manager.Start(action, -1, false, target, {});
-  manager.Start(object, -1, false, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  manager.Start(object, -1, false, ScriptCall{.target = target});
   config.stage_time_stop = true;
   manager.AdvanceAndDispatch(3ms, 20ms);
   EXPECT_EQ(action.action->counter->Get(), 20);
@@ -377,7 +398,7 @@ TEST_F(FrameActionManagerTest,
        ExpirationDispatchesNormallyBeforeFinalizingOnce) {
   // Overshoot a duration; observe regular elapsed time, then a clamped final
   // call.
-  manager.Start(action, 10, false, target, {});
+  manager.Start(action, 10, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 2);
@@ -390,7 +411,7 @@ TEST_F(FrameActionManagerTest,
 
 TEST_F(FrameActionManagerTest, ZeroDurationFinalizesOnFirstDispatch) {
   // Dispatch a zero-duration action without elapsed time; finalize immediately.
-  manager.Start(action, 0, false, target, {});
+  manager.Start(action, 0, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(0ms, 0ms);
   ASSERT_EQ(exec.calls.size(), 2);
   EXPECT_FALSE(exec.calls[0].end_action);
@@ -402,7 +423,7 @@ TEST_F(FrameActionManagerTest, ZeroDurationFinalizesOnFirstDispatch) {
 TEST_F(FrameActionManagerTest, IndefiniteActionDoesNotExpire) {
   // Advance an indefinite action repeatedly; it keeps dispatching regular
   // calls.
-  manager.Start(action, -1, false, target, {});
+  manager.Start(action, -1, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 2);
@@ -415,7 +436,7 @@ TEST_F(FrameActionManagerTest, BackgroundActionDoesNotExpire) {
   // Exceed a background action's duration; it remains active after regular
   // calls.
   auto object = Object(kLayerBg);
-  manager.Start(object, 1, false, target, {});
+  manager.Start(object, 1, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 1);
   EXPECT_FALSE(exec.calls[0].end_action);
@@ -427,7 +448,7 @@ TEST_F(FrameActionManagerTest, NextLayerActionExpires) {
   // Exceed a next-layer action's duration; it receives its final call and
   // resets.
   auto object = Object(kLayerNext);
-  manager.Start(object, 1, false, target, {});
+  manager.Start(object, 1, false, ScriptCall{.target = target});
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 2);
   EXPECT_TRUE(exec.calls[1].end_action);
@@ -439,7 +460,8 @@ TEST_F(FrameActionManagerTest, CancelGlobalsPreservesChannelsAndObjectActions) {
   auto channel = Channel();
   auto object = Object();
   for (const auto& reference : {action, channel, object})
-    manager.Start(reference, -1, false, target, {7});
+    manager.Start(reference, -1, false,
+                  ScriptCall{.target = target, .integers = {7}});
   auto counter = channel.action->counter;
   manager.CancelGlobals();
   EXPECT_TRUE(exec.calls.empty());
@@ -450,8 +472,8 @@ TEST_F(FrameActionManagerTest, CancelGlobalsPreservesChannelsAndObjectActions) {
   EXPECT_EQ(manager.global_channels()[0], channel.action);
   EXPECT_EQ(channel.action->counter, counter);
   EXPECT_EQ(manager.global_channels()[1], nullptr);
-  EXPECT_EQ(object.action->target, target);
-  EXPECT_EQ(object.action->arguments, (std::vector<FrameAction::Argument>{7}));
+  EXPECT_EQ(std::get<CmdTarget>(object.action->call.target), target);
+  EXPECT_EQ(object.action->call.integers, (std::vector<int>{7}));
   EXPECT_TRUE(object.action->counter->IsActive());
 }
 
@@ -460,10 +482,10 @@ TEST_F(FrameActionManagerTest,
   // Start a channel from the global callback; its first dispatch sees zero
   // time.
   auto channel = Channel();
-  manager.Start(action, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference& reference, FrameAction::Target) {
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference& reference, ScriptCall) {
     if (reference.action == action.action)
-      manager.Start(channel, -1, false, target, {});
+      manager.Start(channel, -1, false, ScriptCall{.target = target});
   };
   manager.AdvanceAndDispatch(3ms, 20ms);
   ASSERT_EQ(exec.calls.size(), 2);
@@ -476,9 +498,9 @@ TEST_F(FrameActionManagerTest, DispatchRetainsGlobalChannelsDuringCallback) {
   // Remove channels from the global callback; the dispatch snapshot retains
   // them.
   auto channel = Channel();
-  manager.Start(action, -1, false, target, {});
-  manager.Start(channel, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference& reference, FrameAction::Target) {
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  manager.Start(channel, -1, false, ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference& reference, ScriptCall) {
     if (reference.action == action.action)
       manager.global_channels().clear();
   };
@@ -490,9 +512,9 @@ TEST_F(FrameActionManagerTest, DispatchRetainsGlobalChannelsDuringCallback) {
 TEST_F(FrameActionManagerTest, DispatchRetainsStageRootsDuringCallback) {
   // Delete stage objects from a global callback; retained roots still dispatch.
   auto object = Object();
-  manager.Start(action, -1, false, target, {});
-  manager.Start(object, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference& reference, FrameAction::Target) {
+  manager.Start(action, -1, false, ScriptCall{.target = target});
+  manager.Start(object, -1, false, ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference& reference, ScriptCall) {
     if (reference.action == action.action)
       stage.objects.Clear();
   };
@@ -507,9 +529,10 @@ TEST_F(FrameActionManagerTest, DispatchRetainsObjectChannelsDuringCallback) {
   object.owner->frame_action_list_.resize(2);
   auto first = object.owner->GetFrameAction(0);
   auto second = object.owner->GetFrameAction(1);
-  manager.Start({first, object.owner}, -1, false, target, {});
-  manager.Start({second, object.owner}, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference&, FrameAction::Target) {
+  manager.Start({first, object.owner}, -1, false, ScriptCall{.target = target});
+  manager.Start({second, object.owner}, -1, false,
+                ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference&, ScriptCall) {
     object.owner->frame_action_list_.clear();
   };
   manager.AdvanceAndDispatch(3ms, 20ms);
@@ -527,9 +550,11 @@ TEST_F(FrameActionManagerTest, DispatchRetainsChildrenDuringCallback) {
   object.owner->TouchChild(1);
   auto first = object.owner->GetChildren()[0];
   auto second = object.owner->GetChildren()[1];
-  manager.Start({first->GetFrameAction(), first}, -1, false, target, {});
-  manager.Start({second->GetFrameAction(), second}, -1, false, target, {});
-  exec.on_exec = [&](const ActionReference&, FrameAction::Target) {
+  manager.Start({first->GetFrameAction(), first}, -1, false,
+                ScriptCall{.target = target});
+  manager.Start({second->GetFrameAction(), second}, -1, false,
+                ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference&, ScriptCall) {
     object.owner->GetChildren().clear();
   };
   manager.AdvanceAndDispatch(3ms, 20ms);
@@ -540,7 +565,8 @@ TEST_F(FrameActionManagerTest, DispatchRetainsChildrenDuringCallback) {
 
 TEST_F(FrameActionManagerTest, StartRejectsNullAction) {
   // Start an empty reference; reject it before invoking execution.
-  EXPECT_THROW(manager.Start({}, 10, false, target, {}), std::invalid_argument);
+  EXPECT_THROW(manager.Start({}, 10, false, ScriptCall{.target = target}),
+               std::invalid_argument);
   EXPECT_TRUE(exec.calls.empty());
 }
 

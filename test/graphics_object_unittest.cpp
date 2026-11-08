@@ -116,7 +116,7 @@ TEST_F(GraphicsObjectTest, MoveTransfersFilePath) {
 TEST_F(GraphicsObjectTest, ButtonCloneCopiesParameters) {
   obj.Param().button.config = MwndConfig::Button{};
   obj.Param().button.config->slot_id = 2;
-  obj.Param().button.call = FrameAction::Target{2, 7};
+  obj.Param().button.call = CmdTarget{2, 7};
   obj.Param().button.hit_state = ButtonState::Push;
   obj.Param().button.real_state = ButtonState::Disable;
   obj.Param().button.visible = false;
@@ -125,7 +125,7 @@ TEST_F(GraphicsObjectTest, ButtonCloneCopiesParameters) {
 
   ASSERT_TRUE(clone.Param().button.config);
   EXPECT_EQ(clone.Param().button.config->slot_id, 2);
-  EXPECT_EQ(clone.Param().button.call, (FrameAction::Target{2, 7}));
+  EXPECT_EQ(clone.Param().button.call, (CmdTarget{2, 7}));
   EXPECT_EQ(clone.Param().button, obj.Param().button);
   EXPECT_EQ(clone.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(clone.Param().button.real_state, ButtonState::Disable);
@@ -138,7 +138,7 @@ TEST_F(GraphicsObjectTest, ButtonCloneCopiesParameters) {
 TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
   obj.Param().button.config = MwndConfig::Button{};
   obj.Param().button.config->slot_id = 2;
-  obj.Param().button.call = FrameAction::Target{2, 7};
+  obj.Param().button.call = CmdTarget{2, 7};
   obj.Param().button.hit_state = ButtonState::Push;
   obj.Param().button.real_state = ButtonState::Disable;
   obj.Param().button.visible = false;
@@ -147,7 +147,7 @@ TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
 
   ASSERT_TRUE(moved.Param().button.config);
   EXPECT_EQ(moved.Param().button.config->slot_id, 2);
-  EXPECT_EQ(moved.Param().button.call, (FrameAction::Target{2, 7}));
+  EXPECT_EQ(moved.Param().button.call, (CmdTarget{2, 7}));
   EXPECT_EQ(moved.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(moved.Param().button.real_state, ButtonState::Disable);
   EXPECT_FALSE(moved.Param().button.visible);
@@ -163,7 +163,7 @@ TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
 
   ASSERT_TRUE(assigned.Param().button.config);
   EXPECT_EQ(assigned.Param().button.config->slot_id, 2);
-  EXPECT_EQ(assigned.Param().button.call, (FrameAction::Target{2, 7}));
+  EXPECT_EQ(assigned.Param().button.call, (CmdTarget{2, 7}));
   EXPECT_EQ(assigned.Param().button.hit_state, ButtonState::Push);
   EXPECT_EQ(assigned.Param().button.real_state, ButtonState::Disable);
   EXPECT_FALSE(assigned.Param().button.visible);
@@ -177,7 +177,7 @@ TEST_F(GraphicsObjectTest, ButtonMovesTransferParametersAndResetSource) {
 
 TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
   obj.Param().button.config = MwndConfig::Button{};
-  obj.Param().button.call = FrameAction::Target{2, 7};
+  obj.Param().button.call = CmdTarget{2, 7};
   obj.Param().button.hit_state = ButtonState::Push;
   obj.Param().button.real_state = ButtonState::Disable;
   obj.Param().button.visible = false;
@@ -192,7 +192,7 @@ TEST_F(GraphicsObjectTest, ButtonResetRestoresDefaultParameters) {
   EXPECT_EQ(obj.Param().button, ButtonProperties{});
 
   obj.Param().button.config = MwndConfig::Button{};
-  obj.Param().button.call = FrameAction::Target{2, 7};
+  obj.Param().button.call = CmdTarget{2, 7};
   obj.Reset();
   EXPECT_FALSE(obj.Param().button.config);
   EXPECT_EQ(obj.Param().button.call, std::nullopt);
@@ -203,17 +203,20 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   EXPECT_EQ(obj.frame_action_, nullptr);
   EXPECT_EQ(obj.frame_action_list_.size(), 0u);
   // Clone and move active targets while preserving independent clone counters.
-  const FrameAction::Target target{1, 5};
+  const CmdTarget target{1, 5};
   auto action = obj.GetFrameAction();
-  action->target = target;
-  action->arguments = {12, std::string("original")};
+  action->call.target = target;
+  action->active = true;
+  action->call.integers = {12};
+  action->call.strings = {"original"};
   action->end_time = 100;
   action->end_action = true;
   action->GetCounter()->StartGame();
   action->counter->Advance(37ms, 37ms);
   obj.frame_action_list_.resize(2);
   auto channel = obj.GetFrameAction(0);
-  channel->target = target;
+  channel->call.target = target;
+  channel->active = true;
   channel->end_action = true;
   channel->GetCounter()->Set(7);
   std::weak_ptr<Counter> counter = action->counter;
@@ -223,27 +226,29 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   auto copied = clone.GetFrameAction();
   EXPECT_NE(copied, action);
   EXPECT_NE(copied->counter, action->counter);
-  EXPECT_EQ(copied->target, target);
-  EXPECT_EQ(copied->arguments, action->arguments);
+  EXPECT_EQ(std::get<CmdTarget>(copied->call.target), target);
+  EXPECT_EQ(copied->call, action->call);
+  EXPECT_TRUE(copied->IsActive());
   EXPECT_EQ(copied->end_time, 100);
   EXPECT_FALSE(copied->end_action);
   ASSERT_EQ(clone.frame_action_list_.size(), 2u);
   EXPECT_NE(clone.frame_action_list_[0]->counter, channel->counter);
-  EXPECT_EQ(clone.frame_action_list_[0]->target, target);
+  EXPECT_EQ(std::get<CmdTarget>(clone.frame_action_list_[0]->call.target),
+            target);
   EXPECT_EQ(clone.frame_action_list_[0]->counter->Get(), 7);
   EXPECT_FALSE(clone.frame_action_list_[0]->end_action);
   EXPECT_EQ(clone.frame_action_list_[1], nullptr);
 
   copied->counter->Advance(3ms, 3ms);
-  copied->arguments[1] = std::string("copy");
+  copied->call.strings[0] = "copy";
   EXPECT_EQ(copied->counter->Get(), 40);
   EXPECT_EQ(action->counter->Get(), 37);
-  EXPECT_EQ(std::get<std::string>(action->arguments[1]), "original");
+  EXPECT_EQ(action->call.strings[0], "original");
 
   GraphicsObject moved = std::move(obj);
   EXPECT_EQ(moved.frame_action_, action);
   EXPECT_EQ(moved.frame_action_list_[0], channel);
-  EXPECT_EQ(moved.GetFrameAction()->target, target);
+  EXPECT_EQ(std::get<CmdTarget>(moved.GetFrameAction()->call.target), target);
   EXPECT_EQ(moved.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(moved.GetFrameAction()->counter->Get(), 37);
   EXPECT_TRUE(moved.GetFrameAction()->end_action);
@@ -258,7 +263,8 @@ TEST_F(GraphicsObjectTest, FrameActionsMoveAndCloneWithIndependentCounters) {
   assigned = std::move(moved);
   EXPECT_EQ(assigned.frame_action_, action);
   EXPECT_EQ(assigned.frame_action_list_[0], channel);
-  EXPECT_EQ(assigned.GetFrameAction()->target, target);
+  EXPECT_EQ(std::get<CmdTarget>(assigned.GetFrameAction()->call.target),
+            target);
   EXPECT_EQ(assigned.GetFrameAction()->counter, counter.lock());
   EXPECT_EQ(assigned.GetFrameAction()->end_time, 100);
   ASSERT_EQ(assigned.frame_action_list_.size(), 2u);
@@ -274,15 +280,51 @@ TEST_F(GraphicsObjectTest, FrameActionMoveTransfersTarget) {
   // Move an active action twice; each destination owns the selected target
   // and each source becomes inactive.
   FrameAction source;
-  const FrameAction::Target target{3, 7};
-  source.target = target;
+  const CmdTarget target{3, 7};
+  source.call.target = target;
+  source.call.integers = {12};
+  source.call.strings = {"saved"};
+  source.active = true;
   FrameAction moved(std::move(source));
-  EXPECT_EQ(moved.target, target);
+  EXPECT_EQ(std::get<CmdTarget>(moved.call.target), target);
+  EXPECT_TRUE(moved.IsActive());
+  EXPECT_EQ(moved.call.integers, (std::vector<int>{12}));
+  EXPECT_EQ(moved.call.strings, (std::vector<std::string>{"saved"}));
   EXPECT_FALSE(source.IsActive());
+  EXPECT_EQ(source.call, ScriptCall{});
   FrameAction assigned;
   assigned = std::move(moved);
-  EXPECT_EQ(assigned.target, target);
+  EXPECT_EQ(std::get<CmdTarget>(assigned.call.target), target);
+  EXPECT_TRUE(assigned.IsActive());
+  EXPECT_EQ(assigned.call.integers, (std::vector<int>{12}));
+  EXPECT_EQ(assigned.call.strings, (std::vector<std::string>{"saved"}));
   EXPECT_FALSE(moved.IsActive());
+  EXPECT_EQ(moved.call, ScriptCall{});
+}
+
+TEST_F(GraphicsObjectTest, FrameActionCopyAssignmentRetainsIndependentState) {
+  // Assign an active call; copy its payload and counter without its final flag.
+  FrameAction source;
+  source.call = ScriptCall{
+      .target = CmdTarget{3, 7}, .integers = {12}, .strings = {"source"}};
+  source.active = true;
+  source.end_action = true;
+  source.GetCounter()->Set(37);
+  FrameAction assigned;
+  auto retained_counter = assigned.GetCounter();
+
+  assigned = source;
+
+  EXPECT_TRUE(assigned.IsActive());
+  EXPECT_EQ(assigned.call, source.call);
+  EXPECT_FALSE(assigned.end_action);
+  EXPECT_EQ(assigned.counter, retained_counter);
+  EXPECT_NE(assigned.counter, source.counter);
+  EXPECT_EQ(assigned.counter->Get(), 37);
+  assigned.call.strings[0] = "copy";
+  assigned.counter->Set(41);
+  EXPECT_EQ(source.call.strings[0], "source");
+  EXPECT_EQ(source.counter->Get(), 37);
 }
 
 TEST_F(GraphicsObjectTest, CloneCopiesChildrenDeeply) {

@@ -164,8 +164,9 @@ TEST_F(SiglusObjectStringTest, FrameActionCallbackReceivesBoundOwner) {
     machine.vm->CollectGarbage();
   };
   auto child = Object().GetChildren()[0];
-  runtime.frame_action_manager->Start({child->GetFrameAction(), child}, -1,
-                                      false, {scene_id, 5}, {});
+  runtime.frame_action_manager->Start(
+      {child->GetFrameAction(), child}, -1, false,
+      ScriptCall{.target = CmdTarget{scene_id, 5}});
   runtime.frame_action_manager->AdvanceAndDispatch(
       std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 

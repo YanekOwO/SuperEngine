@@ -183,6 +183,10 @@ expected<AllocationPlan, std::string> resolve_fast_slots(
     void operator()(const elm::Usrcmd& t) { invoke(t.arguments); }
     void operator()(const elm::Usrprop&) {}
     void operator()(const elm::Arg&) {}
+    void operator()(const elm::Jump& t) {
+      (*this)(t.scene);
+      (*this)(t.zlabel);
+    }
     void operator()(const elm::Farcall& t) {
       (*this)(t.scn_name);
       (*this)(t.zlabel);
@@ -350,6 +354,8 @@ void Recompiler::SetSceneProperties(int scene_id,
 }
 
 void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
+  // The allocator reserves slot 0 for the callable. Make room for entry
+  // and arguments before the scene's argument and temporary slots.
   constexpr unsigned shift = kSceneArgumentSlot - 1;
   if (auto plan = resolve_fast_slots(tokens)) {
     const unsigned count = plan->total_fast_locals + shift;
@@ -361,7 +367,6 @@ void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
     cur_chunk_->fast_locals[0] = "fn";
     cur_chunk_->fast_locals[1] = "entry";
     cur_chunk_->fast_locals[2] = "arguments";
-    cur_chunk_->fast_locals[3] = "owns_bank";
     tvar_slots_ = std::move(plan->slots);
     for (auto& slot : tvar_slots_)
       if (slot != std::numeric_limits<uint16_t>::max())
@@ -370,6 +375,8 @@ void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
     throw std::runtime_error(plan.error());
   }
 
+  // Collect entry metadata before code generation so forward references can
+  // resolve labels and user commands throughout the scene.
   if (!tokens.empty())
     main_line_ = tokens.front().line;
   for (const auto& tok : tokens) {
@@ -390,15 +397,16 @@ void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
     }
   }
 
-  emit_const_nil();
-  emit(sr::StoreFast{kSceneOwnedBankSlot});
-  handler_site_ = code_size();
-  emit(sr::TryBegin{0});
+  // All entries share argument binding, while each caller owns its bank setup
+  // and cleanup. This prologue leaves the current L/K banks intact.
   emit_load_global("__builtin_init_call");
   emit(sr::LoadFast{1});
   emit(sr::LoadFast{2});
   emit(sr::Call{.argcnt = 2});
-  emit(sr::StoreFast{kSceneOwnedBankSlot});
+  emit(sr::Pop{});
+
+  // entry[0] is a Siglus token line. Goto resolves it through the line offsets
+  // recorded by Gen, including labels that emit no instructions themselves.
   emit(sr::LoadFast{1});
   emit_const(0);
   emit(sr::GetItem{});
@@ -406,6 +414,9 @@ void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
 
   for (const Parser::ParsedToken& tok : tokens)
     Gen(tok.token, tok.line);
+
+  // Append the return epilogue and bootstrap that publishes %%dispatch and
+  // initializes scene properties when the module is loaded.
   Finish();
 }
 
@@ -599,6 +610,13 @@ void Recompiler::Gen(token::Token_t tok, int lineno) {
           values(t.strargs);
           str(")");
         }
+        void operator()(const elm::Jump& t) {
+          str("jump(");
+          (*this)(t.scene);
+          str(",");
+          (*this)(t.zlabel);
+          str(")");
+        }
 
         void operator()(const elm::Node& n) { std::visit(*this, n.var); }
         void operator()(const elm::Member& t) {
@@ -672,23 +690,7 @@ void Recompiler::Finish() {
   const auto return_entry = code_size();
   for (auto site : return_sites_)
     patch(site, return_entry);
-  emit(sr::TryEnd{});
-
-  const auto cleanup = [this] {
-    emit(sr::LoadFast{kSceneOwnedBankSlot});
-    const auto skip = code_size();
-    emit(sr::JumpIfFalse{0});
-    emit_load_global("__builtin_pop_frame");
-    emit(sr::LoadFast{1});
-    emit(sr::Call{.argcnt = 1});
-    emit(sr::Pop{});
-    patch(skip, code_size());
-  };
-  cleanup();
   emit(sr::Return{});
-  patch(handler_site_, code_size());
-  cleanup();
-  emit(sr::Throw{});
 
   patch(initial_jump_site_, code_size());
   emit_current_chunk();
@@ -707,6 +709,27 @@ void Recompiler::Finish() {
 }
 
 void Recompiler::emit_current_chunk() { emit(sr::Push{0}); }
+
+void Recompiler::emit_banked_call(uint32_t argument_count) {
+  // Install the handler only after bank acquisition succeeds. Cleanup calls
+  // leave the callee's result or the caught exception beneath their nil result.
+  const auto handler = code_size();
+  emit(sr::TryBegin{0});
+  emit(sr::Call{.argcnt = argument_count});
+  emit(sr::TryEnd{});
+  const auto pop_banks = [this] {
+    emit_load_global("__builtin_pop_frame");
+    emit(sr::Call{.argcnt = 0});
+    emit(sr::Pop{});
+  };
+  pop_banks();
+  const auto done = code_size();
+  emit(sr::Jump{0});
+  patch(handler, code_size());
+  pop_banks();
+  emit(sr::Throw{});
+  patch(done, code_size());
+}
 
 uint32_t Recompiler::constant(sr::Value v) {
   if (!cur_chunk_)
@@ -872,7 +895,8 @@ void Recompiler::emit_tok(const token::Command& tk) {
   }
 
   emit_elm(tk.chain);
-  emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
+  if (!std::holds_alternative<elm::Jump>(tk.chain.root.var))
+    emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }
 void Recompiler::emit_tok(const token::Name& tk) {
   emit_load_global("__builtin_name");
@@ -940,8 +964,7 @@ void Recompiler::emit_tok(const token::Gosub& tk) {
   emit_load_global("%%dispatch");
   emit_const(label_lines_.at(tk.entry_id));
   emit_const(static_cast<int>(tk.args.size()));
-  emit_const(static_cast<int>(SceneCallKind::Gosub));
-  emit(sr::MakeList{.nelms = 3});
+  emit(sr::MakeList{.nelms = 2});
   for (const auto& arg : tk.args)
     emit_val(arg);
   emit(sr::Call{.argcnt = static_cast<uint32_t>(tk.args.size() + 1)});
@@ -976,6 +999,9 @@ void Recompiler::emit_tok(const token::Eof& tk) { Finish(); }
 
 // element codegen
 void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
+  if (std::holds_alternative<elm::Jump>(e.root.var) &&
+      (assign || !e.nodes.empty()))
+    throw std::runtime_error("jump must be a terminal element");
   if (e.nodes.empty() && std::holds_alternative<std::monostate>(e.root.var)) {
     emit_const("unsupported Siglus element access chain");
     emit(sr::Throw{});
@@ -1070,7 +1096,14 @@ void Recompiler::emit_elm_root(const elm::Usrcmd& r) {
     return;
   }
 
-  emit(sr::Call{.argcnt = arg.arg.size(), .kwargcnt = 0});
+  // Arguments must observe the caller's banks before the command acquires
+  // empty ones. The native push leaves the callable and arguments in place.
+  emit_load_global("__builtin_push_frame");
+  emit(sr::MakeList{.nelms = 0});
+  emit(sr::MakeList{.nelms = 0});
+  emit(sr::Call{.argcnt = 2});
+  emit(sr::Pop{});
+  emit_banked_call(arg.arg.size());
   // (usrcmd, args...) -> (ret)
 }
 void Recompiler::emit_elm_root(const elm::Usrprop& r) {
@@ -1085,20 +1118,56 @@ void Recompiler::emit_elm_root(const elm::Arg& r) {
   // (arg_i) or (var_i)
 }
 void Recompiler::emit_elm_root(const elm::Farcall& r) {
-  emit_load_global(r.extended ? "__builtin_excall" : "__builtin_farcall");
-  emit_val(r.scn_name), emit_val(r.zlabel);
-  if (!r.extended)
+  auto emit_farcall = [&] {
+    emit_load_global("__builtin_scene_entry");
+    emit_val(r.scn_name), emit_val(r.zlabel);
     emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
+    // (__scn_entry, scn_name, zlabel) -> (fn)
 
-  for (auto const& it : r.intargs)
-    emit_val(it);
-  emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.intargs.size())});
-  for (auto const& it : r.strargs)
-    emit_val(it);
-  emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.strargs.size())});
-  emit(sr::Call{.argcnt = static_cast<uint8_t>(r.extended ? 4 : 2)});
-  if (r.extended)
+    emit_load_global("__builtin_push_frame");
+    for (auto const& it : r.intargs)
+      emit_val(it);
+    emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.intargs.size())});
+    for (auto const& it : r.strargs)
+      emit_val(it);
+    emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.strargs.size())});
+    emit(sr::Call{.argcnt = static_cast<uint8_t>(2)});
+    // (fn, __push_frame, iargs, sargs) -> (fn, nil)
+
+    emit(sr::Pop{});
+    // ->(fn)
+    emit_banked_call(0);
+  };
+  auto emit_excall = [&] {
+    emit_load_global("__builtin_excall");
+    emit_val(r.scn_name), emit_val(r.zlabel);
+    for (auto const& it : r.intargs)
+      emit_val(it);
+    emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.intargs.size())});
+    for (auto const& it : r.strargs)
+      emit_val(it);
+    emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.strargs.size())});
+    emit(sr::Call{.argcnt = static_cast<uint8_t>(4)});
+    // (__excall, scn_name, zlabel, iargs, sargs) -> (fut)
     emit(sr::Await{});
+  };
+
+  if (r.extended)
+    emit_excall();
+  else
+    emit_farcall();
+}
+
+void Recompiler::emit_elm_root(const elm::Jump& r) {
+  emit_load_global("__builtin_scene_entry");
+  emit_val(r.scene);
+  emit_val(r.zlabel);
+  emit(sr::Call{.argcnt = 2});
+  // (scn_entry, scene, zlabel) -> (entry)
+
+  // The caller's bank guard survives while this dispatcher is replaced.
+  emit(sr::TailCall{});
+  // (entry) -> (ret)
 }
 
 void Recompiler::emit_elm_node(const elm::Member& nd) {

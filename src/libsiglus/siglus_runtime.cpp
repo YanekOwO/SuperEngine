@@ -30,6 +30,7 @@
 #include "core/kidoku_table.hpp"
 #include "core/mask.hpp"
 #include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/trace.hpp"
 #include "libsiglus/scene_entry.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
@@ -44,6 +45,7 @@
 #include "vm/list.hpp"
 #include "vm/promise.hpp"
 #include "vm/string.hpp"
+#include "vm/transfer_value.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
@@ -189,7 +191,7 @@ void SiglusRuntime::FreeExcall(bool finish_actions) {
 
 void SiglusRuntime::DispatchFrameAction(int owner,
                                         const ActionReference& reference,
-                                        FrameAction::Target target) {
+                                        ScriptCall call) {
   if (restart_)
     return;
   auto& slot = callbacks_[owner];
@@ -204,6 +206,15 @@ void SiglusRuntime::DispatchFrameAction(int owner,
   }
   auto& machine = *slot;
   auto& vm = *machine.vm;
+  const auto* target = std::get_if<CmdTarget>(&call.target);
+  if (!target)
+    throw sr::RuntimeError("frame-action callback requires a command target");
+  const auto types = machine.loader->GetUserCommandArgs(*target);
+  const std::size_t prefix = reference.owner ? 2 : 1;
+  if (types.size() < prefix || types[0] != Type::FrameAction ||
+      (reference.owner && types[1] != Type::Object)) {
+    throw sr::RuntimeError("frame-action command has incompatible signature");
+  }
   std::vector<sr::Value> arguments;
   arguments.emplace_back(owner
                              ? machine.make_owned_frame_action(reference, owner)
@@ -212,17 +223,27 @@ void SiglusRuntime::DispatchFrameAction(int owner,
     arguments.emplace_back(
         owner ? machine.make_owned_object(reference.owner, owner)
               : machine.make_object(reference.owner));
-  for (const auto& argument : reference.action->arguments) {
-    if (const int* value = std::get_if<int>(&argument))
-      arguments.emplace_back(*value);
-    else
+
+  std::size_t int_it = 0, str_it = 0;
+  for (const auto type : types.subspan(prefix)) {
+    if (type == Type::Int && int_it < call.integers.size()) {
+      arguments.emplace_back(call.integers[int_it++]);
+    } else if (type == Type::String && str_it < call.strings.size()) {
       arguments.emplace_back(
-          vm.gc_->Allocate<sr::String>(std::get<std::string>(argument)));
+          vm.gc_->Allocate<sr::String>(call.strings[str_it++]));
+    } else {
+      throw sr::RuntimeError(
+          "frame-action arguments do not match command signature");
+    }
   }
+  if (int_it != call.integers.size() || str_it != call.strings.size())
+    throw sr::RuntimeError(
+        "frame-action arguments do not match command signature");
+
   DriveMachine(machine, [&] {
-    binding::InvokeFrameAction(vm,
-                               machine.loader->ResolveUserCommandTarget(target),
-                               std::move(arguments));
+    binding::InvokeFrameAction(
+        vm, machine.loader->ResolveUserCommandTarget(*target),
+        std::move(arguments), binding::MakeCallMemory(*memory));
   });
 }
 
@@ -261,7 +282,7 @@ void SiglusRuntime::ResetLocalMemory() {
     cb();
 }
 
-bool SiglusRuntime::OpenExcall(FrameAction::Target target) {
+bool SiglusRuntime::OpenExcall(CmdTarget target) {
   return OpenExcall(ScriptCall{.target = target});
 }
 
@@ -296,12 +317,16 @@ void SiglusRuntime::ApplyExcallRequests() {
       ActiveMachine().saved_window = system->text().GetCurrentMwnd();
     try {
       machine->Initialize();
-      auto entry = binding::ResolveScriptCall(
-          *machine->loader, *machine->vm->gc_, request.request);
-      auto arguments = MakeScriptArguments(*machine->vm->gc_, request.request);
-      auto* adapter = machine->vm->gc_->Allocate<sr::BoundMethod>(
-          entry, std::move(arguments));
-      auto* fiber = machine->vm->ScheduleExecute(sr::Value(adapter));
+      auto entry =
+          binding::ResolveScriptCall(*machine->loader, request.request);
+      auto* fiber = machine->vm->ScheduleExecute(entry);
+      if (request.request.farcall) {
+        // fresh, empty L/K banks for the excall
+        fiber->usrdata = binding::MakeCallMemory(
+            *memory, request.request.integers, request.request.strings);
+      } else if (std::holds_alternative<CmdTarget>(request.request.target)) {
+        fiber->usrdata = binding::MakeCallMemory(*memory);
+      }
       machine->entry_completion = fiber->completion_promise;
       machine->entry_completion->AddWaker(
           [vm = machine->vm.get()](const auto& result) {
@@ -336,7 +361,7 @@ void SiglusRuntime::CollectCompletedExcalls() {
     if (completion && caller_alive) {
       if (result.has_value()) {
         try {
-          const auto copied = TransferValue::Capture(result.value());
+          const auto copied = sr::TransferValue::Capture(result.value());
           completion->Resolve(copied.Restore(*machine.caller->vm->gc_));
         } catch (const std::exception& e) {
           completion->Reject(e.what());

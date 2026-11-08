@@ -179,7 +179,7 @@ class SiglusExcallTest : public ::testing::Test {
       throw std::runtime_error(compiler.FormatErrors());
     runtime.GameplayMachine().vm->Evaluate(compiler.Get());
   }
-  FrameAction::Target Menu(const std::string& name, std::string body) {
+  CmdTarget Menu(const std::string& name, std::string body) {
     const int id = FakeScene{.scene_name = name, .command_name = name}.AddTo(
         *runtime.archive);
     menus.emplace(id, std::move(body));
@@ -389,7 +389,7 @@ TEST_F(SiglusExcallTest, ExplicitFreeFinishesActionsOnce) {
       ++finishes;
   });
   runtime.excall->actions->Start({runtime.excall->actions->global_action(), {}},
-                                 100, false, {}, {});
+                                 100, false, ScriptCall{.target = CmdTarget{}});
   Run("excall.free(); excall.free();");
   EXPECT_EQ(finishes, 1);
 }
@@ -526,7 +526,8 @@ TEST_F(SiglusExcallTest, OrdinaryStopFlagsDoNotStopExcallActions) {
   Run("excall.alloc();");
   auto action = runtime.excall->actions->global_action();
   runtime.excall->actions->SetExec([](const ActionReference&, auto) {});
-  runtime.excall->actions->Start({action, {}}, 100, false, {}, {});
+  runtime.excall->actions->Start({action, {}}, 100, false,
+                                 ScriptCall{.target = CmdTarget{}});
   runtime.local_config.time_stop = true;
   runtime.local_config.frame_action_time_stop = true;
   runtime.local_config.stage_time_stop = true;
@@ -541,7 +542,7 @@ TEST_F(SiglusExcallTest, LocalResetCancelsActionsWithoutTheirFinalCallback) {
   runtime.excall->actions->SetExec(
       [&](const ActionReference&, auto) { ++callbacks; });
   runtime.excall->actions->Start({runtime.excall->actions->global_action(), {}},
-                                 100, false, {}, {});
+                                 100, false, ScriptCall{.target = CmdTarget{}});
   runtime.ResetExcall();
   runtime.Update(100ms, 100ms);
   EXPECT_EQ(callbacks, 0);
@@ -594,7 +595,8 @@ TEST_F(SiglusExcallTest, FreeCancelsSuspendedFrameActionCallbacks) {
     (*math.dict())["tostr"] = machine.vm->globals_->at("probe");
   };
   runtime.excall->actions->Start({runtime.excall->actions->global_action(), {}},
-                                 1000, false, {id, 5}, {});
+                                 1000, false,
+                                 ScriptCall{.target = CmdTarget{id, 5}});
   runtime.Update(1ms, 1ms);
   runtime.FreeExcall();
   runtime.GameplayMachine().vm->RunReadyUntilBlocked();

@@ -31,7 +31,6 @@
 #include "systems/event_backend.hpp"
 #include "systems/event_system.hpp"
 #include "vm/future.hpp"
-#include "vm/promise.hpp"
 #include "vm/vm.hpp"
 
 #include <chrono>
@@ -41,7 +40,7 @@
 #include <utility>
 
 namespace lop {
-namespace {
+
 using namespace std::chrono_literals;
 namespace sr = serilang;
 
@@ -245,5 +244,4 @@ TEST_F(NativeWaitScopeTest, CancelledCoroutineIgnoresLateInput) {
   EXPECT_FALSE(promise->result->has_value());
 }
 
-}  // namespace
 }  // namespace lop

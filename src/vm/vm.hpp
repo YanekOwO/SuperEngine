@@ -30,6 +30,7 @@
 #include "vm/scheduler.hpp"
 #include "vm/value.hpp"
 
+#include <any>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -71,15 +72,16 @@ class VM {
   Fiber* AddFiber(Code* entry);
   Fiber* ScheduleExecute(Function* fn);
   Fiber* ScheduleExecute(Value callable);
-  // A native control-flow command can replace its call without returning a
-  // value.
-  void ReplaceCurrentCall(Fiber& fiber, Value destination);
-
   // Invoke a script callback on a VM-owned isolated fiber through its first
   // suspension or completion. Suspended continuations use the normal scheduler.
   // Inline failures propagate to the caller; return values are discarded.
-  void InvokeUntilBlocked(Function& callback, std::vector<Value> arguments);
-  void InvokeUntilBlocked(Value callback, std::vector<Value> arguments);
+  // Initial userdata belongs to the new fiber before its first instruction.
+  void InvokeUntilBlocked(Function& callback,
+                          std::vector<Value> arguments,
+                          std::any initial_userdata = {});
+  void InvokeUntilBlocked(Value callback,
+                          std::vector<Value> arguments,
+                          std::any initial_userdata = {});
 
   // Run the event loop until no runnable work or pending promises remain.
   // Returns the last dead fiber's result if any.
@@ -145,9 +147,9 @@ class VM {
   void CheckExecutionWatchdog(const Fiber* fiber = nullptr);
   void SeedNewFibres();
   bool HasRunnableWork() const;
-  Fiber* MakeInvocation(Value callable, std::vector<Value> arguments);
-  void Return(Fiber& f);
-  std::unordered_map<std::string, Value>* GetNamespace(Fiber& f);
+  Fiber* MakeInvocation(Value callable,
+                        std::vector<Value> arguments,
+                        std::any initial_userdata = {});
 
   void SweepDeadFibres();
 

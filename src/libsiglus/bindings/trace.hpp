@@ -25,6 +25,7 @@
 
 #include "vm/value.hpp"
 
+#include <any>
 #include <vector>
 
 namespace libsiglus::binding {
@@ -33,6 +34,7 @@ namespace libsiglus::binding {
 // instruction. The tag stays with this fiber, not separately spawned fibers.
 void InvokeFrameAction(serilang::VM& vm,
                        serilang::Value callback,
-                       std::vector<serilang::Value> arguments);
+                       std::vector<serilang::Value> arguments,
+                       std::any initial_userdata = {});
 
 }  // namespace libsiglus::binding

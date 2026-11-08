@@ -107,13 +107,13 @@ void FrameActionManager::SetExec(Exec exec) { exec_ = std::move(exec); }
 
 void FrameActionManager::RunFinal(const ActionReference& reference) {
   auto& action = ResolveAction(reference);
-  const FrameAction::Target target = *action.target;
-  action.target.reset();
+  const ScriptCall call = action.call;
+  action.active = false;
   action.end_action = true;
   action.GetCounter()->Set(std::max(0, action.end_time));
   // Final callbacks do not start a replacement in this slot.
   try {
-    exec_(reference, target);
+    exec_(reference, call);
   } catch (...) {
     action.Reset();
     throw;
@@ -124,12 +124,11 @@ void FrameActionManager::RunFinal(const ActionReference& reference) {
 void FrameActionManager::Start(ActionReference reference,
                                int duration,
                                bool real_time,
-                               FrameAction::Target target,
-                               std::vector<FrameAction::Argument> arguments) {
+                               ScriptCall call) {
   auto& action = ResolveAction(reference);
   End(reference);
-  action.target = target;
-  action.arguments = std::move(arguments);
+  action.call = std::move(call);
+  action.active = true;
   action.end_time = duration;
   std::shared_ptr<Counter> counter = action.GetCounter();
   if (real_time)
@@ -165,7 +164,7 @@ void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
                [&](const ActionReference& reference, bool) {
                  auto& action = *reference.action;
                  if (action.IsActive())
-                   exec_(reference, *action.target);
+                   exec_(reference, action.call);
                });
   VisitActions(global_action_, global_channels_, stage_,
                [&](const ActionReference& reference, bool background) {

@@ -24,21 +24,12 @@
 #pragma once
 
 #include "core/counter.hpp"
+#include "core/script_call.hpp"
 
 #include <memory>
-#include <optional>
-#include <string>
-#include <variant>
 #include <vector>
 
 struct FrameAction {
-  using Argument = std::variant<int, std::string>;
-  struct Target {
-    int scene_id;
-    int entry;
-    bool operator==(const Target&) const = default;
-  };
-
   FrameAction() = default;
   FrameAction(const FrameAction& source);
   FrameAction& operator=(const FrameAction& source);
@@ -46,12 +37,13 @@ struct FrameAction {
   FrameAction& operator=(FrameAction&& source) noexcept;
 
   std::shared_ptr<Counter> GetCounter();
-  inline bool IsActive() const { return target.has_value(); }
+  inline bool IsActive() const { return active; }
   void Reset();
 
   // Resolve the selected scene entry when invoking the callback.
-  std::optional<Target> target;
-  std::vector<Argument> arguments;
+  ScriptCall call;
+  bool active = false;
+
   // Created on first use; retained Counter handles own this allocation.
   std::shared_ptr<Counter> counter;
   int end_time = 0;

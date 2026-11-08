@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2026 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -42,6 +43,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -419,6 +421,107 @@ void BindSyscom(SiglusMachine& runtime) {
   menu_entry("endgame", &SyscomMenuConfig::game_end);
   menu_entry("save", &SyscomMenuConfig::save);
   menu_entry("load", &SyscomMenuConfig::load);
+
+  // The script menus edit user preferences, independently of script overrides.
+  const auto integer = [&](const std::string& name, int GlobalConfig::* field) {
+    m.def("get_" + name,
+          [global_config, field] { return global_config->*field; });
+    m.def("set_" + name, [global_config, field](int value) {
+      global_config->*field = std::max(0, value);
+    });
+    m.def("set_" + name + "_default",
+          [global_config, field, value = defaults.*field] {
+            global_config->*field = value;
+          });
+  };
+  const auto boolean = [&](const std::string& name,
+                           bool GlobalConfig::* field) {
+    m.def("get_" + name,
+          [global_config, field] { return global_config->*field ? 1 : 0; });
+    m.def("set_" + name, [global_config, field](int value) {
+      global_config->*field = value != 0;
+    });
+    m.def("set_" + name + "_default",
+          [global_config, field, value = defaults.*field] {
+            global_config->*field = value;
+          });
+  };
+  integer("auto_mode_moji_wait", &GlobalConfig::auto_mode_moji_wait);
+  integer("auto_mode_min_wait", &GlobalConfig::auto_mode_min_wait);
+  integer("message_speed", &GlobalConfig::message_speed);
+  boolean("message_nowait", &GlobalConfig::message_speed_nowait);
+  boolean("font_bold", &GlobalConfig::font_futoku);
+  integer("font_decoration", &GlobalConfig::font_shadow);
+  m.def("get_font_name", [global_config] { return global_config->font_name; });
+  m.def("set_font_name", [global_config](std::string name) {
+    global_config->font_name = std::move(name);
+  });
+  m.def("set_font_name_default", [global_config, value = defaults.font_name] {
+    global_config->font_name = value;
+  });
+  for (const auto [name, field] :
+       {std::pair{"sleep_onoff", &GlobalSystemConfig::low_priority},
+        {"wheel_next_message_onoff",
+         &GlobalSystemConfig::allow_wheel_next_message},
+        {"koe_dont_stop_onoff", &GlobalSystemConfig::continue_koe_playback},
+        {"skip_unread_message_onoff",
+         &GlobalSystemConfig::allow_skip_unread_message}}) {
+    m.def(std::string("get_") + name, [global_config, field] {
+      return global_config->system.*field ? 1 : 0;
+    });
+    m.def(std::string("set_") + name, [global_config, field](int value) {
+      global_config->system.*field = value != 0;
+    });
+    m.def(std::string("set_") + name + "_default",
+          [global_config, field, value = defaults.system.*field] {
+            global_config->system.*field = value;
+          });
+  }
+  for (const auto [name, get, set] :
+       {std::tuple{"r", &RGBAColour::r, &RGBAColour::set_red},
+        {"g", &RGBAColour::g, &RGBAColour::set_green},
+        {"b", &RGBAColour::b, &RGBAColour::set_blue},
+        {"a", &RGBAColour::a, &RGBAColour::set_alpha}}) {
+    const auto prefix = std::string("filter_color_") + name;
+    m.def("get_" + prefix, [global_config, get] {
+      return (global_config->filter_color.*get)();
+    });
+    m.def("set_" + prefix, [global_config, set](int value) {
+      (global_config->filter_color.*set)(std::clamp(value, 0, 255));
+    });
+    m.def("set_" + prefix + "_default",
+          [global_config, set, value = (defaults.filter_color.*get)()] {
+            (global_config->filter_color.*set)(value);
+          });
+  }
+  m.def("get_charakoe_onoff", [global_config](int id) {
+    return global_config->chrkoe[id].enable ? 1 : 0;
+  });
+  m.def("set_charakoe_onoff", [global_config](int id, int value) {
+    global_config->chrkoe[id].enable = value != 0;
+  });
+  m.def("set_charakoe_onoff_default", [global_config, defaults](int id) {
+    auto it = defaults.chrkoe.find(id);
+    global_config->chrkoe[id].enable =
+        it == defaults.chrkoe.end() || it->second.enable;
+  });
+  m.def("set_charakoe_volume_default", [global_config, defaults](int id) {
+    auto it = defaults.chrkoe.find(id);
+    global_config->chrkoe[id].volume =
+        it == defaults.chrkoe.end() ? 255 : it->second.volume;
+  });
+  m.def("get_window_mode", [global_config] {
+    return global_config->screen_size_mode == 1 ? 1 : 0;
+  });
+  m.def("set_window_mode", [&runtime, global_config](int value) {
+    global_config->screen_size_mode =
+        value ? 1 : global_config->screen_size_mode_window;
+    if (runtime.host().presenter)
+      runtime.host().presenter->Resize(runtime.host().presenter->display_size(),
+                                       value != 0);
+  });
+  // SDL continuously processes its output stream, including silent buffers.
+  m.def("get_play_silent_sound_onoff", [] { return 1; });
 
   const auto add_global_bool =
       [&](bool GlobalSystemConfig::* field, std::string_view setter,

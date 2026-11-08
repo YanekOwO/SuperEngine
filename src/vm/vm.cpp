@@ -248,7 +248,9 @@ Fiber* VM::AddFiber(Code* chunk) {
   return fiber;
 }
 
-Fiber* VM::MakeInvocation(Value callable, std::vector<Value> arguments) {
+Fiber* VM::MakeInvocation(Value callable,
+                          std::vector<Value> arguments,
+                          std::any initial_userdata) {
   if (arguments.size() > std::numeric_limits<uint8_t>::max())
     throw RuntimeError("callback supports at most 255 positional arguments");
   Code* thunk = gc_->Allocate<Code>();
@@ -263,6 +265,7 @@ Fiber* VM::MakeInvocation(Value callable, std::vector<Value> arguments) {
   thunk->Append(::serilang::Return{});
   auto* fn = gc_->Allocate<Function>(thunk);
   auto* fiber = gc_->Allocate<Fiber>();
+  fiber->usrdata = std::move(initial_userdata);
   fibres_.push_back(fiber);
   push(fiber->op_stack, Value(fn));
   fn->Call(*this, *fiber, 0, 0);
@@ -281,25 +284,19 @@ Fiber* VM::ScheduleExecute(Value callable) {
   return fiber;
 }
 
-void VM::ReplaceCurrentCall(Fiber& fiber, Value destination) {
-  if (fiber.frames.empty())
-    throw RuntimeError("Cannot replace an empty call stack");
-  const auto base = fiber.frames.back().bp;
-  const auto mode = fiber.frames.back().result_mode;
-  fiber.frames.pop_back();
-  fiber.op_stack.resize(base);
-  fiber.op_stack.push_back(destination);
-  destination.Call(*this, fiber, 0, 0, mode);
-  fiber.native_control_transfer = true;
+void VM::InvokeUntilBlocked(Function& callback,
+                            std::vector<Value> arguments,
+                            std::any initial_userdata) {
+  InvokeUntilBlocked(Value(&callback), std::move(arguments),
+                     std::move(initial_userdata));
 }
 
-void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
-  InvokeUntilBlocked(Value(&callback), std::move(arguments));
-}
-
-void VM::InvokeUntilBlocked(Value callback, std::vector<Value> arguments) {
+void VM::InvokeUntilBlocked(Value callback,
+                            std::vector<Value> arguments,
+                            std::any initial_userdata) {
   ExecutionScope execution(*this);
-  Fiber* fiber = MakeInvocation(std::move(callback), std::move(arguments));
+  Fiber* fiber = MakeInvocation(std::move(callback), std::move(arguments),
+                                std::move(initial_userdata));
   fiber->discard_result = true;
   try {
     if (fiber->state == FiberState::New)
@@ -459,7 +456,7 @@ Value VM::RunReadyUntilBlocked() {
 //------------------------------------------------------------------------------
 // Exec helpers
 //------------------------------------------------------------------------------
-std::unordered_map<std::string, Value>* VM::GetNamespace(Fiber& f) {
+static std::unordered_map<std::string, Value>* GetNamespace(Fiber& f) {
   if (f.frames.empty())
     return nullptr;
   Function* fn = f.frames.back().fn;
@@ -498,7 +495,7 @@ void VM::Error(Fiber& f, std::string exc) {
   Error(f);
 }
 
-void VM::Return(Fiber& f) {
+static void Ret(Fiber& f) {
   auto& frame = f.frames.back();
   const bool keep_result = frame.result_mode == CallResultMode::Keep;
   Value ret =
@@ -530,7 +527,7 @@ void VM::ExecuteFiber(Fiber* fib) {
     auto& ip = frame.ip;
 
     if (ip >= chunk->code.size()) {
-      Return(*fib);
+      Ret(*fib);
       return;
     }
 
@@ -753,7 +750,7 @@ void VM::ExecuteFiber(Fiber* fib) {
         case OpCode::Return: {
           const auto ins = chunk->Read<serilang::Return>(ip);
           ip += sizeof(ins);
-          Return(*fib);
+          Ret(*fib);
         }
           return;  // unwind to caller
 
@@ -811,6 +808,29 @@ void VM::ExecuteFiber(Fiber* fib) {
               fib->op_stack.end()[-static_cast<size_t>(ins.argcnt) -
                                   2 * static_cast<size_t>(ins.kwargcnt) - 1];
           callee.Call(*this, *fib, ins.argcnt, ins.kwargcnt);
+        } break;
+        case OpCode::TailCall: {
+          const auto ins = chunk->Read<serilang::TailCall>(ip);
+          ip += sizeof(ins);
+          if (ins.argcnt > 255 || ins.kwargcnt > 255)
+            throw RuntimeError("tail call has too many arguments");
+          const size_t count = 1 + ins.argcnt + 2 * ins.kwargcnt;
+          const auto base = frame.bp;
+          const auto mode = frame.result_mode;
+          if (fib->op_stack.size() < base + count)
+            throw RuntimeError("tail call stack underflow");
+
+          // Keep the destination and arguments rooted on the operand stack,
+          // replacing this frame's temporaries before invoking the destination.
+          fib->op_stack.erase(fib->op_stack.begin() + base,
+                              fib->op_stack.end() - count);
+          fib->frames.pop_back();
+          Value callee = fib->op_stack[base];
+          callee.Call(*this, *fib, ins.argcnt, ins.kwargcnt, mode);
+          // Native destinations can finish synchronously without a new frame.
+          if (fib->frames.empty() && fib->state == FiberState::Running)
+            fib->Kill(mode == CallResultMode::Keep ? fib->op_stack.back()
+                                                   : nil);
         } break;
 
         //------------------------------------------------------------------

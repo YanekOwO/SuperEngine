@@ -255,7 +255,6 @@ struct Fiber : public IObject {
 
   // Native callback return values must not replace the VM's last script result.
   bool discard_result = false;
-  bool native_control_transfer = false;
 
   std::any usrdata;
 

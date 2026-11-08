@@ -274,7 +274,7 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
         auto& manager = rt.GetFrameActions(
             rt.system->text().creating_excall_window() ? 1 : 0);
         manager.Start({object->GetFrameAction(), object}, -1, false,
-                      command.target, {});
+                      ScriptCall{.target = command.target});
       });
 
   rt.system->text().SetMwndCallHandler(

@@ -219,6 +219,13 @@ void Disassembler::PrintIns(Code& chunk,
       emit_operand("");
       out_ << "nargs=" << ins.argcnt << "  nkwargs=" << ins.kwargcnt;
     } break;
+    case OpCode::TailCall: {
+      const auto ins = chunk.Read<TailCall>(ip);
+      ip += sizeof(ins);
+      emit_mnemonic("TAIL_CALL");
+      emit_operand("");
+      out_ << "nargs=" << ins.argcnt << "  nkwargs=" << ins.kwargcnt;
+    } break;
 
       // ── 6. objects / classes ───────────────────────────────
     case OpCode::MakeList: {

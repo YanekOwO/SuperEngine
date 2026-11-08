@@ -21,6 +21,8 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "libsiglus/bindings/memory.hpp"
+
 #include "libsiglus/bindings/registry.hpp"
 
 #include "core/input.hpp"
@@ -68,6 +70,30 @@ static MemoryHandle& GetFiberMemory(Fiber& fiber, Memory& memory) {
   return *handle;
 }
 
+static void PushBanks(MemoryHandle& handle,
+                      const std::vector<int>& integers,
+                      const std::vector<std::string>& strings) {
+  handle.PushStackFrame(std::max(kMinimumCallStackBankSize, integers.size()),
+                        std::max(kMinimumCallStackBankSize, strings.size()));
+  try {
+    for (std::size_t i = 0; i < integers.size(); ++i)
+      handle.Write(IntBank::L, i, integers[i]);
+    for (std::size_t i = 0; i < strings.size(); ++i)
+      handle.Write(StrBank::K, i, strings[i]);
+  } catch (...) {
+    handle.PopStackFrame();
+    throw;
+  }
+}
+
+MemoryHandle MakeCallMemory(Memory& memory,
+                            const std::vector<int>& integers,
+                            const std::vector<std::string>& strings) {
+  auto handle = memory.CreateHandle();
+  PushBanks(handle, integers, strings);
+  return handle;
+}
+
 static void PushCallFrame(Fiber& fiber,
                           Memory& memory,
                           const std::vector<Value>& integers,
@@ -79,18 +105,7 @@ static void PushCallFrame(Fiber& fiber,
     largs.push_back(RequireInt(value, "L frame argument"));
   for (const Value& value : strings)
     kargs.push_back(value.Str());
-  MemoryHandle& handle = GetFiberMemory(fiber, memory);
-  handle.PushStackFrame(std::max(kMinimumCallStackBankSize, largs.size()),
-                        std::max(kMinimumCallStackBankSize, kargs.size()));
-  try {
-    for (std::size_t i = 0; i < largs.size(); ++i)
-      handle.Write(IntBank::L, i, largs[i]);
-    for (std::size_t i = 0; i < kargs.size(); ++i)
-      handle.Write(StrBank::K, i, kargs[i]);
-  } catch (...) {
-    handle.PopStackFrame();
-    throw;
-  }
+  PushBanks(GetFiberMemory(fiber, memory), largs, kargs);
 }
 
 struct IntBitView {
@@ -274,62 +289,29 @@ void BindMemory(SiglusMachine& rt) {
       },
       sb::arg("newl"), sb::arg("newk"));
 
-  m.def(
-      "__builtin_init_call",
-      [&memory, &rt](Fiber& fiber, Value entry, Value arguments) -> bool {
-        const auto* descriptor = RequireList(entry, "scene entry");
-        const auto* args = RequireList(arguments, "scene arguments");
-        if (descriptor->items.size() != 3 && descriptor->items.size() != 4)
-          throw RuntimeError("invalid scene entry descriptor");
-        const int arity = RequireInt(descriptor->items[1], "scene arity");
-        const int kind = RequireInt(descriptor->items[2], "scene call kind");
-        if (arity < 0 || args->items.size() != static_cast<std::size_t>(arity))
-          throw RuntimeError(
-              "scene entry received an incorrect argument count");
-        if (kind < static_cast<int>(SceneCallKind::Scene) ||
-            kind > static_cast<int>(SceneCallKind::Extended))
-          throw RuntimeError("invalid scene call kind");
-        if (descriptor->items.size() == 4)
-          return descriptor->items[3].Get<bool>();
-        if (kind == static_cast<int>(SceneCallKind::Farcall) ||
-            kind == static_cast<int>(SceneCallKind::Extended)) {
-          if (args->items.size() != 2)
-            throw RuntimeError("farcall requires L and K argument lists");
-          const auto* integers =
-              RequireList(args->items[0], "farcall L arguments");
-          const auto* strings =
-              RequireList(args->items[1], "farcall K arguments");
-          PushCallFrame(fiber, memory, integers->items, strings->items);
-          if (kind == static_cast<int>(SceneCallKind::Extended))
-            rt.host().EnterExcall();
-          return true;
-        }
-        auto& locals = fiber.frames.back().fast_locals;
-        if (kSceneArgumentSlot + args->items.size() > locals.size())
-          throw RuntimeError("scene arguments exceed available local slots");
-        for (std::size_t i = 0; i < args->items.size(); ++i)
-          locals[kSceneArgumentSlot + i] = args->items[i];
-        if (kind == static_cast<int>(SceneCallKind::Command)) {
-          PushCallFrame(fiber, memory, {}, {});
-          return true;
-        }
-        return false;
-      });
+  // Bind positional arguments without changing L/K banks. Script callers
+  // release banks in their emitted guards; host entries own initial banks.
+  m.def("__builtin_init_call", [](Fiber& fiber, Value entry, Value arguments) {
+    const auto* descriptor = RequireList(entry, "scene entry");
+    const auto* args = RequireList(arguments, "scene arguments");
+    if (descriptor->items.size() != 2)
+      throw RuntimeError("invalid scene entry descriptor");
+    const int arity = RequireInt(descriptor->items[1], "scene arity");
+    if (arity < 0 || args->items.size() != static_cast<std::size_t>(arity))
+      throw RuntimeError("scene entry received an incorrect argument count");
+    auto& locals = fiber.frames.back().fast_locals;
+    if (kSceneArgumentSlot + args->items.size() > locals.size())
+      throw RuntimeError("scene arguments exceed available local slots");
+    for (std::size_t i = 0; i < args->items.size(); ++i)
+      locals[kSceneArgumentSlot + i] = args->items[i];
+  });
 
-  m.def(
-      "__builtin_pop_frame",
-      [&memory, &rt](Fiber& fiber, Value entry) {
-        MemoryHandle& handle = GetFiberMemory(fiber, memory);
-        if (handle.StackDepth() <= 1)
-          throw RuntimeError("Siglus call frame stack underflow");
-        handle.PopStackFrame();
-        const auto* descriptor = entry.Get_if<List>();
-        if (descriptor && descriptor->items.size() >= 3 &&
-            descriptor->items[2] ==
-                Value(static_cast<int>(SceneCallKind::Extended)))
-          rt.host().LeaveExcall();
-      },
-      sb::arg("entry") = nil);
+  m.def("__builtin_pop_frame", [&memory](Fiber& fiber) {
+    MemoryHandle& handle = GetFiberMemory(fiber, memory);
+    if (handle.StackDepth() <= 1)
+      throw RuntimeError("Siglus call frame stack underflow");
+    handle.PopStackFrame();
+  });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_memory", BindMemory)

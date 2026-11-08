@@ -30,20 +30,16 @@
 
 namespace libsiglus {
 
-// Dispatcher slots: function, entry descriptor, variadic arguments, bank owner.
-inline constexpr uint16_t kSceneArgumentSlot = 4;
-inline constexpr uint16_t kSceneOwnedBankSlot = 3;
+// Dispatcher slots: function, entry descriptor, variadic arguments.
+inline constexpr uint16_t kSceneArgumentSlot = 3;
 
-enum class SceneCallKind { Scene, Command, Gosub, Farcall, Extended };
-
-// Descriptors are immutable lists containing target, arity, and call kind.
+// Descriptors contain target and arity; callers manage their own L/K banks.
 inline serilang::Value MakeSceneEntry(serilang::GarbageCollector& gc,
                                       serilang::Function* dispatcher,
                                       int target,
-                                      int arity,
-                                      SceneCallKind kind) {
-  auto* descriptor = gc.Allocate<serilang::List>(
-      std::vector<serilang::Value>{target, arity, static_cast<int>(kind)});
+                                      int arity) {
+  auto* descriptor =
+      gc.Allocate<serilang::List>(std::vector<serilang::Value>{target, arity});
   return gc.Allocate<serilang::BoundMethod>(
       serilang::Value(dispatcher),
       std::vector<serilang::Value>{serilang::Value(descriptor)});

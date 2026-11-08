@@ -474,13 +474,14 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
     }
 
     case 4: {  // JUMP
-      Member jump("jump");
-      elm.bind_ctx.return_type = Type::None;
-      auto call = Node::BuildCall(std::move(elm.bind_ctx));
+      const auto& bind = elm.bind_ctx;
+      if (bind.arg.empty() || bind.arg.size() > 2 || !bind.named_arg.empty())
+        throw std::runtime_error("invalid jump arguments");
+      Jump jump{.scene = bind.arg[0]};
+      if (bind.arg.size() == 2)
+        jump.zlabel = bind.arg[1];
       elm.force_bind = false;
-      return AccessChain{
-          .root = std::monostate(),
-          .nodes = {Node(Type::Callable, std::move(jump)), std::move(call)}};
+      return AccessChain{.root = Root(Type::None, std::move(jump))};
     }
 
     case 8: {  // SET_MWND
@@ -612,7 +613,7 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
 
     case 63:  // SYSCOM
       if (elm.code.size() == 2 && elm.At<int>(1) == 236) {
-        elm.code.front() = Integer{5};
+        elm.code.front() = Integer{5};  // FARCALL
         auto chain = resolve_element(elm);
         elm.code.front() = Integer{63};
         std::get<Farcall>(chain.root.var).extended = true;

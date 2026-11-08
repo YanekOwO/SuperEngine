@@ -26,9 +26,9 @@
 
 #include "core/button_action_table.hpp"
 #include "core/colour.hpp"
-#include "core/frame_action.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/rect.hpp"
+#include "core/script_call.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -148,7 +148,7 @@ struct ButtonProperties {
   // WAKU.BTN settings for a configured message-window button.
   std::optional<MwndConfig::Button> config;
   // Resolve script callbacks in the execution instance that handles the click.
-  std::optional<FrameAction::Target> call;
+  std::optional<CmdTarget> call;
   // Cursor/group hit state: NORMAL, HIT or PUSH.
   ButtonState hit_state = ButtonState::Normal;
   // Drawing state after applying SELECT, DISABLE and window policy.

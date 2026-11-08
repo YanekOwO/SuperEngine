@@ -94,8 +94,8 @@ class SiglusRuntimeCaptureTest : public ::testing::Test {
       std::make_shared<serilang::Promise>();
   std::shared_ptr<serilang::Promise> callback_capture;
   SiglusMachine* callback = nullptr;
-  FrameAction::Target menu_target{0, 5};
-  FrameAction::Target callback_target{1, 5};
+  CmdTarget menu_target{0, 5};
+  CmdTarget callback_target{1, 5};
   std::vector<CaptureKind> rendered;
   int callback_completions = 0;
 
@@ -203,7 +203,8 @@ TEST_F(SiglusRuntimeCaptureTest,
   auto gameplay = Capture(runtime.GameplayMachine(), CaptureKind::Object);
   OpenMenu();
   runtime.DispatchFrameAction(
-      0, {runtime.frame_action_manager->global_action(), {}}, callback_target);
+      0, {runtime.frame_action_manager->global_action(), {}},
+      ScriptCall{.target = callback_target});
   ASSERT_NE(callback_capture, nullptr);
   runtime.ProcessCaptureFrame();
   runtime.Update(std::chrono::milliseconds(1), std::chrono::milliseconds(1));
@@ -218,7 +219,8 @@ TEST_F(SiglusRuntimeCaptureTest, CallbackCaptureControlsFramePresentation) {
   // menu owns input.
   OpenMenu();
   runtime.DispatchFrameAction(
-      0, {runtime.frame_action_manager->global_action(), {}}, callback_target);
+      0, {runtime.frame_action_manager->global_action(), {}},
+      ScriptCall{.target = callback_target});
   ASSERT_NE(callback_capture, nullptr);
   EXPECT_TRUE(runtime.HasPendingCaptures());
   EXPECT_FALSE(runtime.CaptureDisplayEnabled());

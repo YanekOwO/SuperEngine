@@ -96,7 +96,6 @@ class Recompiler {
   std::size_t main_entry_ = 0;
   bool is_finalized_ = false;
   int main_line_ = 1;
-  std::size_t handler_site_ = 0;
   std::vector<std::size_t> return_sites_;
   std::unordered_map<int, int> label_lines_;
   std::unordered_map<int, int> zlabel_lines_;
@@ -125,6 +124,9 @@ class Recompiler {
   }
   inline std::size_t code_size() const { return cur_chunk_->code.size(); }
   void emit_current_chunk();
+  // Banks have already been pushed; retain the result/error while releasing
+  // them on either exit from the call, including after suspension.
+  void emit_banked_call(uint32_t argument_count);
 
   // Constant pool
   std::unordered_map<serilang::Value, uint32_t> const_pool_;
@@ -177,6 +179,7 @@ class Recompiler {
   void emit_elm_root(const elm::Usrprop& r);
   void emit_elm_root(const elm::Arg& r);
   void emit_elm_root(const elm::Farcall& r);
+  void emit_elm_root(const elm::Jump& r);
   void emit_elm_node(const elm::Member& nd);
   void emit_elm_node(const elm::Call& nd);
   void emit_elm_node(const elm::Subscript& nd);
@@ -189,22 +192,15 @@ Recompiler generated code:
   Jump bootstrap
 
 dispatch_entry:
-  owns_bank = nil
-  TryBegin error_handler
-  owns_bank = __builtin_init_call(entry, arguments)
+  __builtin_init_call(entry, arguments)
   Goto entry[0]
 
   ... compiled code for every scene token ...
+  ... banked call sites push banks and guard their own cleanup ...
 
   Push nil                  // EOF / fallthrough result
 return_entry:
-  TryEnd
-  if owns_bank: pop_bank()
   Return
-
-error_handler:
-  if owns_bank: pop_bank()
-  Throw
 
 bootstrap:
   %%dispatch = MakeFunction(this_code, dispatch_entry,

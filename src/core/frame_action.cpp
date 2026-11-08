@@ -33,8 +33,8 @@ std::shared_ptr<FrameAction> TouchFrameAction(
 }
 
 FrameAction::FrameAction(const FrameAction& source)
-    : target(source.target),
-      arguments(source.arguments),
+    : call(source.call),
+      active(source.active),
       counter(source.counter ? std::make_shared<Counter>(*source.counter)
                              : nullptr),
       end_time(source.end_time) {}
@@ -42,8 +42,8 @@ FrameAction::FrameAction(const FrameAction& source)
 FrameAction& FrameAction::operator=(const FrameAction& source) {
   if (this == &source)
     return *this;
-  target = source.target;
-  arguments = source.arguments;
+  call = source.call;
+  active = source.active;
   if (source.counter)
     *GetCounter() = *source.counter;
   else if (counter)
@@ -54,20 +54,17 @@ FrameAction& FrameAction::operator=(const FrameAction& source) {
 }
 
 FrameAction::FrameAction(FrameAction&& source) noexcept
-    : target(std::exchange(source.target, std::nullopt)),
-      arguments(std::move(source.arguments)),
+    : call(std::exchange(source.call, ScriptCall{})),
+      active(std::exchange(source.active, false)),
       counter(std::move(source.counter)),
       end_time(std::exchange(source.end_time, 0)),
-      end_action(std::exchange(source.end_action, false)) {
-  source.arguments.clear();
-}
+      end_action(std::exchange(source.end_action, false)) {}
 
 FrameAction& FrameAction::operator=(FrameAction&& source) noexcept {
   if (this == &source)
     return *this;
-  target = std::exchange(source.target, std::nullopt);
-  arguments = std::move(source.arguments);
-  source.arguments.clear();
+  call = std::exchange(source.call, ScriptCall{});
+  active = std::exchange(source.active, false);
   counter = std::move(source.counter);
   end_time = std::exchange(source.end_time, 0);
   end_action = std::exchange(source.end_action, false);
@@ -81,8 +78,8 @@ std::shared_ptr<Counter> FrameAction::GetCounter() {
 }
 
 void FrameAction::Reset() {
-  target.reset();
-  arguments.clear();
+  call = {};
+  active = false;
   end_time = 0;
   end_action = false;
   if (counter)

@@ -29,6 +29,7 @@
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
+#include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
@@ -44,6 +45,7 @@
 #include "vm/future.hpp"
 #include "vm/gc.hpp"
 #include "vm/promise.hpp"
+#include "vm/transfer_value.hpp"
 #include "vm/value.hpp"
 
 #include <any>
@@ -257,6 +259,7 @@ class SiglusCallMemoryTest : public ::testing::Test {
     int integer;
     std::string string;
     std::size_t depth;
+    std::size_t frames = 0;
   };
   std::vector<Observation> observations;
 
@@ -267,7 +270,8 @@ class SiglusCallMemoryTest : public ::testing::Test {
     bindings.def("observe", [this](sr::Fiber& fiber, int i, std::string s) {
       auto* memory = std::any_cast<MemoryHandle>(&fiber.usrdata);
       ASSERT_NE(memory, nullptr);
-      observations.push_back({i, std::move(s), memory->StackDepth()});
+      observations.push_back(
+          {i, std::move(s), memory->StackDepth(), fiber.frames.size()});
     });
   }
 
@@ -277,6 +281,52 @@ class SiglusCallMemoryTest : public ::testing::Test {
         m6::SourceBuffer::Create(std::move(source), "<SiglusCallMemoryTest>"));
     ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
     runtime.GameplayMachine().vm->Evaluate(compiler.Get());
+  }
+
+  // Raw m6 calls adopt the caller-owned contract. Emit the guard inline so
+  // these fixtures do not introduce a bank-management function frame.
+  std::string BankedCall(std::string callee,
+                         std::vector<std::string> args,
+                         std::string result = "ignored",
+                         std::string integers = "[]",
+                         std::string strings = "[]") {
+    const auto prefix = "__banked_" + std::to_string(next_call_++) + "_";
+    std::string source = prefix + "callee = " + callee + ";";
+    std::string call = prefix + "callee(";
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const auto name = prefix + "arg" + std::to_string(i);
+      source += name + " = " + args[i] + ";";
+      if (i)
+        call += ",";
+      call += name;
+    }
+    call += ")";
+    return source + "__builtin_push_frame(" + integers + "," + strings +
+           ");"
+           "try { " +
+           result + " = " + call + "; } catch (" + prefix +
+           "error) {"
+           "__builtin_pop_frame(); throw " +
+           prefix +
+           "error; }"
+           "__builtin_pop_frame();";
+  }
+  int next_call_ = 0;
+
+  std::shared_ptr<sr::Promise> InstallGate() {
+    auto* gate = runtime.GameplayMachine().vm->gc_->Allocate<sr::Future>();
+    (*runtime.GameplayMachine().vm->globals_)["gate"] = gate;
+    return gate->promise;
+  }
+
+  static token::GetProperty BankValue(const char* name, Type type, int id) {
+    return {.chain =
+                elm::AccessChain{
+                    .nodes = {elm::Node(type == Type::Int ? Type::IntList
+                                                          : Type::StrList,
+                                        elm::Member(name)),
+                              elm::Node(type, elm::Subscript{Integer(0)})}},
+            .dst = Variable{type, id}};
   }
 
   void InstallTokens(std::vector<token::Token_t> body, bool trace = false) {
@@ -297,7 +347,7 @@ class SiglusCallMemoryTest : public ::testing::Test {
     auto* dispatcher = module->globals->at("%%dispatch").Get_if<sr::Function>();
     (*runtime.GameplayMachine().vm->globals_)["entry"] =
         MakeSceneEntry(*runtime.GameplayMachine().vm->gc_, dispatcher,
-                       compiler.GetMainLine(), 0, SceneCallKind::Scene);
+                       compiler.GetMainLine(), 0);
   }
 
   static Variable Temp(int id) { return Variable{.type = Type::Int, .id = id}; }
@@ -326,6 +376,27 @@ class SiglusCallMemoryTest : public ::testing::Test {
     return token::Command{
         .chain = elm::AccessChain{.root = elm::Root(Type::String, call)},
         .dst = Variable{.type = Type::String, .id = 0}};
+  }
+
+  static token::Command SceneJump(Value scene, Value zlabel = Integer(0)) {
+    return {.chain =
+                elm::AccessChain{.root = elm::Root(
+                                     Type::None, elm::Jump{std::move(scene),
+                                                           std::move(zlabel)})},
+            .dst = Variable{Type::None, 0}};
+  }
+
+  int AddJumpScene(std::string name, int destination) {
+    FakeScene scene{.scene_name = name, .command_name = name};
+    scene.AppendElement({4});
+    scene.AppendByte(ByteCode::Push);
+    scene.AppendInt(static_cast<int>(Type::Int));
+    scene.AppendInt(destination);
+    scene.AppendByte(ByteCode::Cmd);
+    for (int value :
+         {0, 1, static_cast<int>(Type::Int), 0, static_cast<int>(Type::None)})
+      scene.AppendInt(value);
+    return scene.AddTo(archive);
   }
 
   void AddFarcallProbe(std::string body) {
@@ -418,18 +489,14 @@ class SiglusCallMemoryTest : public ::testing::Test {
 };
 
 TEST_F(SiglusCallMemoryTest, ConsecutiveCommandsStartFreshAndRestoreCaller) {
-  AddProbe("face", R"(
-    observe(L[0], K[0]);
-    L[0] = 6; K[0] = "callee";
-    return "face";
-  )");
-  Run(R"(
-    L[0] = 42; K[0] = "caller";
-    first = __builtin_usrcmd(0, 5, "face")(0);
-    second = __builtin_usrcmd(0, 5, "face")(0);
-    observe(L[0], K[0]);
-  )");
-
+  // Explicit caller guards give each raw command fresh banks and restore root.
+  AddProbe(
+      "face",
+      "observe(L[0], K[0]); L[0] = 6; K[0] = \"callee\"; return \"face\";");
+  Run("L[0] = 42; K[0] = \"caller\";" +
+      BankedCall("__builtin_usrcmd(0, 5, \"face\")", {"0"}, "first") +
+      BankedCall("__builtin_usrcmd(0, 5, \"face\")", {"0"}, "second") +
+      "observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 3);
   for (int i : {0, 1}) {
     EXPECT_EQ(observations[i].integer, 0);
@@ -444,15 +511,15 @@ TEST_F(SiglusCallMemoryTest, ConsecutiveCommandsStartFreshAndRestoreCaller) {
 }
 
 TEST_F(SiglusCallMemoryTest, RecursiveCommandsRestoreEveryCaller) {
-  AddProbe("recursive", R"(
-    observe(L[0], K[0]);
-    L[0] = n; K[0] = "level";
-    if (n > 0) { command(n - 1); }
-    observe(L[0], K[0]);
-    return "done";
-  )");
-  Run("L[0] = 99; K[0] = \"root\"; result = command(2); observe(L[0], K[0]);");
-
+  // Every recursive m6 caller guards its own bank pair until its callee exits.
+  AddProbe("recursive",
+           "observe(L[0], K[0]); L[0] = n; K[0] = \"level\";"
+           "if (n > 0) { " +
+               BankedCall("command", {"n - 1"}) +
+               " }"
+               "observe(L[0], K[0]); return \"done\";");
+  Run("L[0] = 99; K[0] = \"root\";" + BankedCall("command", {"2"}, "result") +
+      "observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 7);
   for (int i : {0, 1, 2}) {
     EXPECT_EQ(observations[i].integer, 0);
@@ -471,16 +538,11 @@ TEST_F(SiglusCallMemoryTest, RecursiveCommandsRestoreEveryCaller) {
 }
 
 TEST_F(SiglusCallMemoryTest, ExceptionRestoresCallerBeforeCatch) {
-  AddProbe("failure", R"(
-    L[0] = 6; K[0] = "callee";
-    throw "failure";
-  )");
-  Run(R"(
-    L[0] = 42; K[0] = "caller";
-    try { command(0); } catch (e) { error = e; }
-    observe(L[0], K[0]);
-  )");
-
+  // The explicit caller guard releases banks before an outer catch observes
+  // them.
+  AddProbe("failure", "L[0] = 6; K[0] = \"callee\"; throw \"failure\";");
+  Run("L[0] = 42; K[0] = \"caller\"; try {" + BankedCall("command", {"0"}) +
+      "} catch (e) { error = e; } observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 42);
   EXPECT_EQ(observations[0].string, "caller");
@@ -499,12 +561,13 @@ TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
   )");
   auto* gate = runtime.GameplayMachine().vm->gc_->Allocate<sr::Fiber>();
   (*runtime.GameplayMachine().vm->globals_)["gate"] = sr::Value(gate);
-  runtime.GameplayMachine().vm->InvokeUntilBlocked(command, {sr::Value(17)});
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      command, {sr::Value(17)}, MakeCallMemory(*runtime.memory));
 
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 0);
   EXPECT_EQ(observations[0].string, "");
-  EXPECT_EQ(observations[0].depth, 2);
+  EXPECT_EQ(observations[0].depth, 1);
   ASSERT_EQ(runtime.GameplayMachine().vm->fibres_.size(), 1);
   auto* callback = runtime.GameplayMachine().vm->fibres_.front();
   EXPECT_EQ(callback->state, sr::FiberState::Suspended);
@@ -521,22 +584,17 @@ TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[1].integer, 17);
   EXPECT_EQ(observations[1].string, "suspended");
-  EXPECT_EQ(observations[1].depth, 2);
+  EXPECT_EQ(observations[1].depth, 1);
   EXPECT_EQ(completed_depth, 1);
 }
 
 TEST_F(SiglusCallMemoryTest, FarcallBanksSurviveNestedUserCommand) {
+  // A nested caller guard restores the explicit farcall banks before root.
   AddProbe("nested", "L[0] = 6; K[0] = \"callee\"; return \"done\";");
-  // These are the same frame bindings used by recompiled farcalls.
-  Run(R"(
-    L[0] = 42; K[0] = "root";
-    __builtin_push_frame([7], ["farcall"]);
-    command(0);
-    observe(L[0], K[0]);
-    __builtin_pop_frame();
-    observe(L[0], K[0]);
-  )");
-
+  Run("L[0] = 42; K[0] = \"root\"; __builtin_push_frame([7], [\"farcall\"]);" +
+      BankedCall("command", {"0"}) +
+      "observe(L[0], K[0]);"
+      "__builtin_pop_frame(); observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[0].integer, 7);
   EXPECT_EQ(observations[0].string, "farcall");
@@ -710,6 +768,179 @@ TEST_F(SiglusCallMemoryTest, SuspendedGosubPreservesItsArgument) {
             sr::Value(73));
 }
 
+TEST_F(SiglusCallMemoryTest, RawCommandUsesCallerBanks) {
+  // An unguarded m6 invocation shares the caller's banks under the new
+  // contract.
+  AddProbe("raw", "observe(L[0], K[0]); L[0] = n; return n;");
+  Run("L[0] = 42; K[0] = \"caller\"; command(7); observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "caller");
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(observations[1].integer, 7);
+  EXPECT_EQ(observations[1].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledCommandAddsNoWrapperFrame) {
+  // The root m6 frame, two dispatchers and probe account for every active
+  // frame.
+  AddProbe("probe", "observe(L[0], K[0]); return n;");
+  InstallTokens({UserCall(0, 19), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("result = entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].frames, 4);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(19));
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledCommandPassesCallerBankArgument) {
+  // Read a caller bank into an argument before acquiring empty callee banks.
+  AddProbe("probe", "observe(n, K[0]); return n;");
+  auto call = UserCall(0, 0);
+  std::get<elm::Usrcmd>(call.chain.root.var).arguments.arg = {Temp(0)};
+  call.dst = Temp(1);
+  InstallTokens({BankValue("L", Type::Int, 0), call, token::Return{{Temp(1)}},
+                 token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; result = entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
+}
+
+TEST_F(SiglusCallMemoryTest, RecompiledCommandRestoresBanksAfterException) {
+  // A failing callee unwinds through the emitted caller guard before catching.
+  AddProbe("probe", "L[0] = 99; K[0] = \"changed\"; throw \"failure\";");
+  InstallTokens({UserCall(0, 19), token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; try { entry(); } catch (e) { error = e; }"
+      "observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "caller");
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "failure");
+}
+
+TEST_F(SiglusCallMemoryTest, SuspendedCommandRetainsCallerGuard) {
+  // The emitted guard retains callee banks through await and pops after return.
+  AddProbe("probe",
+           "observe(L[0], K[0]); L[0] = n; K[0] = \"held\";"
+           "await gate; observe(L[0], K[0]); return \"done\";");
+  auto gate = InstallGate();
+  InstallTokens({UserCall(0, 19), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("fn start() { global result; L[0] = 42; K[0] = \"caller\";"
+      "result = entry(); observe(L[0], K[0]); }");
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      runtime.GameplayMachine().vm->globals_->at("start"), {});
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].depth, 2);
+  runtime.GameplayMachine().vm->CollectGarbage();
+  gate->Resolve(sr::nil);
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  ASSERT_EQ(observations.size(), 3);
+  EXPECT_EQ(observations[1].integer, 19);
+  EXPECT_EQ(observations[1].string, "held");
+  EXPECT_EQ(observations[1].depth, 2);
+  EXPECT_EQ(observations[2].integer, 42);
+  EXPECT_EQ(observations[2].string, "caller");
+  EXPECT_EQ(observations[2].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(), "done");
+}
+
+TEST_F(SiglusCallMemoryTest, RejectedCommandAwaitRestoresCallerBanks) {
+  // Rejection resumes inside a callee and reaches the caller's cleanup guard.
+  AddProbe("probe", "L[0] = 99; await gate; return n;");
+  auto gate = InstallGate();
+  InstallTokens({UserCall(0, 19), token::Eof{}});
+  Run("fn start() { global error; L[0] = 42; K[0] = \"caller\";"
+      "try { entry(); } catch (e) { error = e; } observe(L[0], K[0]); }");
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      runtime.GameplayMachine().vm->globals_->at("start"), {});
+  gate->Reject("rejected");
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "caller");
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "rejected");
+}
+
+TEST_F(SiglusCallMemoryTest, FarcallSeedsReadCallerBanks) {
+  // Both typed seed lists are evaluated while the caller's banks are active.
+  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  auto call = FarCall("far");
+  auto& target = std::get<elm::Farcall>(call.chain.root.var);
+  target.intargs = {Temp(0)};
+  target.strargs = {Variable{Type::String, 1}};
+  call.dst = Temp(2);
+  InstallTokens({BankValue("L", Type::Int, 0), BankValue("K", Type::String, 1),
+                 call, token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "caller");
+}
+
+TEST_F(SiglusCallMemoryTest, BankedCommandPreservesReturnValue) {
+  // Cleanup preserves nil, primitive and aggregate results on the operand
+  // stack.
+  for (const auto expression : {"nil", "73", "\"text\"", "[7, \"value\"]"}) {
+    SCOPED_TRACE(expression);
+    AddProbe("value" + std::to_string(archive.GetScenarioCount()),
+             std::string("return ") + expression + ";");
+    InstallTokens({UserCall(archive.GetScenarioCount() - 1, 0),
+                   token::Return{{Temp(0)}}, token::Eof{}});
+    Run(std::string("result = entry(); expected = ") + expression + ";");
+    const auto& globals = *runtime.GameplayMachine().vm->globals_;
+    EXPECT_EQ(sr::TransferValue::Capture(globals.at("result")),
+              sr::TransferValue::Capture(globals.at("expected")));
+  }
+}
+
+TEST_F(SiglusCallMemoryTest, RecursiveRecompiledCallsRestoreEveryBank) {
+  // Recursive entry() calls execute the generated guard at every depth.
+  AddProbe("recursive",
+           "global remaining; observe(L[0], K[0]);"
+           "L[0] = remaining; K[0] = \"level\";"
+           "if (remaining > 0) { remaining = remaining - 1; entry(); }"
+           "observe(L[0], K[0]); return n;");
+  InstallTokens({UserCall(0, 19), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("remaining = 2; L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], "
+      "K[0]);");
+  ASSERT_EQ(observations.size(), 7);
+  for (int i : {0, 1, 2}) {
+    EXPECT_EQ(observations[i].integer, 0);
+    EXPECT_EQ(observations[i].depth, i + 2);
+  }
+  for (int i : {3, 4, 5}) {
+    EXPECT_EQ(observations[i].integer, i - 3);
+    EXPECT_EQ(observations[i].depth, 7 - i);
+  }
+  EXPECT_EQ(observations[6].integer, 42);
+  EXPECT_EQ(observations[6].string, "root");
+  EXPECT_EQ(observations[6].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, NestedRecompiledErrorsReleaseEveryBank) {
+  // Failure in the innermost command traverses each generated cleanup handler.
+  AddProbe("recursive",
+           "global remaining; L[0] = 99;"
+           "if (remaining > 0) { remaining = remaining - 1; entry(); }"
+           "throw \"nested failure\";");
+  InstallTokens({UserCall(0, 19), token::Eof{}});
+  Run("remaining = 2; L[0] = 42; K[0] = \"root\";"
+      "try { entry(); } catch (e) { error = e; } observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].string, "root");
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "nested failure");
+}
+
 TEST_F(SiglusCallMemoryTest, RecompiledUserCommandRestoresCallerBanks) {
   // A recompiled command receives a fresh bank and restores its caller on
   // return.
@@ -826,22 +1057,101 @@ TEST_F(SiglusCallMemoryTest, ExtendedScopeRemainsActiveDuringSuspension) {
 }
 
 TEST_F(SiglusCallMemoryTest, SceneJumpKeepsCallerBanksAndReturnsToCaller) {
-  // A jump replaces a farcall's dispatcher without discarding its caller.
-  AddFarcallProbe("observe(L[0], K[0]); return n;");
-  auto* destination = runtime.GameplayMachine().loader->Load("far");
-  (void)destination;
-  elm::Member jump("jump");
-  auto call =
-      elm::Node::BuildCall({0, {String("far"), Integer(0)}, Type::None});
-  elm::AccessChain chain{
-      .root = std::monostate(),
-      .nodes = {elm::Node(Type::Callable, jump), std::move(call)}};
-  InstallTokens({token::Command{.chain = std::move(chain),
-                                .dst = Variable{Type::None, 0}},
-                 token::Eof{}});
-  Run("L[0] = 42; K[0] = \"caller\"; entry(); observe(L[0], K[0]);");
+  // A named jump replaces the dispatcher, skipping its remaining instructions.
+  AddFarcallProbe("observe(L[0], K[0]); return \"destination\";");
+  InstallTokens({SceneJump(String("FAR")), token::Command{}, token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; result = entry(); observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(),
+            "destination");
+}
+
+TEST_F(SiglusCallMemoryTest, DynamicJumpReadsSceneAndLabelLocals) {
+  // Slot allocation retains both dynamic operands until the terminal transfer.
+  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  auto* destination = runtime.GameplayMachine().loader->Load(0);
+  (*destination->globals)[GetZlabelId(7)] =
+      destination->globals->at(GetZlabelId(0));
+  (*destination->globals)[GetZlabelId(0)] =
+      destination->globals->at("%%script");
+  InstallTokens({token::Duplicate{Integer(0), Temp(0)},
+                 token::Duplicate{Integer(7), Temp(1)},
+                 SceneJump(Temp(0), Temp(1)), token::Eof{}});
+  Run("L[0] = 42; entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+}
+
+TEST_F(SiglusCallMemoryTest, RepeatedSceneJumpsKeepConstantFrameDepth) {
+  // A chain of real numeric jumps replaces every abandoned scene frame.
+  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  int destination = 0;
+  for (int i = 0; i < 64; ++i)
+    destination = AddJumpScene("jump_" + std::to_string(i), destination);
+  InstallTokens({SceneJump(Integer(destination)), token::Eof{}});
+  Run("L[0] = 42; entry();");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].frames, 3);
+}
+
+TEST_F(SiglusCallMemoryTest, JumpRetainsFarcallBankGuard) {
+  // A farcall's destination jumps onward; its caller still releases the seeds.
+  AddFarcallProbe("observe(L[0], K[0]); L[0] = 99; return \"destination\";");
+  AddJumpScene("source", 0);
+  InstallTokens({FarCall("source"), token::Return{{Temp(0)}}, token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; result = entry(); observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].string, "farcall");
+  EXPECT_EQ(observations[0].depth, 2);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].string, "caller");
+  EXPECT_EQ(observations[1].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, JumpFailureReleasesFarcallBanks) {
+  // An error after a transfer still reaches the farcall caller's cleanup guard.
+  AddFarcallProbe("L[0] = 99; throw \"destination failure\";");
+  AddJumpScene("source", 0);
+  InstallTokens({FarCall("source"), token::Eof{}});
+  Run("L[0] = 42; try { entry(); } catch (e) { error = e; }"
+      "observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].depth, 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "destination failure");
+}
+
+TEST_F(SiglusCallMemoryTest, JumpLookupFailureReleasesFarcallBanks) {
+  // Failed resolution happens before transfer and still unwinds caller banks.
+  AddJumpScene("source", 999);
+  InstallTokens({FarCall("source"), token::Eof{}});
+  Run("L[0] = 42; try { entry(); } catch (e) {} observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[0].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, SuspendedJumpRetainsFarcallBanks) {
+  // A jumped-to scene retains its seeds through await, then releases them.
+  AddFarcallProbe("observe(L[0], K[0]); await gate; return n;");
+  auto gate = InstallGate();
+  AddJumpScene("source", 0);
+  InstallTokens({FarCall("source"), token::Eof{}});
+  Run("fn start() { L[0] = 42; entry(); observe(L[0], K[0]); }");
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      runtime.GameplayMachine().vm->globals_->at("start"), {});
+  ASSERT_EQ(observations.size(), 1);
+  EXPECT_EQ(observations[0].integer, 7);
+  EXPECT_EQ(observations[0].depth, 2);
+  runtime.GameplayMachine().vm->CollectGarbage();
+  gate->Resolve(sr::nil);
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[1].integer, 42);
   EXPECT_EQ(observations[1].depth, 1);
 }
@@ -866,7 +1176,7 @@ TEST_F(SiglusCallMemoryTest, ExtendedCallRetainsBanksDuringSuspension) {
   StartExtended("L[0] = 42; entry(); observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 7);
-  EXPECT_EQ(observations[0].depth, 2);
+  EXPECT_EQ(observations[0].depth, 1);
   gate->Resolve(sr::nil);
   DriveScripts();
   ASSERT_EQ(observations.size(), 2);
@@ -883,10 +1193,12 @@ TEST_F(SiglusCallMemoryTest, CommandArgumentCountFailureDoesNotAcquireBanks) {
 }
 
 TEST_F(SiglusCallMemoryTest, InvalidFarcallArgumentsDoNotAcquireBanks) {
-  // A bad integer bank argument fails without changing the caller's bank depth.
+  // Invalid seeds fail during push, before installing the caller's pop guard.
   AddFarcallProbe("return n;");
-  Run("try { __builtin_farcall(\"far\", 0)([\"bad\"], []); } catch (e) {} "
-      "observe(L[0], K[0]);");
+  Run("try {" +
+      BankedCall("__builtin_scene_entry(\"far\", 0)", {}, "ignored",
+                 "[\"bad\"]") +
+      "} catch (e) {} observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].depth, 1);
 }
@@ -897,7 +1209,8 @@ TEST_F(SiglusCallMemoryTest, StoredCommandSurvivesGarbageCollection) {
   auto callback = AddProbe("stored", "observe(n, K[0]); return n;");
   runtime.GameplayMachine().vm->globals_->erase("command");
   runtime.GameplayMachine().vm->CollectGarbage();
-  runtime.GameplayMachine().vm->InvokeUntilBlocked(callback, {sr::Value(17)});
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      callback, {sr::Value(17)}, MakeCallMemory(*runtime.memory));
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 17);
 }
@@ -911,7 +1224,7 @@ class FrameActionIntegrationTest : public ::testing::Test {
   Stage stage;
   LocalConfig config;
   std::shared_ptr<FrameActionManager> manager;
-  FrameAction::Target target{1, 5};
+  CmdTarget target{1, 5};
   sr::Module* owner = nullptr;
   SiglusMachine* callback = nullptr;
   int calls = 0;
@@ -944,8 +1257,10 @@ class FrameActionIntegrationTest : public ::testing::Test {
       (*owner->globals)[GetUsercmdId(target.entry)] =
           machine.vm->globals_->at("replacement");
     };
-    manager->Start({manager->global_action(), {}}, -1, false, target, {});
-    runtime.DispatchFrameAction(0, {manager->global_action(), {}}, target);
+    manager->Start({manager->global_action(), {}}, -1, false,
+                   ScriptCall{.target = target});
+    runtime.DispatchFrameAction(0, {manager->global_action(), {}},
+                                ScriptCall{.target = target});
     ASSERT_NE(callback, nullptr);
     calls = 0;
   }
@@ -953,6 +1268,15 @@ class FrameActionIntegrationTest : public ::testing::Test {
   void ReplaceEntry() {
     (*owner->globals)[GetUsercmdId(target.entry)] =
         callback->vm->globals_->at("replacement");
+  }
+
+  void SetCommandSignature(std::vector<Type> args) {
+    target.scene_id = FakeScene{.scene_name = "typed_animation",
+                                .command_name = "animate",
+                                .args = std::move(args)}
+                          .AddTo(archive);
+    owner = callback->loader->Load(target.scene_id);
+    manager->global_action()->call.target = target;
   }
 
   void Dispatch() {
@@ -1089,7 +1413,7 @@ TEST_F(FrameActionIntegrationTest, TargetRetainsSelectedCommand) {
                         .AddTo(archive);
   ReplaceEntry();
   EXPECT_EQ(callback->loader->ResolveUserCommand(*owner, "animate").target,
-            (FrameAction::Target{other, 5}));
+            (CmdTarget{other, 5}));
   Dispatch();
   EXPECT_EQ(calls, 1);
 }
@@ -1115,19 +1439,20 @@ TEST_F(FrameActionIntegrationTest, MissingFinalEntryResetsAction) {
   // Remove an active entry; final resolution failure must still reset its
   // state.
   auto action = manager->global_action();
-  action->arguments = {7};
+  action->call.integers = {7};
   action->GetCounter()->Set(23);
   owner->globals->erase(GetUsercmdId(target.entry));
   EXPECT_THROW(manager->End({action, {}}), sr::RuntimeError);
   EXPECT_FALSE(action->IsActive());
   EXPECT_FALSE(action->end_action);
-  EXPECT_TRUE(action->arguments.empty());
+  EXPECT_TRUE(action->call.integers.empty());
   EXPECT_EQ(action->end_time, 0);
   EXPECT_EQ(action->GetCounter()->Get(), 0);
 }
 
 TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
   // Dispatch mixed arguments; the native action handle precedes typed values.
+  SetCommandSignature({Type::FrameAction, Type::Int, Type::String});
   srbind::module_ bindings(callback->vm->gc_.get(),
                            callback->vm->globals_.get());
   bindings.def(
@@ -1142,7 +1467,8 @@ TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
         (*callback->vm->globals_)["observed_action"] = handle;
       });
   ReplaceEntry();
-  manager->global_action()->arguments = {7, std::string("argument")};
+  manager->global_action()->call.integers = {7};
+  manager->global_action()->call.strings = {"argument"};
 
   Dispatch();
 
@@ -1154,6 +1480,8 @@ TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
 TEST_F(FrameActionIntegrationTest,
        DispatchUsesObjectFactoryInstalledAfterBinding) {
   // Install the owner factory after binding; place its result before arguments.
+  SetCommandSignature(
+      {Type::FrameAction, Type::Object, Type::Int, Type::String});
   manager->CancelGlobals();
   stage.objects.Resize(kLayerFg, 1);
   auto object = stage.objects.Get(kLayerFg, 0);
@@ -1174,13 +1502,126 @@ TEST_F(FrameActionIntegrationTest,
     EXPECT_EQ(text, "argument");
   });
   ReplaceEntry();
-  manager->Start({object->GetFrameAction(), object}, -1, false, target,
-                 {7, std::string("argument")});
+  manager->Start({object->GetFrameAction(), object}, -1, false,
+                 ScriptCall{.target = target,
+                            .integers = {7},
+                            .strings = {std::string("argument")}});
 
   Dispatch();
 
   EXPECT_EQ(calls, 1);
   EXPECT_EQ(converted, 1);
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchReconstructsInterleavedArguments) {
+  // Store typed vectors; dispatch restores string/int/string declaration order.
+  SetCommandSignature(
+      {Type::FrameAction, Type::String, Type::Int, Type::String});
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
+  bindings.def("replacement", [this](sr::Value, std::string first, int number,
+                                     std::string last) {
+    ++calls;
+    EXPECT_EQ(first, "first");
+    EXPECT_EQ(number, 7);
+    EXPECT_EQ(last, "last");
+  });
+  ReplaceEntry();
+  manager->global_action()->call.integers = {7};
+  manager->global_action()->call.strings = {"first", "last"};
+
+  Dispatch();
+
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(FrameActionIntegrationTest, StartSplitsArgumentsIntoTypedVectors) {
+  // Start from a loaded scene; the binding captures values in each typed
+  // vector.
+  manager->CancelGlobals();
+  SetCommandSignature(
+      {Type::FrameAction, Type::String, Type::Int, Type::String});
+  auto& gameplay = runtime.GameplayMachine();
+  Execute(*gameplay.vm, R"(
+    fn start(action) { action.start(-1, "animate", "first", 7, "last"); }
+  )");
+  auto* start = gameplay.vm->globals_->at("start").Get<sr::Function*>();
+  start->globals = gameplay.loader->Load(target.scene_id)->globals;
+
+  gameplay.vm->InvokeUntilBlocked(start,
+                                  {gameplay.vm->globals_->at("frame_action")});
+
+  const auto& action = *manager->global_action();
+  EXPECT_TRUE(action.IsActive());
+  EXPECT_EQ(std::get<CmdTarget>(action.call.target), target);
+  EXPECT_EQ(action.call.integers, (std::vector<int>{7}));
+  EXPECT_EQ(action.call.strings, (std::vector<std::string>{"first", "last"}));
+}
+
+TEST_F(FrameActionIntegrationTest, StartRejectsIncorrectArgumentTypes) {
+  // Pass an integer to a string parameter; no frame action is installed.
+  manager->CancelGlobals();
+  SetCommandSignature({Type::FrameAction, Type::String});
+  auto& gameplay = runtime.GameplayMachine();
+  Execute(*gameplay.vm, R"(
+    fn start(action) { action.start(-1, "animate", 7); }
+  )");
+  auto* start = gameplay.vm->globals_->at("start").Get<sr::Function*>();
+  start->globals = gameplay.loader->Load(target.scene_id)->globals;
+
+  EXPECT_THROW(gameplay.vm->InvokeUntilBlocked(
+                   start, {gameplay.vm->globals_->at("frame_action")}),
+               sr::RuntimeError);
+  EXPECT_FALSE(manager->global_action()->IsActive());
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchRejectsMissingTypedArguments) {
+  // A string parameter has no captured value; the callback must not execute.
+  SetCommandSignature({Type::FrameAction, Type::String});
+  ReplaceEntry();
+
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+
+  EXPECT_EQ(calls, 0);
+  EXPECT_TRUE(manager->global_action()->IsActive());
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchRejectsUnusedTypedArguments) {
+  // Capture an extra string for a parameterless command; do not invoke it.
+  manager->global_action()->call.strings = {"extra"};
+
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+
+  EXPECT_EQ(calls, 0);
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchRejectsIncompatibleSignature) {
+  // A command lacking the action-handle prefix must not be invoked.
+  SetCommandSignature({Type::Int});
+  ReplaceEntry();
+
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+
+  EXPECT_EQ(calls, 0);
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchRejectsUnsupportedParameterType) {
+  // Extra object parameters cannot be restored from typed integer/string data.
+  SetCommandSignature({Type::FrameAction, Type::Object});
+  ReplaceEntry();
+
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+
+  EXPECT_EQ(calls, 0);
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchRejectsSceneEntryTarget) {
+  // Frame actions require command metadata; reject a scene-entry target.
+  manager->global_action()->call.target = SceneTarget{target.scene_id, 0};
+
+  EXPECT_THROW(Dispatch(), sr::RuntimeError);
+
+  EXPECT_EQ(calls, 0);
 }
 
 TEST_F(FrameActionIntegrationTest,
@@ -1249,8 +1690,8 @@ class SiglusRestartTest : public ::testing::Test {
   std::shared_ptr<sr::Promise> gate = std::make_shared<sr::Promise>();
   std::vector<int> observations;
   std::weak_ptr<sr::GarbageCollector> callback_heap;
-  FrameAction::Target menu{1, 5};
-  FrameAction::Target callback{2, 5};
+  CmdTarget menu{1, 5};
+  CmdTarget callback{2, 5};
   int restart_delay_millis = 0;
 
   void SetUp() override {
@@ -1353,7 +1794,8 @@ TEST_F(SiglusRestartTest, DelayedRestartPausesTheRequestingCallback) {
         machine.vm->globals_->at("callback_restart_entry");
   };
   runtime.DispatchFrameAction(
-      0, {runtime.frame_action_manager->global_action(), {}}, callback);
+      0, {runtime.frame_action_manager->global_action(), {}},
+      ScriptCall{.target = callback});
   ASSERT_TRUE(observations.empty());
 
   runtime.Update(std::chrono::milliseconds(17), std::chrono::milliseconds(17));
@@ -1384,7 +1826,8 @@ TEST_F(SiglusRestartTest, NestedCallbackFreeRetainsTheOuterExecutingMachine) {
       bindings.def("nested_callback", [this, &outer_heap](sr::Value) {
         observations.push_back(1);
         runtime.DispatchFrameAction(
-            0, {runtime.frame_action_manager->global_action(), {}}, callback);
+            0, {runtime.frame_action_manager->global_action(), {}},
+            ScriptCall{.target = callback});
         EXPECT_FALSE(outer_heap.expired());
         observations.push_back(3);
       });
@@ -1400,7 +1843,7 @@ TEST_F(SiglusRestartTest, NestedCallbackFreeRetainsTheOuterExecutingMachine) {
   };
 
   runtime.DispatchFrameAction(1, {runtime.excall->actions->global_action(), {}},
-                              callback);
+                              ScriptCall{.target = callback});
 
   EXPECT_EQ(observations, (std::vector<int>{1, 2, 3}));
   runtime.Update(std::chrono::milliseconds(0), std::chrono::milliseconds(0));
@@ -1412,7 +1855,8 @@ TEST_F(SiglusRestartTest, RestartDiscardsSuspendedExcallAndCallbackMachines) {
   // Their heaps must disappear and resolving the gate must not resume them.
   const std::weak_ptr old_gameplay = runtime.GameplayMachine().vm->gc_;
   runtime.DispatchFrameAction(
-      0, {runtime.frame_action_manager->global_action(), {}}, callback);
+      0, {runtime.frame_action_manager->global_action(), {}},
+      ScriptCall{.target = callback});
   ASSERT_FALSE(callback_heap.expired());
   ASSERT_TRUE(runtime.OpenExcall(menu));
   runtime.DriveScripts();

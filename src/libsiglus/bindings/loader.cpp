@@ -116,11 +116,11 @@ sr::Module* Loader::Load(int scene) {
     (*mod->globals)["__usrprop"] = property_factory_(scene, scn.property);
 
   auto* dispatcher = mod->globals->at("%%dispatch").Get_if<sr::Function>();
-  (*mod->globals)["%%script"] = MakeSceneEntry(
-      *vm_.gc_, dispatcher, compiler.GetMainLine(), 0, SceneCallKind::Scene);
+  (*mod->globals)["%%script"] =
+      MakeSceneEntry(*vm_.gc_, dispatcher, compiler.GetMainLine(), 0);
   for (const auto& [id, target] : compiler.GetZlabels())
     (*mod->globals)[GetZlabelId(id)] =
-        MakeSceneEntry(*vm_.gc_, dispatcher, target, 0, SceneCallKind::Scene);
+        MakeSceneEntry(*vm_.gc_, dispatcher, target, 0);
 
   auto* labels = vm_.gc_->Allocate<sr::Dict>();
   for (const auto& [id, target] : compiler.GetLabels())
@@ -132,9 +132,8 @@ sr::Module* Loader::Load(int scene) {
   command_table.commands.reserve(compiler.GetUserCommands().size());
   for (const UserCommandMetadata& metadata : compiler.GetUserCommands()) {
     const std::string entry_name = GetUsercmdId(metadata.source_entry);
-    const sr::Value function =
-        MakeSceneEntry(*vm_.gc_, dispatcher, metadata.token_line,
-                       metadata.args.size(), SceneCallKind::Command);
+    const sr::Value function = MakeSceneEntry(
+        *vm_.gc_, dispatcher, metadata.token_line, metadata.args.size());
     (*mod->globals)[entry_name] = function;
     const bool inserted =
         command_table.commands
@@ -157,7 +156,7 @@ sr::Module* Loader::Load(int scene) {
   return mod;
 }
 
-sr::Value Loader::ResolveUserCommandTarget(const FrameAction::Target& target) {
+sr::Value Loader::ResolveUserCommandTarget(const CmdTarget& target) {
   const auto* mod = Load(target.scene_id);
   const auto it = mod->globals->find(GetUsercmdId(target.entry));
   if (it == mod->globals->end()) {
@@ -166,6 +165,18 @@ sr::Value Loader::ResolveUserCommandTarget(const FrameAction::Target& target) {
                     target.entry, target.scene_id, mod->name));
   }
   return it->second;
+}
+
+std::span<const Type> Loader::GetUserCommandArgs(const CmdTarget& target) {
+  const auto* mod = Load(target.scene_id);
+  const auto& scene = commands_by_globals_.at(mod->globals.get());
+  for (const auto& [name, command] : scene.commands) {
+    if (command.target == target)
+      return command.args;
+  }
+  throw sr::RuntimeError(std::format(
+      "user command signature for entry {} not found in scene {} ({})",
+      target.entry, target.scene_id, mod->name));
 }
 
 serilang::Module* Loader::Load(std::string const& scnname) {

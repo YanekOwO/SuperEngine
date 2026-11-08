@@ -492,8 +492,6 @@ void NativeFunction::Call(VM& vm,
   } catch (...) {
     throw RuntimeError("native function failed with a non-standard exception");
   }
-  if (std::exchange(f.native_control_transfer, false))
-    return;
   if (mode == CallResultMode::Keep)
     f.op_stack.back() = vm.AddTrack(std::move(retval));
   else

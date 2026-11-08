@@ -27,6 +27,7 @@
 #include "mock_clock.hpp"
 #include "poller_helpers.hpp"
 #include "vm/dict.hpp"
+#include "vm/disassembler.hpp"
 #include "vm/function.hpp"
 #include "vm/future.hpp"
 #include "vm/instruction.hpp"
@@ -36,6 +37,7 @@
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
+#include <any>
 #include <chrono>
 #include <limits>
 #include <utility>
@@ -119,6 +121,26 @@ class VMTest : public ::testing::Test {
 
   Value run_and_get(Code* chunk) { return vm.Evaluate(chunk); }
 
+  Function* TailCaller(Value destination) {
+    auto* code = gc->Allocate<Code>();
+    code->fast_locals = {"fn"};
+    code->const_pool = {destination};
+    append_ins(code, {Push{0}, TailCall{}});
+    return gc->Allocate<Function>(code);
+  }
+
+  Code* CatchCall(Value callee) {
+    auto* code = gc->Allocate<Code>();
+    code->const_pool = {callee};
+    const auto handler_site = code->code.size();
+    append_ins(code, {TryBegin{}, Push{0}, Call{}, TryEnd{}, Return{}});
+    const auto handler = code->code.size();
+    code->Append(Return{});
+    code->Write<int32_t>(handler_site + 1,
+                         handler - handler_site - 1 - sizeof(TryBegin));
+    return code;
+  }
+
   Code* CatchPropertyAccess(Value receiver, bool assign = true) {
     auto* code = gc->Allocate<Code>();
     code->const_pool = value_vector(receiver, 5, "value", 77, 0);
@@ -139,6 +161,181 @@ class VMTest : public ::testing::Test {
     return code;
   }
 };
+
+TEST_F(VMTest, RepeatedTailCallsKeepConstantFrameDepth) {
+  // Repeated transfers discard abandoned operands and reuse the root frame.
+  int remaining = 4096;
+  Function* entry = nullptr;
+  auto* finish = gc->Allocate<NativeFunction>(
+      "finish", [](VM&, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        EXPECT_TRUE(fiber.frames.empty());
+        EXPECT_EQ(fiber.op_stack.size(), 1);
+        return 73;
+      });
+  auto* next = gc->Allocate<NativeFunction>(
+      "next", [&](VM&, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        EXPECT_EQ(fiber.frames.size(), 1);
+        EXPECT_EQ(fiber.op_stack.size(), 2);
+        return --remaining ? Value(entry) : Value(finish);
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(next, 99);
+  append_ins(code, {Push{1}, Push{0}, Call{}, TailCall{}});
+  entry = gc->Allocate<Function>(code);
+  EXPECT_EQ(run_and_get(code), Value(73));
+  EXPECT_EQ(remaining, 0);
+}
+
+TEST_F(VMTest, TailCallBindsPositionalKeywordAndBoundArguments) {
+  // A bound destination receives all argument forms after old operands vanish.
+  auto* target_code = gc->Allocate<Code>();
+  target_code->fast_locals = {"fn", "a", "b", "c"};
+  append_ins(target_code,
+             {LoadFast{1}, LoadFast{2}, LoadFast{3}, MakeList{3}, Return{}});
+  auto* target = gc->Allocate<Function>(target_code);
+  target->arglist.nparam = 3;
+  target->arglist.param_index["c"] = 2;
+  auto* bound = gc->Allocate<BoundMethod>(Value(target), value_vector(17));
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(99, bound, 23, "c", 29);
+  append_ins(code,
+             {Push{0}, Push{1}, Push{2}, Push{3}, Push{4}, TailCall{1, 1}});
+  const auto result = run_and_get(code);
+  ASSERT_NE(result.Get_if<List>(), nullptr);
+  EXPECT_EQ(result.Get_if<List>()->items, value_vector(17, 23, 29));
+}
+
+TEST_F(VMTest, TailCallReturnsToTheOriginalCaller) {
+  // The replacement returns above the caller's existing operands exactly once.
+  auto* target_code = gc->Allocate<Code>();
+  target_code->const_pool = value_vector(31);
+  append_ins(target_code, {Push{0}, Return{}});
+  auto* entry = TailCaller(gc->Allocate<Function>(target_code));
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(99, entry);
+  append_ins(code, {Push{0}, Push{1}, Call{}, MakeList{2}, Return{}});
+  const auto result = run_and_get(code);
+  ASSERT_NE(result.Get_if<List>(), nullptr);
+  EXPECT_EQ(result.Get_if<List>()->items, value_vector(99, 31));
+}
+
+TEST_F(VMTest, TailCallFailureUsesTheOriginalCallersHandler) {
+  // Replacement removes the abandoned handler for both script/native failures.
+  auto* failure = gc->Allocate<Code>();
+  failure->const_pool = value_vector("failure");
+  append_ins(failure, {Push{0}, Throw{}});
+  auto* native_failure = gc->Allocate<NativeFunction>(
+      "failure", [](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        throw RuntimeError("failure");
+      });
+  for (const auto target :
+       value_vector(gc->Allocate<Function>(failure), native_failure)) {
+    auto* entry = TailCaller(target);
+    auto* code = entry->chunk;
+    code->const_pool.push_back(to_value("abandoned handler"));
+    code->code.clear();
+    append_ins(code, {TryBegin{static_cast<int32_t>(1 + sizeof(Push) + 1 +
+                                                    sizeof(TailCall))},
+                      Push{0}, TailCall{}, Pop{}, Push{1}, Return{}});
+    EXPECT_EQ(run_and_get(CatchCall(entry)), std::string("failure"));
+  }
+}
+
+TEST_F(VMTest, TailCallArgumentFailureReachesTheCaller) {
+  // Failed destination argument binding unwinds directly to the saved caller.
+  auto* code = gc->Allocate<Code>();
+  code->fast_locals = {"fn", "required"};
+  auto* target = gc->Allocate<Function>(code);
+  target->arglist.nparam = 1;
+  const auto result = run_and_get(CatchCall(TailCaller(target)));
+  EXPECT_NE(result.Str().find("missing arguments"), std::string::npos);
+}
+
+TEST_F(VMTest, TailCallDestinationSurvivesAwaitAndCollection) {
+  // Only the destination frame remains across suspension and heap collection.
+  auto* gate = gc->Allocate<Future>();
+  auto completion = gate->promise;
+  auto* target_code = gc->Allocate<Code>();
+  target_code->const_pool = value_vector(gate, 37);
+  append_ins(target_code, {Push{0}, Await{}, Pop{}, Push{1}, Return{}});
+  auto* entry = TailCaller(gc->Allocate<Function>(target_code));
+  auto* fiber = vm.AddFiber(entry->chunk);
+  vm.RunReadyUntilBlocked();
+  ASSERT_EQ(fiber->state, FiberState::Suspended);
+  EXPECT_EQ(fiber->frames.size(), 1);
+  vm.CollectGarbage();
+  completion->Resolve(nil);
+  EXPECT_EQ(vm.RunReadyUntilBlocked(), Value(37));
+}
+
+TEST_F(VMTest, TailCallPreservesDiscardedReturnMode) {
+  // Tail-called setters discard script/native results above a caller operand.
+  auto* target_code = gc->Allocate<Code>();
+  target_code->const_pool = value_vector(99);
+  append_ins(target_code, {Push{0}, Return{}});
+  auto* native = gc->Allocate<NativeFunction>(
+      "value", [](VM&, Fiber&, uint8_t, uint8_t) -> Value { return 99; });
+  for (const auto target :
+       value_vector(gc->Allocate<Function>(target_code), native)) {
+    auto* setter = TailCaller(target);
+    setter->chunk->fast_locals = {"fn", "self", "value"};
+    setter->arglist.nparam = 2;
+    auto* klass = gc->Allocate<Class>();
+    klass->properties["value"] = Property{nil, Value(setter)};
+    auto* instance = gc->Allocate<Instance>(klass);
+    auto* code = gc->Allocate<Code>();
+    code->const_pool = value_vector(17, instance, 5, "value");
+    append_ins(code, {Push{0}, Push{1}, Push{2}, SetField{3}, Return{}});
+    EXPECT_EQ(run_and_get(code), Value(17));
+  }
+}
+
+TEST_F(VMTest, TailCallDisassemblyPreservesArgumentCounts) {
+  // Disassembly consumes the new operand layout before reading the next opcode.
+  auto* code = gc->Allocate<Code>();
+  append_ins(code, {TailCall{2, 1}, Return{}});
+  Disassembler disassembler;
+  const auto listing = disassembler.Dump(*code);
+  EXPECT_NE(listing.find("TAIL_CALL"), std::string::npos);
+  EXPECT_NE(listing.find("nargs=2  nkwargs=1"), std::string::npos);
+  EXPECT_NE(listing.find("RETURN"), std::string::npos);
+  EXPECT_EQ(listing.find("<unknown op>"), std::string::npos);
+}
+
+TEST_F(VMTest, InlineInvocationReceivesInitialUserdata) {
+  // A native entry sees prepared userdata on its first instruction.
+  int observed = 0;
+  auto* callback = gc->Allocate<NativeFunction>(
+      "observe", [&](VM&, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        observed = std::any_cast<int>(fiber.usrdata);
+        return nil;
+      });
+  vm.InvokeUntilBlocked(Value(callback), {}, 37);
+  EXPECT_EQ(observed, 37);
+}
+
+TEST_F(VMTest, InlineInvocationRetainsUserdataAcrossAwait) {
+  // The Function overload seeds the fiber before it suspends; its continuation
+  // retains the same data after collection and promise completion.
+  auto* gate = gc->Allocate<Future>();
+  auto completion = gate->promise;
+  std::string observed;
+  auto* callback = gc->Allocate<NativeFunction>(
+      "observe", [&](VM&, Fiber& fiber, uint8_t, uint8_t) -> Value {
+        observed = std::any_cast<std::string>(fiber.usrdata);
+        return nil;
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(gate, callback);
+  append_ins(code, {Push{0}, Await{}, Pop{}, Push{1}, Call{0, 0}, Return{}});
+  auto* entry = gc->Allocate<Function>(code);
+  vm.InvokeUntilBlocked(*entry, {}, std::string("initial"));
+  EXPECT_TRUE(observed.empty());
+  vm.CollectGarbage();
+  completion->Resolve(nil);
+  vm.RunReadyUntilBlocked();
+  EXPECT_EQ(observed, "initial");
+}
 
 TEST_F(VMTest, HostYieldRetainsQueuedWork) {
   // A pending host yield leaves queued script work intact for the next drive.

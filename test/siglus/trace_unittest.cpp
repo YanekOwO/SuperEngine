@@ -38,6 +38,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <any>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -89,6 +90,39 @@ class SiglusTraceTest : public ::testing::Test {
                                });
   }
 };
+
+TEST_F(SiglusTraceTest, UntracedFrameActionReceivesInitialUserdata) {
+  // The untraced invocation path forwards prepared fiber data before execution.
+  SetupLogging(Severity::Error);
+  int observed = 0;
+  srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                           runtime.GameplayMachine().vm->globals_.get());
+  bindings.def("observe_data", [&](sr::Fiber& fiber) {
+    observed = std::any_cast<int>(fiber.usrdata);
+  });
+  InvokeFrameAction(*runtime.GameplayMachine().vm, Compile("observe_data();"),
+                    {}, 37);
+  EXPECT_EQ(observed, 37);
+}
+
+TEST_F(SiglusTraceTest, TracedFrameActionRetainsInitialUserdataAcrossAwait) {
+  // The trace tag and host userdata survive suspension on the same fiber.
+  SetupLogging(Severity::Error, {.frame_action = true});
+  auto gate = InstallGate();
+  srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                           runtime.GameplayMachine().vm->globals_.get());
+  bindings.def("read_data", [](sr::Fiber& fiber) {
+    return std::any_cast<std::string>(fiber.usrdata);
+  });
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
+                    Compile("await gate; __builtin_trace(7, 12, read_data());"),
+                    {}, std::string("retained"));
+  EXPECT_TRUE(output.Str().empty());
+  runtime.GameplayMachine().vm->CollectGarbage();
+  gate->Resolve(sr::nil);
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  EXPECT_EQ(output.Str(), "[7:12] retained\n");
+}
 
 TEST_F(SiglusTraceTest, RecompilerGeneratesTraceWithoutDebug) {
   // Tracing alone inserts the trace builtin into compiled scene instructions.

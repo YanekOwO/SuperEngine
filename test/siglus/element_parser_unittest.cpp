@@ -358,19 +358,42 @@ TEST_F(ElementParserTest, Farcall) {
   }
 }
 
-TEST_F(ElementParserTest, Jump) {
-  {
+TEST_F(ElementParserTest, JumpDefaultsToZlabelZero) {
+  // A scene-only jump is a terminal root with an explicit default label.
+  ElementCode elm{4};
+  elm.ForceBind({0, {v("scene_name")}});
+  const auto parsed = chain(elm);
+  EXPECT_EQ(parsed, "jump(str:scene_name,int:0)");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_TRUE(parsed.chain.nodes.empty());
+  EXPECT_EQ(std::get<Jump>(parsed.chain.root.var).zlabel, v(0));
+}
+
+TEST_F(ElementParserTest, JumpAcceptsSceneIdAndLabel) {
+  // Numeric destinations retain both operands in the jump root.
+  ElementCode elm{4};
+  elm.ForceBind({0, {v(69), v(2)}});
+  EXPECT_EQ(chain(elm), "jump(int:69,int:2)");
+}
+
+TEST_F(ElementParserTest, JumpRetainsDynamicOperands) {
+  // Dynamic scene and label values stay available to compiler slot allocation.
+  ElementCode elm{4};
+  const Value scene = Variable(Type::String, 123);
+  const Value label = Variable(Type::Int, 456);
+  elm.ForceBind({0, {scene, label}});
+  const auto parsed = chain(elm);
+  EXPECT_EQ(std::get<Jump>(parsed.chain.root.var),
+            (Jump{.scene = scene, .zlabel = label}));
+}
+
+TEST_F(ElementParserTest, JumpRejectsInvalidArgumentCount) {
+  // A jump needs one scene and at most one label; malformed bags are rejected.
+  for (const auto& args :
+       {std::vector<Value>{}, std::vector<Value>{v(1), v(2), v(3)}}) {
     ElementCode elm{4};
-    elm.ForceBind({0, {v("scene_name")}});
-    auto parsed = chain(elm);
-    EXPECT_EQ(parsed, "jump(str:scene_name)");
-    EXPECT_EQ(parsed.chain.GetType(), Type::None);
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
-  }
-  {
-    ElementCode elm{4};
-    elm.ForceBind({0, {v(69), v(2)}});
-    EXPECT_EQ(chain(elm), "jump(int:69,int:2)");
+    elm.ForceBind({0, args});
+    EXPECT_THROW(parser->Parse(elm), std::runtime_error);
   }
 }
 

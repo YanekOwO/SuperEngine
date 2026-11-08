@@ -44,9 +44,9 @@ struct ActionReference {
 
 class FrameActionManager {
  public:
-  // Execute synchronously using the saved target. During a final callback,
-  // the action is inactive and end_action is true; arguments remain available.
-  using Exec = std::function<void(const ActionReference&, FrameAction::Target)>;
+  // Execute synchronously using the saved call. During a final callback,
+  // the action is inactive and end_action is true; call data remains available.
+  using Exec = std::function<void(const ActionReference&, ScriptCall)>;
 
   FrameActionManager(Stage& stage,
                      LocalConfig& local_config,
@@ -69,8 +69,7 @@ class FrameActionManager {
   void Start(ActionReference reference,
              int duration,
              bool real_time,
-             FrameAction::Target target,
-             std::vector<FrameAction::Argument> arguments);
+             ScriptCall call);
   void End(ActionReference reference);
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
                           std::chrono::milliseconds game_delta);

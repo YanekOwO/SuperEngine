@@ -24,8 +24,8 @@
 
 #pragma once
 
+#include "core/script_call.hpp"
 #include "libsiglus/property_storage.hpp"
-#include "libsiglus/script_call.hpp"
 #include "libsiglus/siglus_machine.hpp"
 
 #include "core/asset_scanner.hpp"
@@ -111,8 +111,10 @@ struct SiglusRuntime {
   std::unique_ptr<Stage> stage;
   std::unique_ptr<Excall> excall;
   void InitializeExcall();
+
   Stage& GetStage(int owner = 0);
   FrameActionManager& GetFrameActions(int owner = 0);
+
   bool IsExcall() const { return excall_depth_ != 0; }
   void EnterExcall();
   void LeaveExcall();
@@ -126,7 +128,7 @@ struct SiglusRuntime {
   bool HasPendingScriptWork() const;
   void DispatchFrameAction(int owner,
                            const ActionReference& reference,
-                           FrameAction::Target target);
+                           ScriptCall call);
   void ResetLocalMemory();
   void QueueReturnToMenu(std::string scene,
                          int zlabel,
@@ -143,7 +145,7 @@ struct SiglusRuntime {
   std::function<void(SiglusMachine&)> configure_machine;
   bool debug = false;
   bool trace = false;
-  bool OpenExcall(FrameAction::Target target);
+  bool OpenExcall(CmdTarget target);
   bool OpenExcallScene(const std::string& config_key);
   bool ScriptScopeActive(int owner) const;
 
@@ -263,6 +265,9 @@ struct SiglusRuntime {
   void CollectCompletedExcalls();
   std::deque<PendingExcall> pending_excalls_;
   std::vector<std::unique_ptr<SiglusMachine>> excalls_;
+  // shared, reusable machines for executing frame-action callbacks
+  // [0]: for callbacks belonging to the normal gameplay stage
+  // [1]: for callbacks belonging to the EX stage
   std::unique_ptr<SiglusMachine> callbacks_[2];
   std::vector<SiglusMachine*> drive_stack_;
   void DriveMachine(SiglusMachine& machine, std::function<void()> run);

@@ -47,6 +47,9 @@ std::string Farcall::ToDebugString() const {
   repr += '(' + Join(",", vals_to_string(strargs)) + ')';
   return repr;
 }
+std::string Jump::ToDebugString() const {
+  return std::format("jump({},{})", ToString(scene), ToString(zlabel));
+}
 std::string Member::ToDebugString() const { return '.' + std::string(name); }
 std::string Call::ToDebugString() const {
   std::vector<std::string> parts;

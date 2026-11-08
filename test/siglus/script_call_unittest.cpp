@@ -23,102 +23,44 @@
 
 #include <gtest/gtest.h>
 
-#include "libsiglus/script_call.hpp"
-#include "vm/function.hpp"
-#include "vm/gc.hpp"
-#include "vm/list.hpp"
-#include "vm/string.hpp"
+#include "libsiglus/bindings/memory.hpp"
 
-namespace libsiglus {
-namespace sr = serilang;
-namespace {
-class ScriptCallTest : public ::testing::Test {};
+namespace siglus_test {
+using namespace libsiglus;
 
-TEST_F(ScriptCallTest, PrimitiveResultsRetainTheirTypes) {
-  // Primitive results survive capture/restore without conversion.
-  sr::GarbageCollector gc;
-  for (const sr::Value& value :
-       {sr::nil, sr::Value(true), sr::Value(17), sr::Value(3.5)}) {
-    const auto restored = TransferValue::Capture(value).Restore(gc);
-    EXPECT_EQ(restored.Type(), value.Type());
-    EXPECT_EQ(restored, value);
-  }
+TEST(ScriptCallTest, FarcallMemoryCopiesItsSeeds) {
+  // A host fiber owns copied L/K seeds independently of its request data.
+  Memory memory;
+  std::vector<int> integers{7, 11};
+  std::vector<std::string> strings{"argument"};
+  auto banks = binding::MakeCallMemory(memory, integers, strings);
+  integers[0] = 99;
+  strings[0] = "changed";
+  EXPECT_EQ(banks.Read(IntBank::L, 0), 7);
+  EXPECT_EQ(banks.Read(IntBank::L, 1), 11);
+  EXPECT_EQ(banks.Read(StrBank::K, 0), "argument");
 }
 
-TEST_F(ScriptCallTest, StringResultOutlivesItsProducingHeap) {
-  // Destroy the source heap; the copied string remains restorable elsewhere.
-  TransferValue captured;
-  {
-    sr::GarbageCollector source;
-    captured = TransferValue::Capture(source.Allocate<sr::String>("returned"));
-  }
-  sr::GarbageCollector destination;
-  EXPECT_EQ(captured.Restore(destination), std::string("returned"));
+TEST(ScriptCallTest, EmptyHostCallHasMinimumBankSize) {
+  // An empty native entry owns one zero-initialized bank pair of size eight.
+  Memory memory;
+  auto banks = binding::MakeCallMemory(memory);
+  EXPECT_EQ(banks.StackDepth(), 1);
+  EXPECT_EQ(banks.Size(IntBank::L), 8);
+  EXPECT_EQ(banks.Size(StrBank::K), 8);
+  EXPECT_EQ(banks.Read(IntBank::L, 0), 0);
+  EXPECT_EQ(banks.Read(StrBank::K, 0), "");
 }
 
-TEST_F(ScriptCallTest, NestedListsAllocateInTheReceivingHeap) {
-  // Nested return values are recreated as distinct list and string objects.
-  sr::GarbageCollector source;
-  sr::GarbageCollector destination;
-  auto* text = source.Allocate<sr::String>("result");
-  auto* nested = source.Allocate<sr::List>(std::vector<sr::Value>{text, 7});
-  auto* list = source.Allocate<sr::List>(std::vector<sr::Value>{nested});
-  auto result = TransferValue::Capture(list).Restore(destination);
-  auto* copied = result.Get<sr::List*>();
-  ASSERT_NE(copied, list);
-  auto* copied_nested = copied->items[0].Get<sr::List*>();
-  EXPECT_NE(copied_nested, nested);
-  EXPECT_NE(copied_nested->items[0].Get<sr::String*>(), text);
-  EXPECT_EQ(copied_nested->items[0], std::string("result"));
-  EXPECT_EQ(copied_nested->items[1], sr::Value(7));
+TEST(ScriptCallTest, HostBanksGrowToFitTheirSeeds) {
+  // Seeds larger than the minimum retain every element in the initial banks.
+  Memory memory;
+  auto banks = binding::MakeCallMemory(memory, std::vector<int>(11, 3),
+                                       std::vector<std::string>(9, "text"));
+  EXPECT_EQ(banks.Size(IntBank::L), 11);
+  EXPECT_EQ(banks.Size(StrBank::K), 9);
+  EXPECT_EQ(banks.Read(IntBank::L, 10), 3);
+  EXPECT_EQ(banks.Read(StrBank::K, 8), "text");
 }
 
-TEST_F(ScriptCallTest, UnsupportedObjectsAreRejected) {
-  // A function cannot be represented in an independent execution heap.
-  sr::GarbageCollector source;
-  auto* function = source.Allocate<sr::Function>(nullptr);
-  EXPECT_THROW(TransferValue::Capture(function), sr::RuntimeError);
-}
-
-TEST_F(ScriptCallTest, CyclicListsAreRejected) {
-  // A self-referencing result fails rather than recursively copying forever.
-  sr::GarbageCollector source;
-  auto* list = source.Allocate<sr::List>();
-  list->items.emplace_back(list);
-  EXPECT_THROW(TransferValue::Capture(list), sr::RuntimeError);
-}
-
-TEST_F(ScriptCallTest, RepeatedListReferencesAreCopied) {
-  // Reusing a list is valid when no ancestor cycle exists.
-  sr::GarbageCollector source;
-  sr::GarbageCollector destination;
-  auto* inner = source.Allocate<sr::List>(std::vector<sr::Value>{5});
-  auto* outer = source.Allocate<sr::List>(std::vector<sr::Value>{inner, inner});
-  const auto result = TransferValue::Capture(outer).Restore(destination);
-  const auto* copied = result.Get<sr::List*>();
-  ASSERT_EQ(copied->items.size(), 2);
-  EXPECT_EQ(copied->items[0].Get<sr::List*>()->items[0], sr::Value(5));
-  EXPECT_EQ(copied->items[1].Get<sr::List*>()->items[0], sr::Value(5));
-}
-
-TEST_F(ScriptCallTest, FarcallArgumentsAreCreatedFromCopiedBanks) {
-  // L/K argument lists are receiver-local wrappers over copied primitive data.
-  sr::GarbageCollector gc;
-  ScriptCall call;
-  call.farcall = true;
-  call.integers = {7, 11};
-  call.strings = {"argument"};
-  const auto arguments = MakeScriptArguments(gc, call);
-  ASSERT_EQ(arguments.size(), 2);
-  EXPECT_EQ(arguments[0].Get<sr::List*>()->items,
-            (std::vector<sr::Value>{7, 11}));
-  EXPECT_EQ(arguments[1].Get<sr::List*>()->items[0], std::string("argument"));
-}
-
-TEST_F(ScriptCallTest, EngineEntryHasNoImplicitArguments) {
-  // Ordinary engine entries keep their zero-argument calling convention.
-  sr::GarbageCollector gc;
-  EXPECT_TRUE(MakeScriptArguments(gc, ScriptCall{}).empty());
-}
-}  // namespace
-}  // namespace libsiglus
+}  // namespace siglus_test

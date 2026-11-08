@@ -28,12 +28,12 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
-#include "libsiglus/scene_entry.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
 #include "vm/future.hpp"
 #include "vm/instruction.hpp"
+#include "vm/list.hpp"
 #include "vm/object.hpp"
 #include "vm/string.hpp"
 #include "vm/value.hpp"
@@ -106,101 +106,26 @@ const UserCommand& ResolveSceneUserCommand(Loader& loader,
                                    command_name);
 }
 
-sr::Value ResolveScriptCall(Loader& loader,
-                            sr::GarbageCollector& gc,
-                            const ScriptCall& call) {
-  if (const auto* command = std::get_if<FrameAction::Target>(&call.target))
+sr::Value ResolveScriptCall(Loader& loader, const ScriptCall& call) {
+  if (const auto* command = std::get_if<CmdTarget>(&call.target))
     return loader.ResolveUserCommandTarget(*command);
   const auto& scene = std::get<SceneTarget>(call.target);
-  sr::Module* module = nullptr;
+  sr::Module* mod = nullptr;
   if (const auto* id = std::get_if<int>(&scene.scene)) {
     if (*id < 0)
       throw sr::RuntimeError("EX-call scene id must be non-negative");
-    module = loader.Load(*id);
+    mod = loader.Load(*id);
   } else {
-    module = &LoadScene(loader, std::get<std::string>(scene.scene));
+    mod = &LoadScene(loader, std::get<std::string>(scene.scene));
   }
-  if (!module)
+  if (!mod)
     throw sr::RuntimeError("EX-call could not load destination scene");
-  const auto entry = ResolveZlabelEntry(*module, scene.zlabel);
-  if (!call.farcall)
-    return entry;
-  const auto* bound = entry.Get_if<sr::BoundMethod>();
-  const auto* descriptor = bound->additional_args.front().Get_if<sr::List>();
-  return MakeSceneEntry(
-      gc, module->globals->at("%%dispatch").Get_if<sr::Function>(),
-      descriptor->items.front().Get<int>(), 2, SceneCallKind::Farcall);
+  return ResolveZlabelEntry(*mod, scene.zlabel);
 }
 
 void BindFlow(SiglusMachine& rt) {
   sr::VM& vm = *rt.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  m.def(
-      "jump",
-      [loader = rt.loader.get(), archive = rt.host().archive.get()](
-          sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
-        if (!loader)
-          throw sr::RuntimeError("jump requires a scene loader");
-        if (args.empty() || args.size() > 2) {
-          throw sr::RuntimeError(std::format(
-              "jump expects 1 or 2 arguments, got {}", args.size()));
-        }
-
-        int zlabel = 0;
-        if (args.size() == 2)
-          zlabel = RequireInt(args[1], "jump z-label");
-
-        sr::Module* mod = nullptr;
-        if (const int* scene_id = args[0].Get_if<int>()) {
-          if (*scene_id < 0) {
-            throw sr::RuntimeError(std::format(
-                "jump scene id must be non-negative: {}", *scene_id));
-          }
-          if (archive && static_cast<std::size_t>(*scene_id) >=
-                             archive->GetScenarioCount()) {
-            throw sr::RuntimeError(
-                std::format("jump scene id {} is out of range for {} scenes",
-                            *scene_id, archive->GetScenarioCount()));
-          }
-          mod = loader->Load(*scene_id);
-        } else if (const sr::String* scene_name =
-                       args[0].Get_if<sr::String>()) {
-          if (scene_name->str_.empty())
-            throw sr::RuntimeError("jump scene name is empty");
-          mod = loader->Load(NormalizeSceneName(scene_name->str_));
-        } else {
-          throw sr::RuntimeError(std::format(
-              "jump scene expects str or int, got {}", args[0].Desc()));
-        }
-
-        if (!mod)
-          throw sr::RuntimeError("jump could not load destination scene");
-
-        sr::Value fn = ResolveZlabelEntry(*mod, zlabel);
-        // Scene jumps replace the current dispatcher but keep its caller and
-        // bank ownership. The destination adopts cleanup instead of pushing
-        // another bank frame.
-        auto& old = fiber.frames.back();
-        if (old.fast_locals.size() > kSceneOwnedBankSlot &&
-            old.fast_locals[1] && old.fast_locals[1]->Get_if<sr::List>() &&
-            old.fast_locals[kSceneOwnedBankSlot]) {
-          const auto* old_entry = old.fast_locals[1]->Get_if<sr::List>();
-          const auto* target = fn.Get_if<sr::BoundMethod>();
-          const auto* entry =
-              target->additional_args.front().Get_if<sr::List>();
-          auto* transferred = vm.gc_->Allocate<sr::List>(
-              std::vector<sr::Value>{entry->items[0], 0, old_entry->items[2],
-                                     *old.fast_locals[kSceneOwnedBankSlot]});
-          auto* adapter = vm.gc_->Allocate<sr::BoundMethod>(
-              target->method, std::vector<sr::Value>{sr::Value(transferred)});
-          vm.ReplaceCurrentCall(fiber, sr::Value(adapter));
-        } else {
-          vm.ScheduleExecute(fn);
-          fiber.frames.clear();
-        }
-      },
-      sb::vararg);
-
   m.def("__builtin_usrcmd",
         [loader = rt.loader.get()](int scn, int entry,
                                    std::string name) -> sr::Value {
@@ -224,13 +149,18 @@ void BindFlow(SiglusMachine& rt) {
         });
 
   m.def(
-      "__builtin_farcall",
-      [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scene,
-                                                    int zlabel) -> sr::Value {
-        ScriptCall call;
-        call.target = SceneTarget{std::move(scene), zlabel};
-        call.farcall = true;
-        return ResolveScriptCall(*loader, *gc, call);
+      "__builtin_scene_entry",
+      [loader = rt.loader.get()](sr::Value scene, int zlabel) -> sr::Value {
+        sr::Module* mod = nullptr;
+        if (const auto* id = scene.Get_if<int>())
+          mod = loader->Load(*id);
+        else if (const auto* name = scene.Get_if<sr::String>())
+          mod = &LoadScene(*loader, name->str_);
+        else
+          throw sr::RuntimeError("scene entry expects str or int");
+        if (!mod)
+          throw sr::RuntimeError("could not load destination scene");
+        return ResolveZlabelEntry(*mod, zlabel);
       },
       sb::arg("scene"), sb::arg("zlabel"));
 

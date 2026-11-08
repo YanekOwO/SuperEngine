@@ -85,15 +85,14 @@ class FrameActionHandle {
           reference_.owner ? "FrameAction, Object" : "FrameAction"));
     }
 
-    std::vector<FrameAction::Argument> arguments;
-    arguments.reserve(args.size() - 2);
+    ScriptCall call{.target = resolved.target};
     for (std::size_t i = 2; i < args.size(); ++i) {
       if (const int* value = args[i].Get_if<int>();
           value && resolved.args[prefix + i - 2] == Type::Int) {
-        arguments.emplace_back(*value);
+        call.integers.push_back(*value);
       } else if (const sr::String* value = args[i].Get_if<sr::String>();
                  value && resolved.args[prefix + i - 2] == Type::String) {
-        arguments.emplace_back(value->str_);
+        call.strings.push_back(value->str_);
       } else {
         throw sr::RuntimeError(std::format(
             "frame-action argument {} for command '{}' has incompatible type",
@@ -101,8 +100,7 @@ class FrameActionHandle {
       }
     }
 
-    manager_->Start(reference_, *duration, real_time, resolved.target,
-                    std::move(arguments));
+    manager_->Start(reference_, *duration, real_time, std::move(call));
   }
 
   void End() {
@@ -228,12 +226,13 @@ void BindFrameActions(SiglusMachine& runtime) {
   // Shared managers install one host dispatcher; callbacks get local wrappers.
   if (&runtime == &runtime.host().GameplayMachine()) {
     auto& host = runtime.host();
-    manager->SetExec([&host](const ActionReference& reference, auto target) {
-      host.DispatchFrameAction(0, reference, target);
-    });
+    manager->SetExec(
+        [&host](const ActionReference& reference, ScriptCall call) {
+          host.DispatchFrameAction(0, reference, std::move(call));
+        });
     host.excall->actions->SetExec(
-        [&host](const ActionReference& reference, auto target) {
-          host.DispatchFrameAction(1, reference, target);
+        [&host](const ActionReference& reference, ScriptCall call) {
+          host.DispatchFrameAction(1, reference, std::move(call));
         });
   }
 

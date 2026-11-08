@@ -86,24 +86,26 @@ void SiglusMachine::Initialize() {
 }
 
 lop::NativeWaitScope SiglusMachine::WaitScope(int owner) const {
-  const auto life = std::weak_ptr(lifetime);
+  const std::weak_ptr<char> life = std::weak_ptr(lifetime);
   const bool resource_bound = owner == 1 || callback_owner == 1 ||
                               (owner == -1 && callback_owner == -1 &&
                                this != &host().GameplayMachine() &&
                                host().excall && host().excall->allocated);
-  const auto resources = resource_bound && host().excall
-                             ? std::weak_ptr(host().excall->lifetime)
-                             : std::weak_ptr<char>{};
-  return {[this, life] {
-            if (life.expired())
-              return false;
-            if (callback_owner >= 0)
-              return callback_owner == (host().IsExcall() ? 1 : 0);
-            return &host().ActiveMachine() == this;
-          },
-          [life, resources, resource_bound] {
-            return !life.expired() && (!resource_bound || !resources.expired());
-          }};
+  const std::weak_ptr<char> resources =
+      resource_bound && host().excall ? std::weak_ptr(host().excall->lifetime)
+                                      : std::weak_ptr<char>{};
+
+  std::function<bool()> active = [this, life] {
+    if (life.expired())
+      return false;
+    if (callback_owner >= 0)
+      return callback_owner == (host().IsExcall() ? 1 : 0);
+    return &host().ActiveMachine() == this;
+  };
+  std::function<bool()> alive = [life, resources, resource_bound] {
+    return !life.expired() && (!resource_bound || !resources.expired());
+  };
+  return {std::move(active), std::move(alive)};
 }
 
 sr::Value SiglusMachine::RequestFrame() {

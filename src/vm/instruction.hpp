@@ -102,6 +102,10 @@ struct Call {
   uint32_t argcnt = 0;
   uint32_t kwargcnt = 0;
 };  // (fn,arg*,kwargs*) -> (ret)
+struct TailCall {
+  uint32_t argcnt = 0;
+  uint32_t kwargcnt = 0;
+};  // (fn,arg*,kwargs*) -> replaces this frame, inheriting its return mode
 
 // ––– 6. Object / container ops ––––––––––––––––––––––––––––––––––––
 struct MakeList {
@@ -166,6 +170,7 @@ using Instruction = std::variant<Nop,
                                  Return,
                                  MakeFunction,
                                  Call,
+                                 TailCall,
                                  MakeList,
                                  MakeDict,
                                  MakeClass,
@@ -216,7 +221,8 @@ enum class OpCode : uint8_t {
   TryBegin,
   TryEnd,
   DebugValue,
-  Goto
+  Goto,
+  TailCall
 };
 
 template <typename T>
@@ -264,6 +270,8 @@ constexpr inline OpCode GetOpcode() {
     return OpCode::MakeFunction;
   else if constexpr (std::same_as<T, Call>)
     return OpCode::Call;
+  else if constexpr (std::same_as<T, TailCall>)
+    return OpCode::TailCall;
   else if constexpr (std::same_as<T, MakeList>)
     return OpCode::MakeList;
   else if constexpr (std::same_as<T, MakeDict>)

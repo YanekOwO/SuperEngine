@@ -85,10 +85,12 @@ void BindTrace(SiglusMachine& runtime) {
 
 void InvokeFrameAction(sr::VM& vm,
                        sr::Value callback,
-                       std::vector<sr::Value> arguments) {
+                       std::vector<sr::Value> arguments,
+                       std::any initial_userdata) {
   if (!IsTraceEnabled(TraceCategory::Script) &&
       !IsTraceEnabled(TraceCategory::FrameAction)) {
-    vm.InvokeUntilBlocked(std::move(callback), std::move(arguments));
+    vm.InvokeUntilBlocked(std::move(callback), std::move(arguments),
+                          std::move(initial_userdata));
     return;
   }
   if (arguments.size() > std::numeric_limits<uint8_t>::max())
@@ -110,7 +112,7 @@ void InvokeFrameAction(sr::VM& vm,
   wrapper->globals =
       std::make_shared<std::unordered_map<std::string, sr::Value>>();
   wrapper->globals->emplace(kFrameActionTraceTag, true);
-  vm.InvokeUntilBlocked(*wrapper, {});
+  vm.InvokeUntilBlocked(*wrapper, {}, std::move(initial_userdata));
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "trace", BindTrace)

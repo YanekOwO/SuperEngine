@@ -77,11 +77,21 @@ struct Farcall {
   bool operator==(const Farcall&) const = default;
 };
 
+// Transfer to another scene without adding a call frame or changing L/K banks.
+struct Jump {
+  Value scene;
+  Value zlabel = Integer(0);
+
+  std::string ToDebugString() const;
+  bool operator==(const Jump&) const = default;
+};
+
 struct Root {
   // Special root variants that do not naturally fit in the node chain.
   // `std::monostate` is used for synthetic symbol roots such as `syscom`,
   // where the first visible identifier is stored as a Member in `nodes`.
-  using var_t = std::variant<std::monostate, Usrcmd, Usrprop, Arg, Farcall>;
+  using var_t =
+      std::variant<std::monostate, Usrcmd, Usrprop, Arg, Farcall, Jump>;
   var_t var;
   Type type;  // Static type of the root before walking `nodes`.
 

@@ -4,7 +4,7 @@
 //
 // -----------------------------------------------------------------------
 //
-// Copyright (C) 2026 Serina Sakurai
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,7 +23,6 @@
 
 #pragma once
 
-#include "core/frame_action.hpp"
 #include "vm/value.hpp"
 
 #include <string>
@@ -32,23 +31,6 @@
 
 namespace serilang {
 class GarbageCollector;
-}
-
-namespace libsiglus {
-
-struct SceneTarget {
-  std::variant<int, std::string> scene = 0;
-  int zlabel = 0;
-  bool operator==(const SceneTarget&) const = default;
-};
-
-// Calls between execution instances contain engine data, never VM objects.
-struct ScriptCall {
-  std::variant<SceneTarget, FrameAction::Target> target = SceneTarget{};
-  std::vector<int> integers;
-  std::vector<std::string> strings;
-  bool farcall = false;
-};
 
 // A result is copied out before its producing execution instance is released.
 struct TransferValue {
@@ -57,12 +39,9 @@ struct TransferValue {
       std::variant<std::monostate, bool, int, double, std::string, List>;
   Storage value;
 
-  static TransferValue Capture(const serilang::Value& value);
-  serilang::Value Restore(serilang::GarbageCollector& gc) const;
+  static TransferValue Capture(const Value& value);
+  Value Restore(GarbageCollector& gc) const;
   bool operator==(const TransferValue&) const = default;
 };
 
-std::vector<serilang::Value> MakeScriptArguments(serilang::GarbageCollector& gc,
-                                                 const ScriptCall& call);
-
-}  // namespace libsiglus
+}  // namespace serilang

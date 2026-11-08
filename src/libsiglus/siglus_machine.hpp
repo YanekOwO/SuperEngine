@@ -86,8 +86,8 @@ struct SiglusMachine {
   std::shared_ptr<TextWindow> saved_window;
   int callback_owner = -1;
 
-  SiglusRuntime& host() { return runtime_; }
-  const SiglusRuntime& host() const { return runtime_; }
+  inline SiglusRuntime& host() { return runtime_; }
+  inline const SiglusRuntime& host() const { return runtime_; }
   std::unique_ptr<serilang::VM> vm;
   std::unique_ptr<binding::Loader> loader;
   std::shared_ptr<srbind::class_<SiglusIntListFacade>> ilist_cls;
