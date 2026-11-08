@@ -29,6 +29,10 @@ namespace libsiglus {
 
 std::string ToString(Type type) {
   switch (type) {
+    case Type::Excall:
+      return "excall";
+    case Type::ScriptExcall:
+      return "excall.script";
     case Type::G00bufList:
       return "g00buf[]";
     case Type::G00buf:

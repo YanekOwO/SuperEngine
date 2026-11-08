@@ -118,6 +118,20 @@ class TextSystem final : public EventListener {
 
   void ExecuteTextSystem();
   void AdvanceMessageText(std::chrono::milliseconds delta);
+  void AdvanceExcallText(std::chrono::milliseconds delta);
+  void SetExcallStage(Stage* stage,
+                      std::function<bool()> allocated,
+                      std::function<bool()> active) {
+    excall_stage_ = stage;
+    excall_allocated_ = std::move(allocated);
+    excall_active_ = std::move(active);
+  }
+  bool IsExcallActive() const { return excall_active_ && excall_active_(); }
+  void SetFontConfigSource(std::function<const LocalConfig&()> source) {
+    font_config_source_ = std::move(source);
+  }
+  const LocalConfig& FontConfig() const;
+
   // Elapsed message time excludes time spent reading history.
   std::chrono::milliseconds MessageTime() const { return message_time_; }
   const WindowList& GetDisplayedWindows(int layer) const;
@@ -140,6 +154,7 @@ class TextSystem final : public EventListener {
   // management
   std::shared_ptr<TextWindow> GetMwnd(int text_window_number);
   std::shared_ptr<TextWindow> GetMwnd(int layer, int text_window_number);
+  std::shared_ptr<TextWindow> GetMwnd(Stage& owner, int layer, int index);
   std::shared_ptr<TextWindow> FindMwnd(int layer, int index) const;
   bool IsForegroundWindow(const TextWindow* window) const;
   std::shared_ptr<TextWindow> GetMwnd(
@@ -147,6 +162,8 @@ class TextSystem final : public EventListener {
       std::function<std::shared_ptr<TextWindow>()> orelse);
   bool HasCurrentWindow() const;
   std::shared_ptr<TextWindow> GetCurrentMwnd();
+  void SetCurrentMwnd(std::shared_ptr<TextWindow> window);
+  bool creating_excall_window() const { return creating_excall_window_; }
 
   const MwndConfig& mwnd_config() const { return mwnd_config_; }
   using MwndCallHandler =
@@ -180,7 +197,10 @@ class TextSystem final : public EventListener {
   void set_in_pause_state(bool in) { in_pause_state_ = in; }
 
   int active_window() const { return active_window_; }
-  void set_active_window(int window) { active_window_ = window; }
+  void set_active_window(int window) {
+    active_window_ = window;
+    selected_mwnd_.reset();
+  }
 
   std::vector<int> GetActiveWindows();
 
@@ -270,6 +290,11 @@ class TextSystem final : public EventListener {
  public:
   // The stage owns the active text windows.
   Stage& stage_;
+  Stage* excall_stage_ = nullptr;
+  std::weak_ptr<TextWindow> selected_mwnd_;
+  bool creating_excall_window_ = false;
+  std::function<bool()> excall_allocated_, excall_active_;
+  std::function<const LocalConfig&()> font_config_source_;
   MwndConfig mwnd_config_;
   MwndCallHandler mwnd_call_handler_;
   MwndActionHandler mwnd_action_handler_;

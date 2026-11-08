@@ -26,7 +26,7 @@
 #include "core/asset_scanner.hpp"
 #include "core/avdec/ffmpeg.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
@@ -61,13 +61,13 @@ class SiglusMovie {
   explicit SiglusMovie(SiglusMachine& runtime)
       : runtime_(runtime),
         vm_(runtime.vm.get()),
-        system_(runtime.system.get()),
-        asset_scanner_(runtime.asset_scanner) {}
+        system_(runtime.host().system.get()),
+        asset_scanner_(runtime.host().asset_scanner) {}
 
   lop::MovieRect DefaultRect() const {
     lop::MovieRect rect;
     if (system_) {
-      Size size = runtime_.presenter->screen_size();
+      Size size = runtime_.host().presenter->screen_size();
       rect.width = size.width();
       rect.height = size.height();
     }
@@ -89,12 +89,13 @@ class SiglusMovie {
 
     fs::path path = FindMovie(file_name);
     auto player = std::make_unique<lop::SiglusMovieOperation>(
-        system_, runtime_.presenter->backend(), std::move(path), rect, 255,
-        key_skip);
+        system_, runtime_.host().presenter->backend(), std::move(path), rect,
+        255, key_skip);
     player_ = player.get();
-    runtime_.movie_frame = player->frame();
+    runtime_.host().movie_frame = player->frame();
     pending_ = lop::FutureBackedCoroutineTask(*vm_, std::move(player),
-                                              system_->event_ptr().get());
+                                              system_->event_ptr().get(), {},
+                                              runtime_.WaitScope());
     pending_->Start();
   }
 

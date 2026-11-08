@@ -66,7 +66,8 @@ class PlaybackState {
                             System* system,
                             bool key_skip,
                             bool fade_only,
-                            std::function<bool()> is_playing) {
+                            std::function<bool()> is_playing,
+                            lop::NativeWaitScope scope) {
     if (fade_only && state_ != kFadeOut)
       return lop::MakeResolvedFuture(*vm.gc_);
 
@@ -80,7 +81,8 @@ class PlaybackState {
     };
     return lop::MakePollingWaitFuture(
         vm, std::move(done), key_skip,
-        system ? system->event_ptr().get() : nullptr);
+        system ? system->event_ptr().get() : nullptr,
+        std::chrono::milliseconds(5), {}, std::move(scope));
   }
 
  private:
@@ -252,13 +254,14 @@ class SiglusGlobalKoe {
       system_->sound().KoePlay(params.koe);
   }
 
-  sr::Value WaitForKoe(sr::VM& vm, bool key_skip) {
+  sr::Value WaitForKoe(sr::VM& vm, bool key_skip, lop::NativeWaitScope scope) {
     auto done = [system = system_] {
       return !system || !system->sound().KoePlaying();
     };
     return lop::MakePollingWaitFuture(
         vm, std::move(done), key_skip,
-        system_ ? system_->event_ptr().get() : nullptr);
+        system_ ? system_->event_ptr().get() : nullptr,
+        std::chrono::milliseconds(5), {}, std::move(scope));
   }
 
   void Stop(int fade_ms) {
@@ -362,12 +365,18 @@ class SiglusBgm {
     return player ? static_cast<int>(player->GetCurrentTime()) : 0;
   }
 
-  sr::Value WaitForPlayback(sr::VM& vm, bool key_skip, bool fade_only) {
-    return playback_.WaitForPlayback(vm, system_, key_skip, fade_only, [this] {
-      if (system_->ShouldFastForward())
-        return false;
-      return system_->sound().BgmPlaying();
-    });
+  sr::Value WaitForPlayback(sr::VM& vm,
+                            bool key_skip,
+                            bool fade_only,
+                            lop::NativeWaitScope scope) {
+    return playback_.WaitForPlayback(
+        vm, system_, key_skip, fade_only,
+        [this] {
+          if (system_->ShouldFastForward())
+            return false;
+          return system_->sound().BgmPlaying();
+        },
+        std::move(scope));
   }
 
   System* system_;
@@ -403,9 +412,9 @@ class SiglusPcmch {
     playback_.Set(PlaybackState::kPlay);
   }
 
-  sr::Value ResumeWait(sr::VM& vm, int fade_ms) {
+  sr::Value ResumeWait(sr::VM& vm, int fade_ms, lop::NativeWaitScope scope) {
     Resume(fade_ms);
-    return WaitForPlayback(vm, false, false);
+    return WaitForPlayback(vm, false, false, std::move(scope));
   }
 
   int Check() const {
@@ -459,11 +468,17 @@ class SiglusPcmch {
     return channel_ >= 0 && channel_ < NUM_TOTAL_CHANNELS;
   }
 
-  sr::Value WaitForPlayback(sr::VM& vm, bool key_skip, bool fade_only) {
-    return playback_.WaitForPlayback(vm, system_, key_skip, fade_only, [this] {
-      return system_ && IsValidChannel() &&
-             system_->sound().WavPlaying(channel_);
-    });
+  sr::Value WaitForPlayback(sr::VM& vm,
+                            bool key_skip,
+                            bool fade_only,
+                            lop::NativeWaitScope scope) {
+    return playback_.WaitForPlayback(
+        vm, system_, key_skip, fade_only,
+        [this] {
+          return system_ && IsValidChannel() &&
+                 system_->sound().WavPlaying(channel_);
+        },
+        std::move(scope));
   }
 
   static constexpr int kVolumeMin = 0;
@@ -488,16 +503,16 @@ void BindSound(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
   sb::module_ pcm(vm, "pcm");
-  pcm.def("play", [sys = runtime.system.get()](std::string filename) {
+  pcm.def("play", [sys = runtime.host().system.get()](std::string filename) {
     if (sys)
       sys->sound().PlayPcm(filename);
   });
-  pcm.def("stop", [sys = runtime.system.get()] {
+  pcm.def("stop", [sys = runtime.host().system.get()] {
     if (sys)
       sys->sound().StopPcm();
   });
 
-  System* sys = runtime.system.get();
+  System* sys = runtime.host().system.get();
   sb::module_ se(vm, "se");
   auto play_se = [sys](int number) {
     if (sys)
@@ -522,14 +537,15 @@ void BindSound(SiglusMachine& runtime) {
       sb::arg("fade_ms") = 100);
   se.def("check",
          [sys] { return sys ? sys->sound().CheckSe() : SoundSystem::kSeFree; });
-  auto wait_se = [sys](sr::VM& vm, bool key_skip) {
+  auto wait_se = [sys, &runtime](sr::VM& vm, bool key_skip) {
     return lop::MakePollingWaitFuture(
         vm,
         [sys] {
           return !sys || sys->ShouldFastForward() ||
                  sys->sound().CheckSe() != SoundSystem::kSePlaying;
         },
-        key_skip, sys ? sys->event_ptr().get() : nullptr);
+        key_skip, sys ? sys->event_ptr().get() : nullptr,
+        std::chrono::milliseconds(5), {}, runtime.WaitScope());
   };
   se.def("wait", [wait_se](sr::VM& vm) { return wait_se(vm, false); });
   se.def("wait_key", [wait_se](sr::VM& vm) { return wait_se(vm, true); });
@@ -557,9 +573,10 @@ void BindSound(SiglusMachine& runtime) {
   se.def("get_volume",
          [sys] { return sys ? sys->sound().GetSeVolumeScript() : 255; });
 
-  runtime.bgm_table =
-      std::make_shared<BgmTable>(BgmTable::CreateFromSiglus(*runtime.gameexe));
-  auto bgm_table = runtime.bgm_table;
+  if (!runtime.host().bgm_table)
+    runtime.host().bgm_table = std::make_shared<BgmTable>(
+        BgmTable::CreateFromSiglus(*runtime.host().gameexe));
+  auto bgm_table = runtime.host().bgm_table;
   sb::module_ tab(vm, "bgm_table");
   tab.def("cnt", [bgm_table]() -> int { return bgm_table->Count(); });
   tab.def("set_listen", [bgm_table](std::string name, int val) {
@@ -571,7 +588,8 @@ void BindSound(SiglusMachine& runtime) {
   tab.def("set_listen_all",
           [bgm_table](int val) { bgm_table->SetListenAll(val); });
 
-  auto global_koe = std::make_shared<SiglusGlobalKoe>(runtime.system.get());
+  auto global_koe =
+      std::make_shared<SiglusGlobalKoe>(runtime.host().system.get());
   m.def(
       "exkoe",
       [global_koe](std::vector<sr::Value> args) -> int {
@@ -582,21 +600,25 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
   m.def(
       "exkoe_play_wait",
-      [global_koe](sr::VM& vm, std::vector<sr::Value> args) -> sr::Value {
+      [global_koe, &runtime](sr::VM& vm,
+                             std::vector<sr::Value> args) -> sr::Value {
         const auto params =
             ExKoeCallParams::ParseFrom(std::move(args), true, false);
         global_koe->Play(params);
-        return params.wait ? global_koe->WaitForKoe(vm, params.key_skip)
+        return params.wait ? global_koe->WaitForKoe(vm, params.key_skip,
+                                                    runtime.WaitScope())
                            : lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   m.def(
       "exkoe_play_wait_key",
-      [global_koe](sr::VM& vm, std::vector<sr::Value> args) -> sr::Value {
+      [global_koe, &runtime](sr::VM& vm,
+                             std::vector<sr::Value> args) -> sr::Value {
         const auto params =
             ExKoeCallParams::ParseFrom(std::move(args), true, true);
         global_koe->Play(params);
-        return params.wait ? global_koe->WaitForKoe(vm, params.key_skip)
+        return params.wait ? global_koe->WaitForKoe(vm, params.key_skip,
+                                                    runtime.WaitScope())
                            : lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
@@ -608,7 +630,7 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
 
   sb::class_<SiglusBgm> bgm_cls(m, "Bgm", false);
-  auto bgm = bgm_cls.inst("bgm", runtime.system.get(), bgm_table);
+  auto bgm = bgm_cls.inst("bgm", runtime.host().system.get(), bgm_table);
   bgm.def(
       "play",
       [](SiglusBgm* bgm, std::vector<sr::Value> args) {
@@ -623,9 +645,10 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
   bgm.def(
       "play_wait",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value> args) -> sr::Value {
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value> args) -> sr::Value {
         bgm->Start(BgmPlayParams::ParseFrom(std::move(args)), false);
-        return bgm->WaitForPlayback(vm, false, false);
+        return bgm->WaitForPlayback(vm, false, false, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
@@ -655,33 +678,38 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
   bgm.def(
       "resume_wait",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
         bgm->Resume();
-        return bgm->WaitForPlayback(vm, false, false);
+        return bgm->WaitForPlayback(vm, false, false, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
       "wait",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return bgm->WaitForPlayback(vm, false, false);
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return bgm->WaitForPlayback(vm, false, false, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
       "wait_key",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return bgm->WaitForPlayback(vm, true, false);
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return bgm->WaitForPlayback(vm, true, false, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
       "wait_fade",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return bgm->WaitForPlayback(vm, false, true);
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return bgm->WaitForPlayback(vm, false, true, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
       "wait_fade_key",
-      [](SiglusBgm* bgm, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return bgm->WaitForPlayback(vm, true, true);
+      [&runtime](SiglusBgm* bgm, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return bgm->WaitForPlayback(vm, true, true, runtime.WaitScope());
       },
       sb::vararg);
   bgm.def(
@@ -731,7 +759,8 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
 
   sb::class_<SiglusPcmch> pcmch(m, "__SiglusPcmch");
-  pcmch.def(sb::init([sys = runtime.system.get()](int channel) -> SiglusPcmch* {
+  pcmch.def(sb::init([sys = runtime.host().system.get()](
+                         int channel) -> SiglusPcmch* {
               return new SiglusPcmch(sys, channel);
             }),
             sb::arg("channel"));
@@ -749,10 +778,10 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
   pcmch.def(
       "play_wait",
-      [](SiglusPcmch* pcmch, sr::VM& vm,
-         std::vector<sr::Value> args) -> sr::Value {
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value> args) -> sr::Value {
         pcmch->Play(PcmPlayParams::ParseFrom(std::move(args), false, false));
-        return pcmch->WaitForPlayback(vm, false, false);
+        return pcmch->WaitForPlayback(vm, false, false, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(
@@ -787,34 +816,38 @@ void BindSound(SiglusMachine& runtime) {
       sb::vararg);
   pcmch.def(
       "resume_wait",
-      [](SiglusPcmch* pcmch, sr::VM& vm,
-         std::vector<sr::Value> args) -> sr::Value {
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value> args) -> sr::Value {
         const int fade_ms = args.empty() ? 0 : AsInt(args[0]).value_or(0);
-        return pcmch->ResumeWait(vm, fade_ms);
+        return pcmch->ResumeWait(vm, fade_ms, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(
       "wait",
-      [](SiglusPcmch* pcmch, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return pcmch->WaitForPlayback(vm, false, false);
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return pcmch->WaitForPlayback(vm, false, false, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(
       "wait_key",
-      [](SiglusPcmch* pcmch, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return pcmch->WaitForPlayback(vm, true, false);
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return pcmch->WaitForPlayback(vm, true, false, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(
       "wait_fade",
-      [](SiglusPcmch* pcmch, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return pcmch->WaitForPlayback(vm, false, true);
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return pcmch->WaitForPlayback(vm, false, true, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(
       "wait_fade_key",
-      [](SiglusPcmch* pcmch, sr::VM& vm, std::vector<sr::Value>) -> sr::Value {
-        return pcmch->WaitForPlayback(vm, true, true);
+      [&runtime](SiglusPcmch* pcmch, sr::VM& vm,
+                 std::vector<sr::Value>) -> sr::Value {
+        return pcmch->WaitForPlayback(vm, true, true, runtime.WaitScope());
       },
       sb::vararg);
   pcmch.def(

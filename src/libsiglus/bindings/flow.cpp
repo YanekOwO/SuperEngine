@@ -32,6 +32,7 @@
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
+#include "vm/future.hpp"
 #include "vm/instruction.hpp"
 #include "vm/object.hpp"
 #include "vm/string.hpp"
@@ -105,12 +106,38 @@ const UserCommand& ResolveSceneUserCommand(Loader& loader,
                                    command_name);
 }
 
+sr::Value ResolveScriptCall(Loader& loader,
+                            sr::GarbageCollector& gc,
+                            const ScriptCall& call) {
+  if (const auto* command = std::get_if<FrameAction::Target>(&call.target))
+    return loader.ResolveUserCommandTarget(*command);
+  const auto& scene = std::get<SceneTarget>(call.target);
+  sr::Module* module = nullptr;
+  if (const auto* id = std::get_if<int>(&scene.scene)) {
+    if (*id < 0)
+      throw sr::RuntimeError("EX-call scene id must be non-negative");
+    module = loader.Load(*id);
+  } else {
+    module = &LoadScene(loader, std::get<std::string>(scene.scene));
+  }
+  if (!module)
+    throw sr::RuntimeError("EX-call could not load destination scene");
+  const auto entry = ResolveZlabelEntry(*module, scene.zlabel);
+  if (!call.farcall)
+    return entry;
+  const auto* bound = entry.Get_if<sr::BoundMethod>();
+  const auto* descriptor = bound->additional_args.front().Get_if<sr::List>();
+  return MakeSceneEntry(
+      gc, module->globals->at("%%dispatch").Get_if<sr::Function>(),
+      descriptor->items.front().Get<int>(), 2, SceneCallKind::Farcall);
+}
+
 void BindFlow(SiglusMachine& rt) {
   sr::VM& vm = *rt.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   m.def(
       "jump",
-      [loader = rt.loader.get(), archive = rt.archive.get()](
+      [loader = rt.loader.get(), archive = rt.host().archive.get()](
           sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
         if (!loader)
           throw sr::RuntimeError("jump requires a scene loader");
@@ -150,8 +177,27 @@ void BindFlow(SiglusMachine& rt) {
           throw sr::RuntimeError("jump could not load destination scene");
 
         sr::Value fn = ResolveZlabelEntry(*mod, zlabel);
-        vm.ScheduleExecute(fn);
-        fiber.frames.clear();
+        // Scene jumps replace the current dispatcher but keep its caller and
+        // bank ownership. The destination adopts cleanup instead of pushing
+        // another bank frame.
+        auto& old = fiber.frames.back();
+        if (old.fast_locals.size() > kSceneOwnedBankSlot &&
+            old.fast_locals[1] && old.fast_locals[1]->Get_if<sr::List>() &&
+            old.fast_locals[kSceneOwnedBankSlot]) {
+          const auto* old_entry = old.fast_locals[1]->Get_if<sr::List>();
+          const auto* target = fn.Get_if<sr::BoundMethod>();
+          const auto* entry =
+              target->additional_args.front().Get_if<sr::List>();
+          auto* transferred = vm.gc_->Allocate<sr::List>(
+              std::vector<sr::Value>{entry->items[0], 0, old_entry->items[2],
+                                     *old.fast_locals[kSceneOwnedBankSlot]});
+          auto* adapter = vm.gc_->Allocate<sr::BoundMethod>(
+              target->method, std::vector<sr::Value>{sr::Value(transferred)});
+          vm.ReplaceCurrentCall(fiber, sr::Value(adapter));
+        } else {
+          vm.ScheduleExecute(fn);
+          fiber.frames.clear();
+        }
       },
       sb::vararg);
 
@@ -179,25 +225,42 @@ void BindFlow(SiglusMachine& rt) {
 
   m.def(
       "__builtin_farcall",
-      [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scn, int zlabel,
-                                                    int extended) -> sr::Value {
-        const std::string dbgname = std::format("SCENE{}@{}", scn, zlabel);
-        sr::Module* mod = loader->Load(NormalizeSceneName(std::move(scn)));
-
-        if (!mod)
-          throw sr::RuntimeError(
-              std::format("Farcall {} could not load scene", dbgname));
-
-        const sr::Value entry = ResolveZlabelEntry(*mod, zlabel);
-        const auto* bound = entry.Get_if<sr::BoundMethod>();
-        const auto* descriptor =
-            bound->additional_args.front().Get_if<sr::List>();
-        return MakeSceneEntry(
-            *gc, mod->globals->at("%%dispatch").Get_if<sr::Function>(),
-            descriptor->items.front().Get<int>(), 2,
-            extended ? SceneCallKind::Extended : SceneCallKind::Farcall);
+      [loader = rt.loader.get(), gc = vm.gc_.get()](std::string scene,
+                                                    int zlabel) -> sr::Value {
+        ScriptCall call;
+        call.target = SceneTarget{std::move(scene), zlabel};
+        call.farcall = true;
+        return ResolveScriptCall(*loader, *gc, call);
       },
-      sb::arg("scene"), sb::arg("zlabel"), sb::arg("extended") = 0);
+      sb::arg("scene"), sb::arg("zlabel"));
+
+  m.def(
+      "__builtin_excall",
+      [&rt](sr::Value scene, int zlabel, sr::Value integers,
+            sr::Value strings) -> sr::Value {
+        ScriptCall call;
+        SceneTarget target;
+        if (const auto* id = scene.Get_if<int>())
+          target.scene = *id;
+        else if (const auto* name = scene.Get_if<sr::String>())
+          target.scene = name->str_;
+        else
+          throw sr::RuntimeError("EX-call scene expects str or int");
+        target.zlabel = zlabel;
+        call.target = std::move(target);
+        call.farcall = true;
+        for (const auto& value :
+             RequireList(integers, "EX-call L arguments")->items)
+          call.integers.push_back(RequireInt(value, "EX-call L argument"));
+        for (const auto& value :
+             RequireList(strings, "EX-call K arguments")->items)
+          call.strings.push_back(value.Str());
+        auto* future = rt.vm->gc_->Allocate<sr::Future>();
+        future->promise = rt.host().CallExcall(rt, std::move(call));
+        return future;
+      },
+      sb::arg("scene"), sb::arg("zlabel"), sb::arg("integers"),
+      sb::arg("strings"));
 
   m.def("__builtin_load_scn",
         [loader = rt.loader.get()](int scnid) -> sr::Value {

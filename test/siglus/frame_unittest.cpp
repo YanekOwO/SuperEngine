@@ -35,7 +35,7 @@
 #include "core/mwnd_config.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/registry.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
 #include "mock_clock.hpp"
@@ -64,16 +64,18 @@ using namespace std::chrono_literals;
 // Both fixtures compose the same script harness without inheriting fixtures.
 class FrameHarness {
  public:
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
 
   FrameHarness() {
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-    runtime.frame_requests =
-        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
-          auto promise = std::make_shared<sr::Promise>();
-          vm->TrackPendingPromise(promise);
-          return promise;
-        });
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().frame_requests =
+        std::make_unique<FrameRequestManager>(
+            [vm = runtime.GameplayMachine().vm.get()] {
+              auto promise = std::make_shared<sr::Promise>();
+              vm->TrackPendingPromise(promise);
+              return promise;
+            });
     Bind("frame");
   }
 
@@ -81,33 +83,35 @@ class FrameHarness {
     const auto* binding = SiglusBindingRegistry::Find(name);
     if (!binding)
       throw std::logic_error("Missing Siglus binding: " + name);
-    (*binding)(runtime);
+    (*binding)(runtime.GameplayMachine());
   }
 
   sr::Function* Compile(std::string source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(std::move(source), "<frame>"));
     if (!compiler.Ok())
       throw std::runtime_error(compiler.FormatErrors());
-    return runtime.vm->gc_->Allocate<sr::Function>(compiler.Get());
+    return runtime.GameplayMachine().vm->gc_->Allocate<sr::Function>(
+        compiler.Get());
   }
 
   void Invoke(std::string source) {
-    runtime.vm->InvokeUntilBlocked(*Compile(std::move(source)), {});
+    runtime.GameplayMachine().vm->InvokeUntilBlocked(
+        *Compile(std::move(source)), {});
   }
 
   void Schedule(std::string source) {
-    runtime.vm->ScheduleExecute(Compile(std::move(source)));
+    runtime.GameplayMachine().vm->ScheduleExecute(Compile(std::move(source)));
   }
 
-  void Pump() { runtime.vm->RunReadyUntilBlocked(); }
+  void Pump() { runtime.GameplayMachine().vm->RunReadyUntilBlocked(); }
 
   sr::Value Global(const std::string& name) const {
-    return runtime.vm->globals_->at(name);
+    return runtime.GameplayMachine().vm->globals_->at(name);
   }
 
   std::shared_ptr<sr::Promise> Request() {
-    auto future = runtime.RequestFrame();
+    auto future = runtime.GameplayMachine().RequestFrame();
     return sr::get_promise(future);
   }
 };
@@ -152,11 +156,14 @@ class SiglusFrameWaitTest : public ::testing::Test {
 TEST_F(SiglusFrameWaitTest, AwaitSuspendsUntilAFrameCompletes) {
   // Calling frame suspends the continuation; completion resumes it with nil.
   harness.Invoke("result = await frame(); resumed = 1;");
-  EXPECT_FALSE(harness.runtime.vm->globals_->contains("resumed"));
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().vm->globals_->contains("resumed"));
 
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  EXPECT_FALSE(harness.runtime.vm->globals_->contains("resumed"));
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().vm->globals_->contains("resumed"));
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   harness.Pump();
 
@@ -170,8 +177,8 @@ TEST_F(SiglusFrameWaitTest, RecompiledFrameElementSuspendsItsScene) {
   auto& runtime = harness.runtime;
   runtime.archive = std::make_shared<Archive>(
       std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
-  runtime.loader =
-      std::make_unique<Loader>(*runtime.archive, *runtime.vm, false);
+  runtime.GameplayMachine().loader = std::make_unique<Loader>(
+      *runtime.archive, *runtime.GameplayMachine().vm, false);
   harness.Bind("0_memory");
   harness.Bind("flow");
   FakeScene scene{.scene_name = "frames", .command_name = "advance"};
@@ -186,13 +193,14 @@ TEST_F(SiglusFrameWaitTest, RecompiledFrameElementSuspendsItsScene) {
   scene.AppendInt(1);
   scene.AppendInt(static_cast<int>(Type::Int));
   scene.AddTo(*runtime.archive);
-  (*runtime.vm->globals_)["entry"] =
-      ResolveSceneCommand(*runtime.loader, "frames", "advance");
+  (*runtime.GameplayMachine().vm->globals_)["entry"] = ResolveSceneCommand(
+      *runtime.GameplayMachine().loader, "frames", "advance");
 
   harness.Invoke("result = entry();");
-  EXPECT_FALSE(runtime.vm->globals_->contains("result"));
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("result"));
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("result"), sr::Value(42));
@@ -204,8 +212,8 @@ TEST_F(SiglusFrameWaitTest, RecompiledDispElementSuspendsItsScene) {
   auto& runtime = harness.runtime;
   runtime.archive = std::make_shared<Archive>(
       std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
-  runtime.loader =
-      std::make_unique<Loader>(*runtime.archive, *runtime.vm, false);
+  runtime.GameplayMachine().loader = std::make_unique<Loader>(
+      *runtime.archive, *runtime.GameplayMachine().vm, false);
   harness.Bind("0_memory");
   harness.Bind("flow");
   FakeScene scene{.scene_name = "display", .command_name = "advance"};
@@ -220,13 +228,14 @@ TEST_F(SiglusFrameWaitTest, RecompiledDispElementSuspendsItsScene) {
   scene.AppendInt(1);
   scene.AppendInt(static_cast<int>(Type::Int));
   scene.AddTo(*runtime.archive);
-  (*runtime.vm->globals_)["entry"] =
-      ResolveSceneCommand(*runtime.loader, "display", "advance");
+  (*runtime.GameplayMachine().vm->globals_)["entry"] = ResolveSceneCommand(
+      *runtime.GameplayMachine().loader, "display", "advance");
 
   harness.Invoke("result = entry();");
-  EXPECT_FALSE(runtime.vm->globals_->contains("result"));
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("result"));
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("result"), sr::Value(42));
@@ -238,28 +247,33 @@ TEST_F(SiglusFrameWaitTest, ConcurrentRequestsCompleteAtTheSameBoundary) {
   harness.Invoke("await frame(); first = 1;");
   harness.Invoke("await frame(); second = 1;");
 
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   harness.Pump();
 
   EXPECT_EQ(harness.Global("first"), sr::Value(1));
   EXPECT_EQ(harness.Global("second"), sr::Value(1));
-  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, SequentialCallsCrossSeparateBoundaries) {
   // One continuation calls frame twice; the second wait needs another frame.
   harness.Invoke("await frame(); first = 1; await frame(); second = 1;");
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   harness.Pump();
   EXPECT_EQ(harness.Global("first"), sr::Value(1));
-  EXPECT_FALSE(harness.runtime.vm->globals_->contains("second"));
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().vm->globals_->contains("second"));
 
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   harness.Pump();
 
@@ -269,14 +283,16 @@ TEST_F(SiglusFrameWaitTest, SequentialCallsCrossSeparateBoundaries) {
 TEST_F(SiglusFrameWaitTest, RequestsDuringUpdatesWaitForTheFollowingFrame) {
   // A request arrives after a frame begins; completing that frame cannot
   // resolve the request before a subsequent frame has advanced.
-  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
   auto promise = harness.Request();
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   EXPECT_FALSE(promise->HasResult());
 
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
 
   EXPECT_EQ(promise->status, sr::Promise::Status::Resolved);
@@ -288,15 +304,17 @@ TEST_F(SiglusFrameWaitTest, CompletionCallbacksCanRequestAnotherFrame) {
   auto first = harness.Request();
   std::shared_ptr<sr::Promise> next;
   first->AddWaker([&](const auto&) { next = harness.Request(); });
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
 
   ASSERT_NE(next, nullptr);
   EXPECT_FALSE(next->HasResult());
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
   EXPECT_EQ(next->status, sr::Promise::Status::Resolved);
 }
@@ -305,14 +323,15 @@ TEST_F(SiglusFrameWaitTest, AnUnawaitedRequestKeepsTheRuntimeAlive) {
   // An eagerly queued request has no waiter; it still keeps the VM alive until
   // its system frame completes, then leaves no pending work.
   auto promise = harness.Request();
-  EXPECT_TRUE(harness.runtime.vm->HasPendingWork());
+  EXPECT_TRUE(harness.runtime.GameplayMachine().vm->HasPendingWork());
 
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
 
   EXPECT_TRUE(promise->HasResult());
-  EXPECT_FALSE(harness.runtime.vm->HasPendingWork());
+  EXPECT_FALSE(harness.runtime.GameplayMachine().vm->HasPendingWork());
 }
 
 TEST_F(SiglusFrameWaitTest, InvalidArgumentsDoNotQueueAFrame) {
@@ -322,22 +341,24 @@ TEST_F(SiglusFrameWaitTest, InvalidArgumentsDoNotQueueAFrame) {
   harness.Pump();
 
   EXPECT_EQ(harness.Global("caught"), sr::Value(1));
-  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, LocalResetCancelsQueuedAndActiveRequests) {
   // A local runtime reset occurs with both batches populated; all existing
   // requests must be rejected and the next frame must allow presentation.
   auto active = harness.Request();
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
   auto pending = harness.Request();
 
-  for (auto& reset : harness.runtime.reset_local_memory)
-    reset();
+  harness.runtime.ResetLocalMemory();
 
   EXPECT_EQ(active->status, sr::Promise::Status::Rejected);
   EXPECT_EQ(pending->status, sr::Promise::Status::Rejected);
-  EXPECT_FALSE(harness.runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFrameWaitTest, ResetRejectionReachesTheWaitingScript) {
@@ -346,7 +367,7 @@ TEST_F(SiglusFrameWaitTest, ResetRejectionReachesTheWaitingScript) {
   harness.Invoke(
       "caught = 0; try { await frame(); } catch (e) { caught = 1; }");
 
-  harness.runtime.frame_requests->Reset();
+  harness.runtime.GameplayMachine().frame_requests->Reset();
   harness.Pump();
 
   EXPECT_EQ(harness.Global("caught"), sr::Value(1));
@@ -357,7 +378,8 @@ TEST_F(SiglusFrameWaitTest, DestructionCancelsQueuedAndActiveRequests) {
   // rejected before their VM and native services are destroyed.
   auto other = std::make_unique<FrameHarness>();
   auto active = other->Request();
-  ASSERT_TRUE(other->runtime.frame_requests->BeginFrameRequests());
+  ASSERT_TRUE(
+      other->runtime.GameplayMachine().frame_requests->BeginFrameRequests());
   auto pending = other->Request();
 
   other.reset();
@@ -373,10 +395,11 @@ TEST_F(SiglusFrameWaitTest, TimeStopDoesNotBlockFrameCompletion) {
   counter->StartGame();
   harness.runtime.local_config.time_stop = true;
   auto promise = harness.Request();
-  ASSERT_TRUE(harness.runtime.frame_requests->BeginFrameRequests());
+  ASSERT_TRUE(
+      harness.runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 
   harness.runtime.Update(16ms, 16ms);
-  harness.runtime.frame_requests->CompleteFrameRequests(
+  harness.runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
       harness.runtime.script_input.get());
 
   EXPECT_EQ(counter->Get(), 0);
@@ -393,9 +416,11 @@ TEST_F(SiglusFrameWaitTest, MessageFramePreservesTheScriptInputSnapshot) {
   ASSERT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
   runtime.script_input->OnEvent(
       std::make_shared<Event>(MouseUp{MouseButton::LEFT}));
-  auto promise = runtime.frame_requests->RequestMessageFrame();
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  auto promise =
+      runtime.GameplayMachine().frame_requests->RequestMessageFrame();
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   EXPECT_TRUE(promise->HasResult());
   EXPECT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
 }
@@ -410,10 +435,12 @@ TEST_F(SiglusFrameWaitTest, ExplicitFrameStillAdvancesAMixedBatch) {
   ASSERT_TRUE(runtime.script_input->Get(ScriptInput::Source::Left).down);
   runtime.script_input->OnEvent(
       std::make_shared<Event>(MouseUp{MouseButton::LEFT}));
-  auto message = runtime.frame_requests->RequestMessageFrame();
+  auto message =
+      runtime.GameplayMachine().frame_requests->RequestMessageFrame();
   auto explicit_frame = harness.Request();
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   EXPECT_FALSE(runtime.script_input->Get(ScriptInput::Source::Left).down);
   EXPECT_TRUE(message->HasResult());
   EXPECT_TRUE(explicit_frame->HasResult());
@@ -423,7 +450,8 @@ TEST_F(SiglusFrameWaitTest, DestructionCancelsMessageFrames) {
   // A native caller retains a frame promise past runtime destruction; teardown
   // must reject it before the VM and other runtime services disappear.
   auto other = std::make_unique<FrameHarness>();
-  auto promise = other->runtime.frame_requests->RequestMessageFrame();
+  auto promise =
+      other->runtime.GameplayMachine().frame_requests->RequestMessageFrame();
   other.reset();
   EXPECT_EQ(promise->status, sr::Promise::Status::Rejected);
 }
@@ -471,7 +499,7 @@ class SiglusFrameLoopTest : public ::testing::Test {
   MockClock& UseMockClock() {
     auto owner = std::make_unique<MockClock>();
     MockClock& clock = *owner;
-    harness.runtime.vm->scheduler_ = sr::Scheduler(
+    harness.runtime.GameplayMachine().vm->scheduler_ = sr::Scheduler(
         std::make_unique<sr::AdvancingPoller>(clock), std::move(owner));
     return clock;
   }
@@ -485,7 +513,8 @@ class SiglusFrameLoopTest : public ::testing::Test {
         *runtime.gameexe, *runtime.stage, runtime.local_config,
         runtime.global_config, runtime.asset_scanner, MwndConfig{});
     harness.Bind("0_input");
-    runtime.vm->SetHostEventPump([&runtime] { runtime.PumpHostEvents(); });
+    runtime.GameplayMachine().vm->SetHostEventPump(
+        [&runtime] { runtime.PumpHostEvents(); });
     runtime.interaction_manager = std::make_unique<InteractionManager>(
         *runtime.stage, *runtime.input_event_listener, ButtonActionTable{});
     ON_CALL(*backend, Resize(::testing::_, ::testing::_))
@@ -498,7 +527,7 @@ class SiglusFrameLoopTest : public ::testing::Test {
     runtime.update_wipe_after_frame_actions = [this] {
       ++updates;
       if (updates > 8)
-        harness.runtime.vm->RequestStop();
+        harness.runtime.GameplayMachine().vm->RequestStop();
     };
   }
 };
@@ -512,8 +541,8 @@ TEST_F(SiglusFrameLoopTest, DispPresentsSceneChangesBeforeResuming) {
       .WillByDefault([&](const auto&, const auto&, const auto&) {
         displayed.push_back(object->Param().visible());
       });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("show", [&] { object->Param().SetVisible(1); });
   globals.def("hide", [&] { object->Param().SetVisible(0); });
   harness.Schedule("show(); await disp(); hide();");
@@ -529,8 +558,8 @@ TEST_F(SiglusFrameLoopTest, ConsecutiveDispCallsCrossFramesDuringFastForward) {
   // observe a separate system update.
   harness.runtime.system->set_force_fast_forward();
   std::vector<int> observed_updates;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("observe", [&] { observed_updates.push_back(updates); });
   harness.Schedule("await disp(); observe(); await disp(); observe();");
 
@@ -543,8 +572,8 @@ TEST_F(SiglusFrameLoopTest, ResumesAfterAnUpdateAndPresentation) {
   // The first VM slice requests a frame; its continuation must observe a
   // second update and presentation rather than starving display updates.
   int observed_updates = 0, observed_presentations = 0;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("observe", [&] {
     observed_updates = updates;
     observed_presentations = presentations;
@@ -581,8 +610,8 @@ TEST_F(SiglusFrameLoopTest, DoesNotDisplayTemporaryMenuButtonPattern) {
       .WillByDefault([&](const auto&, const auto&, const auto&) {
         displayed.push_back(object->Param().pattern_number);
       });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("normal", [&] {
     object->Param().SetPattNo(0);
     clock.AdvanceTime(100ms);
@@ -609,13 +638,13 @@ TEST_F(SiglusFrameLoopTest, HostPumpsPreserveTheCurrentLogicalFrame) {
   // presentation may advance before its explicit frame wait.
   auto& clock = UseMockClock();
   std::vector<int> observed_updates, observed_presentations;
-  harness.runtime.vm->SetHostEventPump([&] {
+  harness.runtime.GameplayMachine().vm->SetHostEventPump([&] {
     observed_updates.push_back(updates);
     observed_presentations.push_back(presentations);
     harness.runtime.PumpHostEvents();
   });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("compute", [&] { clock.AdvanceTime(100ms); });
   harness.Schedule(R"(
     await frame();
@@ -639,8 +668,8 @@ TEST_F(SiglusFrameLoopTest, ElapsedComputationTimeAdvancesAtTheNextFrame) {
   auto counter = harness.runtime.CreateCounter();
   counter->StartReal();
   int during_computation = -1;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("compute", [&] { clock.AdvanceTime(100ms); });
   globals.def("observe", [&] { during_computation = counter->Get(); });
   harness.Schedule(R"(
@@ -663,8 +692,8 @@ TEST_F(SiglusFrameLoopTest, HostPumpQuitCancelsWithoutAdvancingTheFrame) {
   // cancellation must occur without another simulation update or presentation.
   auto& clock = UseMockClock();
   std::shared_ptr<sr::Promise> pending;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("queue_quit", [&] {
     pending = harness.Request();
     SDL_Event event{};
@@ -676,7 +705,7 @@ TEST_F(SiglusFrameLoopTest, HostPumpQuitCancelsWithoutAdvancingTheFrame) {
 
   harness.runtime.Run();
 
-  EXPECT_TRUE(harness.runtime.vm->IsStopRequested());
+  EXPECT_TRUE(harness.runtime.GameplayMachine().vm->IsStopRequested());
   EXPECT_EQ(updates, 1);
   EXPECT_EQ(presentations, 1);
   ASSERT_NE(pending, nullptr);
@@ -689,9 +718,10 @@ TEST_F(SiglusFrameLoopTest, PresentationResumesDuringAnAsynchronousWait) {
   auto& clock = UseMockClock();
   auto object = harness.runtime.stage->objects.Get(kLayerFg, 0);
   object->Param().SetPattNo(4);
-  auto* future = harness.runtime.vm->gc_->Allocate<sr::Future>();
+  auto* future =
+      harness.runtime.GameplayMachine().vm->gc_->Allocate<sr::Future>();
   auto promise = future->promise;
-  (*harness.runtime.vm->globals_)["pause"] = future;
+  (*harness.runtime.GameplayMachine().vm->globals_)["pause"] = future;
   bool restored = false, displayed_while_waiting = false;
   ON_CALL(*backend, RenderFrame(::testing::_, ::testing::_, ::testing::_))
       .WillByDefault([&](const auto&, const auto&, const auto&) {
@@ -700,8 +730,8 @@ TEST_F(SiglusFrameLoopTest, PresentationResumesDuringAnAsynchronousWait) {
           promise->Resolve(sr::nil);
         }
       });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("normal", [&] {
     object->Param().SetPattNo(0);
     clock.AdvanceTime(100ms);
@@ -734,8 +764,8 @@ TEST_F(SiglusFrameLoopTest, HoverPortraitAppearsWhileScriptWaitsForFrame) {
       .WillByDefault([&](const auto&, const auto&, const auto&) {
         displayed.push_back(object->Param().visible());
       });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("show_portrait", [&] { object->Param().SetVisible(1); });
   globals.def("hover_se", [&] { ++sounds; });
   harness.Schedule("show_portrait(); hover_se(); await frame();");
@@ -756,8 +786,8 @@ TEST_F(SiglusFrameLoopTest, LeavingEntryRemovesPortraitFromDisplayedFrame) {
       .WillByDefault([&](const auto&, const auto&, const auto&) {
         displayed.push_back(object->Param().visible());
       });
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("hide_portrait", [&] { object->Param().SetVisible(0); });
   harness.Schedule("hide_portrait(); await frame();");
 
@@ -873,8 +903,7 @@ TEST_F(SiglusFrameLoopTest, LocalResetReleasesNativeAndScriptInput) {
   // A scene reset with buffered clicks must release both consumers so stale
   // input cannot select a control in the new scene.
   Send(MouseDown{MouseButton::LEFT});
-  for (auto& reset : harness.runtime.reset_local_memory)
-    reset();
+  harness.runtime.ResetLocalMemory();
   harness.Invoke("held = input.decide.is_down();");
 
   EXPECT_FALSE(harness.runtime.input_event_listener->decide.down);
@@ -886,8 +915,8 @@ TEST_F(SiglusFrameLoopTest, FastForwardStillCrossesAFrameBoundary) {
   // must still wait until the second system update.
   harness.runtime.system->set_force_fast_forward();
   int observed_updates = 0;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("observe", [&] { observed_updates = updates; });
   harness.Schedule("await frame(); observe();");
 
@@ -900,8 +929,8 @@ TEST_F(SiglusFrameLoopTest, RequestDuringUpdateWaitsForAnotherIteration) {
   // A native callback requests a frame during the first update; it cannot
   // resume until the following iteration has performed its own update.
   int observed_updates = 0;
-  srbind::module_ globals(harness.runtime.vm->gc_.get(),
-                          harness.runtime.vm->globals_.get());
+  srbind::module_ globals(harness.runtime.GameplayMachine().vm->gc_.get(),
+                          harness.runtime.GameplayMachine().vm->globals_.get());
   globals.def("observe", [&] { observed_updates = updates; });
   auto update = harness.runtime.update_wipe_after_frame_actions;
   harness.runtime.update_wipe_after_frame_actions = [&, update] {
@@ -929,8 +958,8 @@ TEST_F(SiglusFrameLoopTest, CapturesCompleteWithoutWindowPresentation) {
         return surface;
       },
       CaptureManager::Load{});
-  auto capture =
-      runtime.RequestCapture({.kind = CaptureKind::Object, .display = false});
+  auto capture = runtime.GameplayMachine().RequestCapture(
+      {.kind = CaptureKind::Object, .display = false});
   auto promise = sr::get_promise(capture);
   harness.Invoke("await frame(); done = 1;");
 
@@ -951,7 +980,8 @@ TEST_F(SiglusFrameLoopTest, DisplayingCapturePresentsDuringFrameWait) {
         return std::make_shared<SDLSurface>(Size(1, 1));
       },
       CaptureManager::Load{});
-  runtime.RequestCapture({.kind = CaptureKind::Object, .display = true});
+  runtime.GameplayMachine().RequestCapture(
+      {.kind = CaptureKind::Object, .display = true});
   harness.Invoke("await frame();");
 
   runtime.Run();
@@ -963,7 +993,7 @@ TEST_F(SiglusFrameLoopTest, StopCancelsPendingFrameRequests) {
   // Stop the VM before its queued frame begins; Run must cancel that request
   // instead of leaving an externally retained promise permanently pending.
   auto promise = harness.Request();
-  harness.runtime.vm->RequestStop();
+  harness.runtime.GameplayMachine().vm->RequestStop();
 
   harness.runtime.Run();
 

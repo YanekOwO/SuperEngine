@@ -49,7 +49,7 @@ static inline void nop() {}
 
 void BindSystem(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
-  auto* sys = runtime.system.get();
+  auto* sys = runtime.host().system.get();
   if (!sys)
     throw std::runtime_error("system bindings require a System object");
 
@@ -59,12 +59,12 @@ void BindSystem(SiglusMachine& runtime) {
         [sys] { return sys->event().mouse_inside_window() ? 1 : 0; });
   m.def("time", +[]() { return static_cast<int>(std::time(nullptr)); });
   m.def("check_file_exist",
-        [root = runtime.base_pth](std::string filename) -> int {
+        [root = runtime.host().base_pth](std::string filename) -> int {
           fs::path path = CorrectPath(root, std::move(filename));
           return fs::exists(path) ? 1 : 0;
         });
   m.def("check_save_file_exist",
-        [root = runtime.save_pth](std::string filename) -> int {
+        [root = runtime.host().save_pth](std::string filename) -> int {
           fs::path path = CorrectPath(root, std::move(filename));
           return fs::exists(path) ? 1 : 0;
         });
@@ -85,7 +85,9 @@ void BindSystem(SiglusMachine& runtime) {
         if (!sys || msecs <= 0)
           return lop::MakeResolvedFuture(*vm.gc_);
 
-        auto counter = runtime.CreateCounter();
+        auto counter = runtime.host().CreateCounter(
+            runtime.callback_owner >= 0 ? runtime.callback_owner
+                                        : (runtime.host().IsExcall() ? 1 : 0));
         counter->StartGame();
         auto done = [sys, counter = std::move(counter), msecs] {
           if (sys->ShouldFastForward())
@@ -93,7 +95,9 @@ void BindSystem(SiglusMachine& runtime) {
 
           return counter->Get() >= msecs;
         };
-        return lop::MakePollingWaitFuture(vm, std::move(done));
+        return lop::MakePollingWaitFuture(vm, std::move(done), false, nullptr,
+                                          std::chrono::milliseconds(5), {},
+                                          runtime.WaitScope());
       },
       sb::arg("msecs") = 0);
   gm.def(
@@ -103,7 +107,12 @@ void BindSystem(SiglusMachine& runtime) {
           return lop::MakeResolvedFuture(*vm.gc_);
 
         const bool has_timeout = msecs > 0;
-        auto counter = has_timeout ? runtime.CreateCounter() : nullptr;
+        auto counter = has_timeout
+                           ? runtime.host().CreateCounter(
+                                 runtime.callback_owner >= 0
+                                     ? runtime.callback_owner
+                                     : (runtime.host().IsExcall() ? 1 : 0))
+                           : nullptr;
         if (counter)
           counter->StartGame();
         auto done = [sys, counter = std::move(counter), msecs] {
@@ -112,16 +121,18 @@ void BindSystem(SiglusMachine& runtime) {
 
           return counter && counter->Get() >= msecs;
         };
-        return lop::MakePollingWaitFuture(vm, std::move(done), true,
-                                          sys->event_ptr().get());
+        return lop::MakePollingWaitFuture(
+            vm, std::move(done), true, sys->event_ptr().get(),
+            std::chrono::milliseconds(5), {}, runtime.WaitScope());
       },
       sb::arg("msecs") = 0);
-  gm.def("set_title", [window_title = runtime.window_title](std::string title) {
-    window_title->base_title_ = std::move(title);
-    window_title->subtitle_.clear();
-    window_title->subtitle_visible_ = false;
-    window_title->Apply();
-  });
+  gm.def("set_title",
+         [window_title = runtime.host().window_title](std::string title) {
+           window_title->base_title_ = std::move(title);
+           window_title->subtitle_.clear();
+           window_title->subtitle_visible_ = false;
+           window_title->Apply();
+         });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "system", BindSystem)

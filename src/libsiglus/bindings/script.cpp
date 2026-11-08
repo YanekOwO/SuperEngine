@@ -41,7 +41,7 @@ namespace sb = srbind;
 using namespace serilang;
 
 void BindScript(SiglusMachine& rt) {
-  auto* local = &rt.local_config;
+  auto* local = &rt.host().local_config;
   auto& vm = *rt.vm;
   sb::module_ m(vm, "script");
   const auto add_int = [&](int LocalConfig::* field, std::string_view setter,
@@ -81,7 +81,7 @@ void BindScript(SiglusMachine& rt) {
   add_bool(&LocalConfig::disable_ctrl, "set_ctrl_skip_disable",
            "set_ctrl_skip_enable", "set_ctrl_skip_disable_flag",
            "get_ctrl_skip_disable_flag");
-  m.def("check_skip", [sys = rt.system.get()] {
+  m.def("check_skip", [sys = rt.host().system.get()] {
     return sys && sys->ShouldFastForward() ? 1 : 0;
   });
   add_bool(&LocalConfig::not_stop_skip_by_click, "set_stop_skip_by_key_disable",
@@ -161,8 +161,7 @@ void BindScript(SiglusMachine& rt) {
   add_bool(&LocalConfig::skip_trigger, "set_skip_trigger", {});
   add_bool(&LocalConfig::ignore_r, "ignore_r_on", "ignore_r_off");
   add_int(&LocalConfig::cursor_no, "set_cursor_no", "get_cursor_no");
-  add_flag(&LocalConfig::time_stop, "set_time_stop_flag",
-           "get_time_stop_flag");
+  add_flag(&LocalConfig::time_stop, "set_time_stop_flag", "get_time_stop_flag");
   add_flag(&LocalConfig::counter_time_stop, "set_counter_time_stop_flag",
            "get_counter_time_stop_flag");
   add_flag(&LocalConfig::frame_action_time_stop,
@@ -181,7 +180,7 @@ void BindScript(SiglusMachine& rt) {
         [local](std::string font) { local->font_name = std::move(font); });
   m.def("set_font_name_default", [local] { local->font_name.clear(); });
 
-  rt.reset_local_memory.emplace_back([local, gameexe = rt.gameexe] {
+  rt.reset_local_memory.emplace_back([local, gameexe = rt.host().gameexe] {
     *local = gameexe ? MakeSiglusLocalConfig(*gameexe) : LocalConfig{};
   });
 }

@@ -112,6 +112,9 @@ sr::Module* Loader::Load(int scene) {
                                        scene, scn.scnname_, e.what()));
   }
 
+  if (property_factory_)
+    (*mod->globals)["__usrprop"] = property_factory_(scene, scn.property);
+
   auto* dispatcher = mod->globals->at("%%dispatch").Get_if<sr::Function>();
   (*mod->globals)["%%script"] = MakeSceneEntry(
       *vm_.gc_, dispatcher, compiler.GetMainLine(), 0, SceneCallKind::Scene);

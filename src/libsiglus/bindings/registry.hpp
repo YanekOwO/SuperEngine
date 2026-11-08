@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "utilities/static_registry.hpp"
 
 #include <functional>

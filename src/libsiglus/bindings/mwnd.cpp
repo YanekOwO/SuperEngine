@@ -128,16 +128,18 @@ struct KoeCallParams {
 
 struct MwndHandle {
   std::shared_ptr<TextWindow> mwnd;
+  int owner = 0;
 };
 
 struct MwndArrayHandle {
   int layer = kLayerFg;
+  int owner = 0;
 };
 
 void BindMwnd(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
-  System* sys = runtime.system.get();
-  if (!sys || !runtime.stage)
+  System* sys = runtime.host().system.get();
+  if (!sys || !runtime.host().stage)
     throw std::runtime_error("Mwnd bindings require a system and stage");
 
   auto get = [sys](const MwndHandle* h) -> std::shared_ptr<TextWindow> {
@@ -146,15 +148,18 @@ void BindMwnd(SiglusMachine& runtime) {
   auto page = [get](const MwndHandle* h) -> TextWindow& { return *get(h); };
   auto context = std::make_shared<lop::PendingCoroutineTasks>();
   auto state = [get](const MwndHandle* h) { return get(h)->message_state(); };
-  auto wait = [sys, frames = runtime.frame_requests.get(), get, context](
-                  MwndHandle* h, sr::VM& vm,
-                  lop::SiglusMwndWaitOperation::AfterWait after_wait) {
+  auto wait = [&runtime, sys, frames = runtime.frame_requests.get(), get,
+               context](MwndHandle* h, sr::VM& vm,
+                        lop::SiglusMwndWaitOperation::AfterWait after_wait) {
     auto window = get(h);
     auto message_state = window->message_state();
     auto task = std::make_unique<lop::SiglusMwndWaitOperation>(
         sys, *frames, std::move(window), std::move(message_state), after_wait);
-    return sr::Value(
-        context->MakeFuture(vm, std::move(task), sys->event_ptr().get()));
+    const bool ex_scope = sys->text().IsExcallActive();
+    return sr::Value(context->MakeFuture(
+        vm, std::move(task), sys->event_ptr().get(),
+        [sys, ex_scope] { return sys->text().IsExcallActive() == ex_scope; },
+        runtime.WaitScope(h->mwnd ? h->owner : -1)));
   };
 
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -162,12 +167,18 @@ void BindMwnd(SiglusMachine& runtime) {
       "set_mwnd",
       [&text = sys->text()](std::vector<sr::Value> raw) {
         const auto packet = CallPacket::DecodeFrom(std::move(raw));
-        // set_mwnd overload zero selects a window reference, which requires
-        // layer-aware active-window state. Defer it rather than losing the
-        // reference's stage layer by treating it as a window number.
-        if (packet.overload_id == 0)
-          throw sr::RuntimeError(
-              "set_mwnd window-reference selection is not supported");
+        if (packet.overload_id == 0) {
+          if (packet.args.size() != 1)
+            throw sr::RuntimeError("set_mwnd requires one window reference");
+          auto* instance = packet.args[0].Get_if<sr::NativeInstance>();
+          auto* handle =
+              instance ? instance->GetForeign<MwndHandle>() : nullptr;
+          if (!handle || !handle->mwnd)
+            throw sr::RuntimeError(
+                "set_mwnd expects a message-window reference");
+          text.SetCurrentMwnd(handle->mwnd);
+          return;
+        }
 
         if (packet.overload_id && packet.overload_id != 1)
           throw sr::RuntimeError("Unsupported set_mwnd overload: " +
@@ -213,18 +224,19 @@ void BindMwnd(SiglusMachine& runtime) {
 
           std::shared_ptr<Selection> sel =
               Build(rt, std::move(request), get(h));
-          rt.StartSelection(sel);
+          rt.host().StartSelection(sel);
           std::shared_ptr<SelState> state = rt.selection_state;
           auto wait = std::make_unique<lop::WaitForSelection>(
               state, sel,
               [&rt](std::shared_ptr<Selection> sel) {
-                rt.FinishSelection(sel);
+                rt.host().FinishSelection(sel);
               },
               [&rt](std::shared_ptr<Selection> sel) {
-                rt.CancelSelection(sel);
+                rt.host().CancelSelection(sel);
               });
           sr::Future* fut = state->pending_->MakeFuture(
-              *rt.vm, std::move(wait), rt.system->event_ptr().get());
+              *rt.vm, std::move(wait), rt.host().system->event_ptr().get(), {},
+              rt.WaitScope(h->owner));
           return sr::Value(fut);
         },
         sb::vararg);
@@ -235,23 +247,28 @@ void BindMwnd(SiglusMachine& runtime) {
   bind_selection("selmsg_cancel", true, false);
 
   sb::class_<MwndArrayHandle> array(m, "MwndArray");
-  array.def(sb::init([stage = runtime.stage.get()](int layer) {
-              (void)stage->mwnd[layer];
-              return std::make_unique<MwndArrayHandle>(layer);
+  array.def(sb::init([](int layer, int owner) {
+              if (layer < 0 || layer > 2 || owner < 0 || owner > 1)
+                throw sr::RuntimeError("Invalid message-window stage");
+              return std::make_unique<MwndArrayHandle>(layer, owner);
             }),
-            sb::arg("layer") = static_cast<int>(kLayerFg));
+            sb::arg("layer") = static_cast<int>(kLayerFg),
+            sb::arg("owner") = 0);
   array.add_gc_root(mwnd);
   array.def(
       "__getitem__",
-      [sys, mwnd](MwndArrayHandle* array, int index) mutable {
+      [sys, mwnd, &runtime](MwndArrayHandle* array, int index) mutable {
         if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
           throw sr::RuntimeError("Invalid message-window number: " +
                                  std::to_string(index));
-        return sr::Value(
-            mwnd.make_inst(sys->text().GetMwnd(array->layer, index)));
+        return sr::Value(mwnd.make_inst(
+            sys->text().GetMwnd(runtime.host().GetStage(array->owner),
+                                array->layer, index),
+            array->owner));
       },
       sb::arg("index"));
-  auto close_all = [sys, stage = runtime.stage.get()](MwndArrayHandle*) {
+  auto close_all = [sys, &runtime](MwndArrayHandle* array) {
+    auto* stage = &runtime.host().GetStage(array->owner);
     sys->text().set_in_pause_state(false);
     for (const auto& layer : stage->mwnd.storage) {
       for (const auto& window : layer)
@@ -310,18 +327,33 @@ void BindMwnd(SiglusMachine& runtime) {
       },
       sb::arg("size"));
   mwnd.add_gc_root(object_list);
+  const auto object_factory = [&runtime, get](MwndHandle* handle) {
+    int owner = handle->owner;
+    const auto window = get(handle);
+    if (runtime.host().excall && runtime.host().excall->allocated)
+      for (const auto& layer : runtime.host().excall->stage.mwnd.storage)
+        if (std::find(layer.begin(), layer.end(), window) != layer.end())
+          owner = 1;
+    return [&runtime, owner](std::shared_ptr<GraphicsObject> object) {
+      return owner ? runtime.make_owned_object(std::move(object), owner)
+                   : runtime.make_object(std::move(object));
+    };
+  };
   // The Object binding is installed after Mwnd. Resolve its factory on access.
-  mwnd.prop_r("object", [get, object_list, &runtime](MwndHandle* h) mutable {
-    return sr::Value(object_list.make_inst(get(h), runtime.make_object));
-  });
-  mwnd.prop_r("button", [get, object_list, &runtime](MwndHandle* h) mutable {
-    return sr::Value(object_list.make_inst(get(h), runtime.make_object,
-                                           MwndObjectList::Kind::Button));
-  });
-  mwnd.prop_r("face", [get, object_list, &runtime](MwndHandle* h) mutable {
-    return sr::Value(object_list.make_inst(get(h), runtime.make_object,
-                                           MwndObjectList::Kind::Face));
-  });
+  mwnd.prop_r(
+      "object", [get, object_list, object_factory](MwndHandle* h) mutable {
+        return sr::Value(object_list.make_inst(get(h), object_factory(h)));
+      });
+  mwnd.prop_r("button",
+              [get, object_list, object_factory](MwndHandle* h) mutable {
+                return sr::Value(object_list.make_inst(
+                    get(h), object_factory(h), MwndObjectList::Kind::Button));
+              });
+  mwnd.prop_r("face",
+              [get, object_list, object_factory](MwndHandle* h) mutable {
+                return sr::Value(object_list.make_inst(
+                    get(h), object_factory(h), MwndObjectList::Kind::Face));
+              });
 
   mwnd.def(
       "set_waku",
@@ -404,30 +436,30 @@ void BindMwnd(SiglusMachine& runtime) {
   });
   mwnd.def("enable_multi_msg",
            [get](MwndHandle* h) { get(h)->BeginMultiMessage(); });
-  mwnd.def(
-      "next_msg", [get, page, sys, cfg = &runtime.local_config](MwndHandle* h) {
-        if (cfg->multi_msg_mode)
-          get(h)->BeginMultiMessage();
-        auto& window = page(h);
-        window.Submit(msgcmd::NextMessage{
-            sys->text().mwnd_config().GetWindow(window.window_number()).layout,
-            window.GetDefaultTextColor()});
-      });
+  mwnd.def("next_msg", [get, page, sys,
+                        cfg = &runtime.host().local_config](MwndHandle* h) {
+    if (cfg->multi_msg_mode)
+      get(h)->BeginMultiMessage();
+    auto& window = page(h);
+    window.Submit(msgcmd::NextMessage{
+        sys->text().mwnd_config().GetWindow(window.window_number()).layout,
+        window.GetDefaultTextColor()});
+  });
   mwnd.def("msg_wait", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::MessageOnly);
   });
   mwnd.def("pp", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::None);
   });
-  mwnd.def(
-      "r", [get, wait, cfg = &runtime.local_config](MwndHandle* h, sr::VM& vm) {
-        if (cfg->ignore_r)
-          return lop::MakeResolvedFuture(*vm.gc_);
-        return wait(h, vm,
-                    get(h)->action_on_pause() && get(h)->CanFitMessage(true)
-                        ? lop::SiglusMwndWaitOperation::AfterWait::Paragraph
-                        : lop::SiglusMwndWaitOperation::AfterWait::Clear);
-      });
+  mwnd.def("r", [get, wait, cfg = &runtime.host().local_config](MwndHandle* h,
+                                                                sr::VM& vm) {
+    if (cfg->ignore_r)
+      return lop::MakeResolvedFuture(*vm.gc_);
+    return wait(h, vm,
+                get(h)->action_on_pause() && get(h)->CanFitMessage(true)
+                    ? lop::SiglusMwndWaitOperation::AfterWait::Paragraph
+                    : lop::SiglusMwndWaitOperation::AfterWait::Clear);
+  });
   mwnd.def("page", [wait](MwndHandle* h, sr::VM& vm) {
     return wait(h, vm, lop::SiglusMwndWaitOperation::AfterWait::Clear);
   });
@@ -458,8 +490,8 @@ void BindMwnd(SiglusMachine& runtime) {
   });
   mwnd.def(
       "set_face",
-      [get, images = runtime.images](MwndHandle* h,
-                                     std::vector<sr::Value> args) {
+      [get, images = runtime.host().images](MwndHandle* h,
+                                            std::vector<sr::Value> args) {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         if (packet.args.empty())
           return;
@@ -480,8 +512,8 @@ void BindMwnd(SiglusMachine& runtime) {
       sb::vararg);
   mwnd.def(
       "print",
-      [get, sys, context](MwndHandle* h, sr::VM& vm,
-                          std::vector<sr::Value> args) -> sr::Value {
+      [get, sys, context, &runtime](MwndHandle* h, sr::VM& vm,
+                                    std::vector<sr::Value> args) -> sr::Value {
         CallPacket packet = CallPacket::DecodeFrom(std::move(args));
         if (packet.args.empty())
           return lop::MakeResolvedFuture(*vm.gc_);
@@ -502,7 +534,8 @@ void BindMwnd(SiglusMachine& runtime) {
         auto task = std::make_unique<lop::SiglusTextoutOperation>(
             sys, std::move(window), std::move(text));
         return sr::Value(
-            context->MakeFuture(vm, std::move(task), sys->event_ptr().get()));
+            context->MakeFuture(vm, std::move(task), sys->event_ptr().get(), {},
+                                runtime.WaitScope(h->mwnd ? h->owner : -1)));
       },
       sb::vararg);
   mwnd.def("ruby_start", [page, state](MwndHandle* h, std::string ruby) {
@@ -556,10 +589,11 @@ void BindMwnd(SiglusMachine& runtime) {
     page(h).Submit(msgcmd::KoeMarker{params.koe});
   };
   mwnd.def("koe", play_koe, sb::vararg);
-  auto wait_koe = [sys](sr::VM& vm, bool key_skip) {
+  auto wait_koe = [sys, &runtime](sr::VM& vm, bool key_skip) {
     return lop::MakePollingWaitFuture(
         vm, [sys] { return !sys->sound().KoePlaying(); }, key_skip,
-        sys->event_ptr().get());
+        sys->event_ptr().get(), std::chrono::milliseconds(5), {},
+        runtime.WaitScope());
   };
   mwnd.def(
       "koe_play_wait",

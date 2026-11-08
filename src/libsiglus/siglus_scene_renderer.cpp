@@ -22,6 +22,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/siglus_scene_renderer.hpp"
+#include "core/excall.hpp"
 
 #include "core/game_config.hpp"
 #include "core/mask.hpp"
@@ -121,6 +122,8 @@ SiglusSceneRenderer::SiglusSceneRenderer(
 
 void SiglusSceneRenderer::ExecuteFrame() {
   stage_.Execute();
+  if (excall_ && excall_->allocated)
+    excall_->stage.Execute();
   if (mask_list_)
     mask_list_->Execute();
 }
@@ -133,14 +136,17 @@ void SiglusSceneRenderer::RenderCapture(std::pair<int, int> inclusive_end) {
 
 void SiglusSceneRenderer::RenderStageObjects(
     std::optional<std::pair<int, int>> inclusive_end) {
-  if (!stage_.transition_render_range()) {
+  transition_stage_ = &stage_;
+  if (excall_ && excall_->allocated && excall_->stage.transition_render_range())
+    transition_stage_ = &excall_->stage;
+  if (!transition_stage_->transition_render_range()) {
     RenderObjects(kLayerFg, ObjectRange::All, inclusive_end);
     return;
   }
 
   const auto screen = SDLSurface::screen_;
   ScopedTransitionCanvas render_state;
-  const double progress = stage_.foreground_render_alpha();
+  const double progress = transition_stage_->foreground_render_alpha();
 
   RenderObjects(kLayerFg, ObjectRange::Below, inclusive_end);
   RenderObjects(progress >= 1.0 ? kLayerFg : kLayerNext, ObjectRange::Within,
@@ -180,45 +186,67 @@ void SiglusSceneRenderer::RenderObjects(
     ObjectRange range,
     std::optional<std::pair<int, int>> inclusive_end) {
   to_render_.clear();
-  const auto in_range = [&](std::pair<int, int> sorter) {
-    if (inclusive_end && sorter > *inclusive_end)
+  const std::int64_t transition_offset =
+      transition_stage_ == &stage_ ? 0 : excall_order_;
+  const auto in_range = [&](std::pair<std::int64_t, int> sorter) {
+    if (inclusive_end && sorter > std::pair<std::int64_t, int>(*inclusive_end))
       return false;
     if (range == ObjectRange::All)
       return true;
-    const auto& bounds = *stage_.transition_render_range();
+    const auto& bounds = *transition_stage_->transition_render_range();
+    const std::pair<std::int64_t, int> begin{
+        static_cast<std::int64_t>(bounds.begin.first) + transition_offset,
+        bounds.begin.second};
+    const std::pair<std::int64_t, int> end{
+        static_cast<std::int64_t>(bounds.end.first) + transition_offset,
+        bounds.end.second};
     if (range == ObjectRange::Below)
-      return sorter < bounds.begin;
+      return sorter < begin;
     if (range == ObjectRange::Above)
-      return sorter > bounds.end;
-    return bounds.begin <= sorter && sorter <= bounds.end;
+      return sorter > end;
+    return begin <= sorter && sorter <= end;
   };
-  const auto& objects = stage_.objects[stage_layer];
-  for (size_t i = 0; i < objects.size(); ++i) {
-    if (!objects[i])
-      continue;
-    const auto& param = objects[i]->Param();
-    if (in_range({param.z_order, param.z_layer}))
-      to_render_.emplace_back(param.z_order, param.z_layer, 0, param.z_depth,
-                              static_cast<int>(i), objects[i].get());
-  }
-  const auto& windows = system_.text().GetDisplayedWindows(stage_layer);
-  for (size_t i = 0; i < windows.size(); ++i) {
-    if (!windows[i] || !in_range(windows[i]->sorter()))
-      continue;
-    const auto [order, layer] = windows[i]->sorter();
-    to_render_.emplace_back(order, layer, 1, 0, static_cast<int>(i),
-                            windows[i].get());
-  }
-  const auto& selection = stage_.selection[stage_layer];
-  if (selection && selection->Visible() && in_range(selection->sorter)) {
-    const auto [order, layer] = selection->sorter;
-    to_render_.emplace_back(order, layer, 2, 0, 0, selection.get());
-  }
+  const auto collect = [&](Stage& stage, std::int64_t offset) {
+    const int layer = &stage == transition_stage_ ? stage_layer : kLayerFg;
+    const auto& objects = stage.objects[layer];
+    for (size_t i = 0; i < objects.size(); ++i) {
+      if (!objects[i])
+        continue;
+      const auto& param = objects[i]->Param();
+      const auto order = static_cast<std::int64_t>(param.z_order) + offset;
+      if (in_range({order, param.z_layer}))
+        to_render_.push_back({order, param.z_layer, 0, param.z_depth,
+                              static_cast<int>(i), objects[i].get(), &stage,
+                              layer});
+    }
+    const auto& windows = &stage == &stage_
+                              ? system_.text().GetDisplayedWindows(layer)
+                              : stage.mwnd[layer];
+    for (size_t i = 0; i < windows.size(); ++i) {
+      if (!windows[i])
+        continue;
+      const auto [order, zlayer] = windows[i]->sorter();
+      if (in_range({static_cast<std::int64_t>(order) + offset, zlayer}))
+        to_render_.push_back({static_cast<std::int64_t>(order) + offset, zlayer,
+                              1, 0, static_cast<int>(i), windows[i].get(),
+                              &stage, layer});
+    }
+    const auto& selection = stage.selection[layer];
+    if (selection && selection->Visible()) {
+      const auto [order, zlayer] = selection->sorter;
+      if (in_range({static_cast<std::int64_t>(order) + offset, zlayer}))
+        to_render_.push_back({static_cast<std::int64_t>(order) + offset, zlayer,
+                              2, 0, 0, selection.get(), &stage, layer});
+    }
+  };
+  collect(stage_, 0);
+  if (excall_ && excall_->allocated)
+    collect(excall_->stage, excall_order_);
   RenderQueuedObjects(stage_layer);
 }
 
 void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
-  std::sort(to_render_.begin(), to_render_.end());
+  std::stable_sort(to_render_.begin(), to_render_.end());
 
   for (auto& it : to_render_) {
     std::visit(overload(
@@ -236,12 +264,18 @@ void SiglusSceneRenderer::RenderQueuedObjects(int stage_layer) {
                        return;
                      GraphicsObject& go = *obj;
                      ScopedRenderParameters screen_parameters(
-                         go, stage_.screen_effects);
+                         go, it.stage->screen_effects);
                      ScopedRenderParameters parameters(
-                         go, stage_.EffectsForLayer(stage_layer));
+                         go, it.stage->EffectsForLayer(it.stage_layer));
                      std::optional<ParentObjState> quake_parent;
                      const QuakeTransform quake =
-                         TransformForOrder(go.Param().z_order, stage_layer);
+                         QuakeRenderingStopped()
+                             ? QuakeTransform{}
+                             : ComposeQuakeTransforms(
+                                   go.Param().z_order,
+                                   it.stage == &stage_ ? screen_quakes_.get()
+                                                       : nullptr,
+                                   it.stage->QuakesForLayer(it.stage_layer));
                      if (!quake.IsIdentity()) {
                        quake_parent = ParentObjState{};
                        quake_parent->render_state.pos_x = quake.translate_x;

@@ -23,7 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/sgvm_factory.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
 #include "utilities/file.hpp"
@@ -73,14 +73,22 @@ static std::shared_ptr<SourceBuffer> LoadSource(std::string file_name) {
   return nullptr;
 }
 
-static void run_repl(VM& vm, const std::function<void(Code*)>& execute) {
-  CompilerPipeline pipeline(vm.gc_, /*repl_mode=*/true);
+static void run_repl(const std::function<VM&()>& current_vm,
+                     const std::function<void(Code*)>& execute) {
+  auto collector = current_vm().gc_;
+  auto pipeline =
+      std::make_unique<CompilerPipeline>(collector, /*repl_mode=*/true);
 
   std::string line, line_trimmed;
   std::shared_ptr<SourceBuffer> src;
   fs::path run_cwd;
   for (size_t lineno = 1; std::cout << ">> " && std::getline(std::cin, line);
        ++lineno) {
+    if (collector != current_vm().gc_) {
+      collector = current_vm().gc_;
+      pipeline =
+          std::make_unique<CompilerPipeline>(collector, /*repl_mode=*/true);
+    }
     if (line.empty())
       continue;
 
@@ -103,13 +111,13 @@ static void run_repl(VM& vm, const std::function<void(Code*)>& execute) {
       if (!src)
         continue;
 
-      pipeline.compile(src);
-      if (!pipeline.Ok()) {
-        std::cerr << pipeline.FormatErrors() << std::flush;
+      pipeline->compile(src);
+      if (!pipeline->Ok()) {
+        std::cerr << pipeline->FormatErrors() << std::flush;
         continue;
       }
 
-      auto chunk = pipeline.Get();
+      auto chunk = pipeline->Get();
       if (!chunk)
         continue;
 
@@ -123,13 +131,13 @@ static void run_repl(VM& vm, const std::function<void(Code*)>& execute) {
     if (!src)
       continue;
 
-    pipeline.compile(src);
-    if (!pipeline.Ok()) {
-      std::cerr << pipeline.FormatErrors() << std::flush;
+    pipeline->compile(src);
+    if (!pipeline->Ok()) {
+      std::cerr << pipeline->FormatErrors() << std::flush;
       continue;
     }
 
-    auto chunk = pipeline.Get();
+    auto chunk = pipeline->Get();
     if (!chunk)
       continue;
 
@@ -139,7 +147,7 @@ static void run_repl(VM& vm, const std::function<void(Code*)>& execute) {
       if (!run_cwd.empty())
         scoped_path = std::make_unique<ScopedCurrentPath>(run_cwd);
       execute(chunk);
-      if (vm.IsStopRequested())
+      if (current_vm().IsStopRequested())
         break;
     } catch (const std::exception& ex) {
       std::cerr << "runtime: " << ex.what() << '\n';
@@ -182,15 +190,17 @@ int main(int argc, char* argv[]) {
 
   try {
     if (!siglus_path.empty()) {
-      std::unique_ptr<libsiglus::SiglusMachine> env =
+      std::unique_ptr<libsiglus::SiglusRuntime> env =
           libsiglus::SGVMFactory(fs::absolute(siglus_path)).Create();
-      run_repl(*env->vm, [&env](Code* chunk) {
-        env->vm->AddFiber(chunk);
-        env->Run();
-      });
+      run_repl([&env]() -> VM& { return *env->GameplayMachine().vm; },
+               [&env](Code* chunk) {
+                 env->GameplayMachine().vm->AddFiber(chunk);
+                 env->Run();
+               });
     } else {
       auto vm = m6::VMFactory::Create();
-      run_repl(vm, [&vm](Code* chunk) { std::ignore = vm.Evaluate(chunk); });
+      run_repl([&vm]() -> VM& { return vm; },
+               [&vm](Code* chunk) { std::ignore = vm.Evaluate(chunk); });
     }
   } catch (std::exception const& ex) {
     std::cerr << "fatal: " << ex.what() << '\n';

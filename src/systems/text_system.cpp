@@ -157,6 +157,23 @@ void TextSystem::AdvanceMessageText(std::chrono::milliseconds delta) {
         window->AdvanceMessageText(delta);
 }
 
+const LocalConfig& TextSystem::FontConfig() const {
+  static const LocalConfig defaults;
+  if (IsReadingBacklog())
+    return defaults;
+  return font_config_source_ ? font_config_source_() : local_config_;
+}
+
+void TextSystem::AdvanceExcallText(std::chrono::milliseconds delta) {
+  if (!excall_stage_ || !excall_allocated_ || !excall_allocated_())
+    return;
+  for (const auto& layer : excall_stage_->mwnd.storage)
+    for (const auto& window : layer)
+      if (window)
+        window->AdvanceMessageText(
+            std::max(delta, std::chrono::milliseconds::zero()));
+}
+
 void TextSystem::ExecuteTextSystem() {
   if (auto_skip_mode_ && !auto_skip_suspended_ && !local_config_.disable_skip &&
       (kidoku_read_ || local_config_.skip_unread_message ||
@@ -178,12 +195,26 @@ void TextSystem::ExecuteTextSystem() {
         window->Execute(layer == kLayerFg &&
                         ShowWindow(window->window_number()));
   }
+  if (excall_stage_ && excall_allocated_ && excall_allocated_())
+    for (int layer : {kLayerBg, kLayerFg, kLayerNext})
+      for (const auto& window : excall_stage_->mwnd[layer])
+        if (window)
+          window->Execute(layer == kLayerFg);
 }
 
 void TextSystem::RenderWindow(TextWindow& window) {
-  if (IsReadingBacklog() && !IsDisplayedWindow(&window))
+  const bool extra =
+      excall_stage_ &&
+      std::any_of(
+          excall_stage_->mwnd.storage.begin(),
+          excall_stage_->mwnd.storage.end(), [&window](const auto& layer) {
+            return std::any_of(
+                layer.begin(), layer.end(),
+                [&window](const auto& w) { return w.get() == &window; });
+          });
+  if (!extra && IsReadingBacklog() && !IsDisplayedWindow(&window))
     return;
-  if (!system_visible() || !ShowWindow(window.window_number()) ||
+  if (!system_visible() || (!extra && !ShowWindow(window.window_number())) ||
       IsInterfaceHidden())
     return;
   window.Render();
@@ -282,6 +313,26 @@ std::shared_ptr<TextWindow> TextSystem::GetMwnd(int layer, int window_id) {
                          [this, window_id] { return CreateWindow(window_id); });
 }
 
+std::shared_ptr<TextWindow> TextSystem::GetMwnd(Stage& owner,
+                                                int layer,
+                                                int index) {
+  if (&owner == &stage_)
+    return GetMwnd(layer, index);
+  if (index < 0 || !mwnd_config_.HasWindow(index))
+    throw std::out_of_range("Invalid message-window index");
+  if (owner.mwnd.Size(layer) <
+      static_cast<std::size_t>(mwnd_config_.window_capacity()))
+    owner.mwnd.Resize(layer, mwnd_config_.window_capacity());
+  return owner.mwnd.Get(layer, index, [this, index] {
+    struct Guard {
+      bool& value;
+      ~Guard() { value = false; }
+    } guard{creating_excall_window_};
+    creating_excall_window_ = true;
+    return CreateWindow(index);
+  });
+}
+
 std::shared_ptr<TextWindow> TextSystem::CreateWindow(int window_id,
                                                      bool history) {
   Gameexe& gexe = system_.gameexe();
@@ -331,10 +382,12 @@ bool TextSystem::IsDisplayedWindow(const TextWindow* window) const {
 }
 
 bool TextSystem::IsLiveWindow(const TextWindow* window) const {
-  for (const auto& layer : stage_.mwnd.storage)
-    for (const auto& entry : layer)
-      if (entry && entry.get() == window)
-        return true;
+  for (auto* stage : {&stage_, excall_stage_})
+    if (stage)
+      for (const auto& layer : stage->mwnd.storage)
+        for (const auto& entry : layer)
+          if (entry && entry.get() == window)
+            return true;
   return false;
 }
 
@@ -343,7 +396,16 @@ bool TextSystem::HasCurrentWindow() const {
 }
 
 std::shared_ptr<TextWindow> TextSystem::GetCurrentMwnd() {
+  if (auto selected = selected_mwnd_.lock())
+    return selected;
   return GetMwnd(active_window_);
+}
+
+void TextSystem::SetCurrentMwnd(std::shared_ptr<TextWindow> window) {
+  if (!window)
+    throw std::invalid_argument("Cannot select a null message window");
+  active_window_ = window->window_number();
+  selected_mwnd_ = std::move(window);
 }
 
 bool TextSystem::IsMwndButtonEnabled(const MwndConfig::Button& button) const {
@@ -1007,7 +1069,7 @@ std::shared_ptr<SDLSurface> TextSystem::RenderText(const std::string& utf8str,
     }
 
     if (add_char) {
-      const int decoration = EffectiveFontShadow(local_config_, global_config_);
+      const int decoration = EffectiveFontShadow(FontConfig(), global_config_);
       std::optional<RGBColour> shadow;
       if ((decoration & 3) && shadow_colour != nullptr)
         shadow = *shadow_colour;
@@ -1262,7 +1324,7 @@ static ResolvedFont ResolveFont(System& system, const std::string& name) {
 }
 
 std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
-  const std::string& name = EffectiveFontName(local_config_, global_config_);
+  const std::string& name = EffectiveFontName(FontConfig(), global_config_);
 
   // File resolution is independent of pixel size and synthetic bold styling.
   auto [resolved, inserted] = resolved_fonts_.try_emplace(name);
@@ -1276,11 +1338,11 @@ std::shared_ptr<IFont> TextSystem::LoadFont(int size) {
   // Family aliases can share a loaded font, but size, bold style and collection
   // face each require a distinct SDL_ttf instance.
   auto [it, created] = font_cache_.try_emplace(std::make_tuple(
-      file, size, EffectiveFontBold(local_config_, global_config_), index));
+      file, size, EffectiveFontBold(FontConfig(), global_config_), index));
   if (created) {
     try {
       it->second = text_impl_->GetFont(
-          file, size, EffectiveFontBold(local_config_, global_config_), index);
+          file, size, EffectiveFontBold(FontConfig(), global_config_), index);
     } catch (...) {
       // Allow a later attempt to retry instead of returning a cached null font.
       font_cache_.erase(it);

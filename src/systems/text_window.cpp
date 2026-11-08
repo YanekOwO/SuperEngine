@@ -867,7 +867,7 @@ void TextWindow::QueueText(std::string_view text,
   if (layout.glyphs.empty())
     return;
   const int decoration =
-      EffectiveFontShadow(system_.local_config(), system_.global_config());
+      EffectiveFontShadow(system_.text().FontConfig(), system_.global_config());
   FontFace face{.font = font,
                 .is_italic = next_char_italic_,
                 .is_shadow = (decoration & 1) != 0,

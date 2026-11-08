@@ -35,11 +35,11 @@
 namespace libsiglus::binding {
 
 void BindG00buf(SiglusMachine& runtime) {
-  if (!runtime.images || !runtime.gameexe)
+  if (!runtime.host().images || !runtime.host().gameexe)
     throw std::runtime_error("g00buf binding requires images and Gameexe");
   const int count =
-      std::max(0, (*runtime.gameexe)("G00BUF.CNT").Int().value_or(16));
-  auto images = runtime.images;
+      std::max(0, (*runtime.host().gameexe)("G00BUF.CNT").Int().value_or(16));
+  auto images = runtime.host().images;
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
 
   struct Handle {

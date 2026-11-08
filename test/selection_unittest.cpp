@@ -163,12 +163,12 @@ TEST(SelectionLayoutTest, WindowColumnsCountSlots) {
 }
 
 TEST(SelectionLayoutTest, SgBuildRetainsHeadlessLayout) {
-  libsiglus::SiglusMachine machine;
+  libsiglus::SiglusRuntime machine;
   machine.gameexe = std::make_shared<Gameexe>();
   machine.gameexe->parseLine("SELBTN.000.BASE_POS = 30,40");
   machine.gameexe->parseLine("SELBTN.000.REP_POS = 0,50");
   auto s =
-      libsiglus::binding::Build(machine,
+      libsiglus::binding::Build(machine.GameplayMachine(),
                                 {.kind = SelectionRequest::Kind::Buttons,
                                  .options = {{"off", 0}, {"choice", 1, 7}}},
                                 nullptr);

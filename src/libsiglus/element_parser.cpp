@@ -1547,7 +1547,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
       case Type::Syscom:
         switch (key) {
           case 0:
-            append_node(Type::None, Member("menu"));
+            append_callable("menu");
             continue;
           case 6:
             append_node(Type::Callable, Member("menu_enable"));
@@ -1602,22 +1602,22 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_readskip"));
             continue;
           case 201:
-            append_node(Type::Int, Member("get_readskip"));
+            append_callable("get_readskip", Type::Int);
             continue;
           case 202:
             append_node(Type::Callable, Member("set_enable_readskip"));
             continue;
           case 203:
-            append_node(Type::Int, Member("get_enable_readskip"));
+            append_callable("get_enable_readskip", Type::Int);
             continue;
           case 204:
             append_node(Type::Callable, Member("set_exist_readskip"));
             continue;
           case 205:
-            append_node(Type::Int, Member("get_exist_readskip"));
+            append_callable("get_exist_readskip", Type::Int);
             continue;
           case 206:
-            append_node(Type::Int, Member("is_readskip_enable"));
+            append_callable("is_readskip_enable", Type::Int);
             continue;
           case 207:
             append_callable("set_autoskip");
@@ -1644,43 +1644,43 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_automode"));
             continue;
           case 215:
-            append_node(Type::Int, Member("get_automode"));
+            append_callable("get_automode", Type::Int);
             continue;
           case 216:
             append_node(Type::Callable, Member("set_enable_automode"));
             continue;
           case 217:
-            append_node(Type::Int, Member("get_enable_automode"));
+            append_callable("get_enable_automode", Type::Int);
             continue;
           case 218:
             append_node(Type::Callable, Member("set_exist_automode"));
             continue;
           case 219:
-            append_node(Type::Int, Member("get_exist_automode"));
+            append_callable("get_exist_automode", Type::Int);
             continue;
           case 220:
-            append_node(Type::Int, Member("is_automode_enable"));
+            append_callable("is_automode_enable", Type::Int);
             continue;
           case 221:
             append_node(Type::Callable, Member("set_hidemwnd"));
             continue;
           case 222:
-            append_node(Type::Int, Member("get_hidemwnd"));
+            append_callable("get_hidemwnd", Type::Int);
             continue;
           case 223:
             append_node(Type::Callable, Member("set_enable_hidemwnd"));
             continue;
           case 224:
-            append_node(Type::Int, Member("get_enable_hidemwnd"));
+            append_callable("get_enable_hidemwnd", Type::Int);
             continue;
           case 225:
             append_callable("set_exist_hidemwnd");
             continue;
           case 226:
-            append_node(Type::Int, Member("get_exist_hidemwnd"));
+            append_callable("get_exist_hidemwnd", Type::Int);
             continue;
           case 227:
-            append_node(Type::Int, Member("is_hidemwnd_enable"));
+            append_callable("is_hidemwnd_enable", Type::Int);
             continue;
           case 300:
             append_node(Type::Callable, Member("set_extraswitch"));
@@ -1707,22 +1707,22 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_localmode"));
             continue;
           case 57:
-            append_node(Type::Int, Member("get_localmode"));
+            append_callable("get_localmode", Type::Int);
             continue;
           case 58:
             append_node(Type::Callable, Member("set_enable_localmode"));
             continue;
           case 59:
-            append_node(Type::Int, Member("get_enable_localmode"));
+            append_callable("get_enable_localmode", Type::Int);
             continue;
           case 62:
             append_node(Type::Callable, Member("set_exist_localmode"));
             continue;
           case 63:
-            append_node(Type::Int, Member("get_exist_localmode"));
+            append_callable("get_exist_localmode", Type::Int);
             continue;
           case 64:
-            append_node(Type::Int, Member("is_localmode_enable"));
+            append_callable("is_localmode_enable", Type::Int);
             continue;
           case 192:
             append_node(Type::None, Member("open_msgback"));
@@ -1734,19 +1734,19 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("set_enable_msgback");
             continue;
           case 195:
-            append_node(Type::Int, Member("get_enable_msgback"));
+            append_callable("get_enable_msgback", Type::Int);
             continue;
           case 196:
             append_callable("set_exist_msgback");
             continue;
           case 197:
-            append_node(Type::Int, Member("get_exist_msgback"));
+            append_callable("get_exist_msgback", Type::Int);
             continue;
           case 198:
-            append_node(Type::Int, Member("is_msgback_enable"));
+            append_callable("is_msgback_enable", Type::Int);
             continue;
           case 329:
-            append_node(Type::Int, Member("is_msgback_open"));
+            append_callable("is_msgback_open", Type::Int);
             continue;
           case 228:
             append_node(Type::Callable, Member("return_to_sel"));
@@ -1755,16 +1755,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_enable_retsel"));
             continue;
           case 231:
-            append_node(Type::Int, Member("get_enable_retsel"));
+            append_callable("get_enable_retsel", Type::Int);
             continue;
           case 232:
             append_node(Type::Callable, Member("set_exist_retsel"));
             continue;
           case 233:
-            append_node(Type::Int, Member("get_exist_retsel"));
+            append_callable("get_exist_retsel", Type::Int);
             continue;
           case 234:
-            append_node(Type::Int, Member("is_retsel_enable"));
+            append_callable("is_retsel_enable", Type::Int);
             continue;
           case 235:
             append_node(Type::Callable, Member("return_to_menu"));
@@ -1773,16 +1773,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_enable_retmenu"));
             continue;
           case 238:
-            append_node(Type::Int, Member("get_enable_retmenu"));
+            append_callable("get_enable_retmenu", Type::Int);
             continue;
           case 239:
             append_callable("set_exist_retmenu");
             continue;
           case 240:
-            append_node(Type::Int, Member("get_exist_retmenu"));
+            append_callable("get_exist_retmenu", Type::Int);
             continue;
           case 241:
-            append_node(Type::Int, Member("is_retmenu_enable"));
+            append_callable("is_retmenu_enable", Type::Int);
             continue;
           case 242:
             append_callable("end_game");
@@ -1791,7 +1791,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_enable_endgame"));
             continue;
           case 245:
-            append_node(Type::Int, Member("get_enable_endgame"));
+            append_callable("get_enable_endgame", Type::Int);
             continue;
           case 246:
             append_node(Type::Callable, Member("set_exist_endgame"));
@@ -1801,28 +1801,28 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_play_silent_sound_onoff_default"));
             continue;
           case 248:
-            append_node(Type::Int, Member("is_endgame_enable"));
+            append_callable("is_endgame_enable", Type::Int);
             continue;
           case 288:
             append_node(Type::None, Member("replay_koe"));
             continue;
           case 292:
-            append_node(Type::Int, Member("check_koe"));
+            append_callable("check_koe", Type::Int);
             continue;
           case 289:
-            append_node(Type::Int, Member("get_cur_koe"));
+            append_callable("get_cur_koe", Type::Int);
             continue;
           case 291:
-            append_node(Type::Int, Member("get_cur_chr"));
+            append_callable("get_cur_chr", Type::Int);
             continue;
           case 293:
             append_node(Type::None, Member("clear_koe_chr"));
             continue;
           case 294:
-            append_node(Type::String, Member("get_scene_title"));
+            append_callable("get_scene_title", Type::String);
             continue;
           case 295:
-            append_node(Type::String, Member("get_save_message"));
+            append_callable("get_save_message", Type::String);
             continue;
           case 199:
             append_node(Type::None, Member("get_total_playtime(fixme)"));
@@ -1831,22 +1831,22 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_total_playtime"));
             continue;
           case 1:
-            append_node(Type::None, Member("open_save"));
+            append_callable("open_save");
             continue;
           case 251:
             append_node(Type::Callable, Member("set_enable_save"));
             continue;
           case 252:
-            append_node(Type::Int, Member("get_enable_save"));
+            append_callable("get_enable_save", Type::Int);
             continue;
           case 253:
             append_callable("set_exist_save");
             continue;
           case 254:
-            append_node(Type::Int, Member("get_exist_save"));
+            append_callable("get_exist_save", Type::Int);
             continue;
           case 255:
-            append_node(Type::Int, Member("is_save_enable"));
+            append_callable("is_save_enable", Type::Int);
             continue;
           case 2:
             append_callable("open_load");
@@ -1855,16 +1855,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_enable_load"));
             continue;
           case 259:
-            append_node(Type::Int, Member("get_enable_load"));
+            append_callable("get_enable_load", Type::Int);
             continue;
           case 260:
             append_node(Type::Callable, Member("set_exist_load"));
             continue;
           case 261:
-            append_node(Type::Int, Member("get_exist_load"));
+            append_callable("get_exist_load", Type::Int);
             continue;
           case 262:
-            append_node(Type::Int, Member("is_load_enable"));
+            append_callable("is_load_enable", Type::Int);
             continue;
           case 249:
             append_node(Type::Callable, Member("save"));
@@ -1900,10 +1900,10 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("msgbk_load"));
             continue;
           case 68:
-            append_node(Type::Int, Member("get_save_count"));
+            append_callable("get_save_count", Type::Int);
             continue;
           case 168:
-            append_node(Type::Int, Member("get_qsave_count"));
+            append_callable("get_qsave_count", Type::Int);
             continue;
           case 79:
             append_node(Type::Callable, Member("get_new_save_no"));
@@ -2041,7 +2041,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("delete_qsave"));
             continue;
           case 3:
-            append_node(Type::None, Member("open_config_menu"));
+            append_callable("open_config_menu");
             continue;
           case 138:
             append_node(Type::None, Member("open_config_windowmode_menu"));
@@ -2086,7 +2086,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_window_mode_default"));
             continue;
           case 9:
-            append_node(Type::Int, Member("get_window_mode"));
+            append_callable("get_window_mode", Type::Int);
             continue;
           case 13:
             append_node(Type::Callable, Member("set_window_mode_size"));
@@ -2095,7 +2095,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_window_mode_default"));
             continue;
           case 16:
-            append_node(Type::Int, Member("get_window_mode_size"));
+            append_callable("get_window_mode_size", Type::Int);
             continue;
           case 309:
             append_node(Type::Callable,
@@ -2186,43 +2186,43 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_sound_onoff_default"));
             continue;
           case 41:
-            append_node(Type::Int, Member("get_all_volume"));
+            append_callable("get_all_volume", Type::Int);
             continue;
           case 25:
-            append_node(Type::Int, Member("get_bgm_volume"));
+            append_callable("get_bgm_volume", Type::Int);
             continue;
           case 28:
-            append_node(Type::Int, Member("get_koe_volume"));
+            append_callable("get_koe_volume", Type::Int);
             continue;
           case 31:
-            append_node(Type::Int, Member("get_pcm_volume"));
+            append_callable("get_pcm_volume", Type::Int);
             continue;
           case 34:
-            append_node(Type::Int, Member("get_se_volume"));
+            append_callable("get_se_volume", Type::Int);
             continue;
           case 265:
-            append_node(Type::Int, Member("get_mov_volume"));
+            append_callable("get_mov_volume", Type::Int);
             continue;
           case 279:
             append_node(Type::Callable, Member("get_sound_volume"));
             continue;
           case 61:
-            append_node(Type::Int, Member("get_all_onoff"));
+            append_callable("get_all_onoff", Type::Int);
             continue;
           case 42:
-            append_node(Type::Int, Member("get_bgm_onoff"));
+            append_callable("get_bgm_onoff", Type::Int);
             continue;
           case 43:
-            append_node(Type::Int, Member("get_koe_onoff"));
+            append_callable("get_koe_onoff", Type::Int);
             continue;
           case 44:
-            append_node(Type::Int, Member("get_pcm_onoff"));
+            append_callable("get_pcm_onoff", Type::Int);
             continue;
           case 45:
-            append_node(Type::Int, Member("get_se_onoff"));
+            append_callable("get_se_onoff", Type::Int);
             continue;
           case 268:
-            append_node(Type::Int, Member("get_mov_onoff"));
+            append_callable("get_mov_onoff", Type::Int);
             continue;
           case 282:
             append_node(Type::Callable, Member("get_sound_onoff"));
@@ -2240,10 +2240,10 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_bgmfade_onoff_default"));
             continue;
           case 96:
-            append_node(Type::Int, Member("get_bgmfade_volume"));
+            append_callable("get_bgmfade_volume", Type::Int);
             continue;
           case 98:
-            append_node(Type::Int, Member("get_bgmfade_onoff"));
+            append_callable("get_bgmfade_onoff", Type::Int);
             continue;
           case 148:
             append_node(Type::Callable, Member("set_koemode"));
@@ -2252,7 +2252,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_koemode_default"));
             continue;
           case 150:
-            append_node(Type::Int, Member("get_koemode"));
+            append_callable("get_koemode", Type::Int);
             continue;
           case 143:
             append_node(Type::Callable, Member("set_charakoe_onoff"));
@@ -2289,7 +2289,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_jitan_auto_mode_onoff_default"));
             continue;
           case 158:
-            append_node(Type::Int, Member("get_jitan_auto_mode_onoff"));
+            append_callable("get_jitan_auto_mode_onoff", Type::Int);
             continue;
           case 159:
             append_node(Type::Callable, Member("set_jitan_koe_replay_onoff"));
@@ -2299,7 +2299,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_jitan_koe_replay_onoff_default"));
             continue;
           case 161:
-            append_node(Type::Int, Member("get_jitan_koe_replay_onoff"));
+            append_callable("get_jitan_koe_replay_onoff", Type::Int);
             continue;
           case 152:
             append_node(Type::Callable, Member("set_jitan_speed"));
@@ -2308,7 +2308,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_jitan_speed_default"));
             continue;
           case 163:
-            append_node(Type::Int, Member("get_jitan_speed"));
+            append_callable("get_jitan_speed", Type::Int);
             continue;
           case 46:
             append_node(Type::Callable, Member("set_message_speed"));
@@ -2317,7 +2317,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_message_speed_default"));
             continue;
           case 48:
-            append_node(Type::Int, Member("get_message_speed"));
+            append_callable("get_message_speed", Type::Int);
             continue;
           case 49:
             append_node(Type::Callable, Member("set_message_nowait"));
@@ -2326,7 +2326,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_message_nowait_default"));
             continue;
           case 50:
-            append_node(Type::Int, Member("get_message_nowait"));
+            append_callable("get_message_nowait", Type::Int);
             continue;
           case 51:
             append_node(Type::Callable, Member("set_auto_mode_moji_wait"));
@@ -2335,7 +2335,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_auto_mode_moji_wait_default"));
             continue;
           case 53:
-            append_node(Type::Int, Member("get_auto_mode_moji_wait"));
+            append_callable("get_auto_mode_moji_wait", Type::Int);
             continue;
           case 54:
             append_node(Type::Callable, Member("set_auto_mode_min_wait"));
@@ -2344,7 +2344,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_auto_mode_min_wait_default"));
             continue;
           case 56:
-            append_node(Type::Int, Member("get_auto_mode_min_wait"));
+            append_callable("get_auto_mode_min_wait", Type::Int);
             continue;
           case 311:
             append_node(Type::Callable, Member("set_mouse_cursor_hide_onoff"));
@@ -2354,7 +2354,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_mouse_cursor_hide_onoff_default"));
             continue;
           case 313:
-            append_node(Type::Int, Member("get_mouse_cursor_hide_onoff"));
+            append_callable("get_mouse_cursor_hide_onoff", Type::Int);
             continue;
           case 317:
             append_node(Type::Callable, Member("set_mouse_cursor_hide_time"));
@@ -2364,7 +2364,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_mouse_cursor_hide_time_default"));
             continue;
           case 319:
-            append_node(Type::Int, Member("get_mouse_cursor_hide_time"));
+            append_callable("get_mouse_cursor_hide_time", Type::Int);
             continue;
           case 82:
             append_node(Type::Callable, Member("set_filter_color_r"));
@@ -2391,16 +2391,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_filter_color_a_default"));
             continue;
           case 84:
-            append_node(Type::Int, Member("get_filter_color_r"));
+            append_callable("get_filter_color_r", Type::Int);
             continue;
           case 91:
-            append_node(Type::Int, Member("get_filter_color_g"));
+            append_callable("get_filter_color_g", Type::Int);
             continue;
           case 92:
-            append_node(Type::Int, Member("get_filter_color_b"));
+            append_callable("get_filter_color_b", Type::Int);
             continue;
           case 93:
-            append_node(Type::Int, Member("get_filter_color_a"));
+            append_callable("get_filter_color_a", Type::Int);
             continue;
           case 189:
             append_node(Type::Callable, Member("set_obj_disp_onoff"));
@@ -2446,7 +2446,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_sleep_onoff_default"));
             continue;
           case 112:
-            append_node(Type::Int, Member("get_sleep_onoff"));
+            append_callable("get_sleep_onoff", Type::Int);
             continue;
           case 113:
             append_node(Type::Callable, Member("set_no_wipe_anime_onoff"));
@@ -2465,7 +2465,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_skip_wipe_anime_onoff_default"));
             continue;
           case 118:
-            append_node(Type::Int, Member("get_skip_wipe_anime_onoff"));
+            append_callable("get_skip_wipe_anime_onoff", Type::Int);
             continue;
           case 8:
             append_callable("set_no_mwnd_anime_onoff");
@@ -2484,7 +2484,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_wheel_next_message_onoff_default"));
             continue;
           case 121:
-            append_node(Type::Int, Member("get_wheel_next_message_onoff"));
+            append_callable("get_wheel_next_message_onoff", Type::Int);
             continue;
           case 122:
             append_node(Type::Callable, Member("set_koe_dont_stop_onoff"));
@@ -2493,7 +2493,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_koe_dont_stop_onoff_default"));
             continue;
           case 124:
-            append_node(Type::Int, Member("get_koe_dont_stop_onoff"));
+            append_callable("get_koe_dont_stop_onoff", Type::Int);
             continue;
           case 125:
             append_node(Type::Callable,
@@ -2504,13 +2504,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
                         Member("set_skip_unread_message_onoff_default"));
             continue;
           case 127:
-            append_node(Type::Int, Member("get_skip_unread_message_onoff"));
+            append_callable("get_skip_unread_message_onoff", Type::Int);
             continue;
           case 250:
             append_node(Type::Callable, Member("set_play_silent_sound_onoff"));
             continue;
           case 243:
-            append_node(Type::Int, Member("get_play_silent_sound_onoff"));
+            append_callable("get_play_silent_sound_onoff", Type::Int);
             continue;
           case 283:
             append_node(Type::Callable, Member("set_font_name"));
@@ -2519,7 +2519,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_font_name_default"));
             continue;
           case 284:
-            append_node(Type::String, Member("get_font_name"));
+            append_callable("get_font_name", Type::String);
             continue;
           case 285:
             append_node(Type::Callable, Member("is_font_exist"));
@@ -2531,7 +2531,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_font_bold_default"));
             continue;
           case 307:
-            append_node(Type::Int, Member("get_font_bold"));
+            append_callable("get_font_bold", Type::Int);
             continue;
           case 297:
             append_node(Type::Callable, Member("set_font_decoration"));
@@ -2540,7 +2540,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("set_font_decoration_default"));
             continue;
           case 308:
-            append_node(Type::Int, Member("get_font_decoration"));
+            append_callable("get_font_decoration", Type::Int);
             continue;
           case 286:
             append_callable("create_capture_buffer");
@@ -2584,16 +2584,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             parse_index(Type::Excall);
             continue;
           case 4:
-            append_node(Type::None, Member("alloc"));
+            append_callable("alloc", Type::None);
             continue;
           case 5:
-            append_node(Type::None, Member("free"));
+            append_callable("free", Type::None);
             continue;
           case 12:
-            append_node(Type::Int, Member("is_excall"));
+            append_callable("is_excall", Type::Int);
             continue;
           case 8:
-            append_node(Type::Int, Member("check_alloc"));
+            append_callable("check_alloc", Type::Int);
             continue;
           case 7:
             append_node(Type::IntList, Member("F"));

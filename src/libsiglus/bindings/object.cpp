@@ -42,7 +42,7 @@
 #include "core/stage.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
@@ -73,14 +73,17 @@ namespace sr = serilang;
 
 struct ObjectHandle {
   std::shared_ptr<GraphicsObject> object;
+  int owner = 0;
 };
 
 struct ObjectListHandle {
   int layer;
+  int owner = 0;
 };
 
 struct ObjectChildListHandle {
   std::shared_ptr<GraphicsObject> object;
+  int owner = 0;
 };
 
 struct ObjectEventHandle {
@@ -88,6 +91,7 @@ struct ObjectEventHandle {
   std::string name;
   std::function<int(const ObjectParameter&)> getter;
   std::function<void(ObjectParameter&, int)> setter;
+  int owner = 0;
 };
 
 struct ObjectRepnoEventHandle {
@@ -99,6 +103,7 @@ struct ObjectRepnoEventHandle {
   std::string name;
   Getter getter;
   Setter setter;
+  int owner = 0;
 };
 
 struct ObjectRepnoEventListHandle {
@@ -106,6 +111,7 @@ struct ObjectRepnoEventListHandle {
   std::string name;
   ObjectRepnoEventHandle::Getter getter;
   ObjectRepnoEventHandle::Setter setter;
+  int owner = 0;
 };
 
 constexpr int kBtnNormal = static_cast<int>(ButtonState::Normal);
@@ -305,14 +311,16 @@ void SetMovieAutoFree(GraphicsObject& object, std::vector<sr::Value> raw_args) {
 sr::Value WaitMovie(std::shared_ptr<GraphicsObject> object,
                     System* system,
                     sr::VM& vm,
-                    bool key_skip) {
+                    bool key_skip,
+                    lop::NativeWaitScope scope) {
   auto done = [object = std::move(object)] {
     const auto* data = object->GetDrawer<ObjectMovieData>();
     return !data || !data->CheckMovie();
   };
   return lop::MakePollingWaitFuture(
       vm, std::move(done), key_skip,
-      system ? system->event_ptr().get() : nullptr);
+      system ? system->event_ptr().get() : nullptr,
+      std::chrono::milliseconds(5), {}, std::move(scope));
 }
 
 int EventRepno(const ObjectEventHandle* h) { return -1; }
@@ -348,8 +356,8 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
                       System* system,
                       SiglusMachine& machine) {
   for (const bool real_time : {false, true}) {
-    auto make_counter = [&machine, real_time] {
-      auto counter = machine.CreateCounter();
+    auto make_counter = [&machine, real_time](int owner) {
+      auto counter = machine.host().CreateCounter(owner);
       if (real_time)
         counter->StartReal();
       else
@@ -362,7 +370,7 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
       h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
       const int start = EventStartValue(h);
       AddObjectEvent(h, MakeFrameCounter(duration_time, delay, start, end_value,
-                                         type, make_counter()));
+                                         type, make_counter(h->owner)));
     };
     event_class.def(real_time ? "set_real" : "set", set, sb::arg("end_value"),
                     sb::arg("duration_time"), sb::arg("delay"),
@@ -374,7 +382,7 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
         h->object->EndObjectMutatorMatching(EventRepno(h), h->name, 0);
         AddObjectEvent(h, MakeRepeatingFrameCounter(
                               type, loop_time, delay, start_value, end_value,
-                              speed_type, make_counter()));
+                              speed_type, make_counter(h->owner)));
       };
     };
     event_class.def(real_time ? "loop_real" : "loop",
@@ -394,14 +402,16 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
     return h->object->IsMutatorRunningMatching(EventRepno(h), h->name);
   });
 
-  auto wait = [system](bool key_skip) {
-    return [system, key_skip](Handle* h, sr::VM& vm, std::vector<sr::Value>) {
+  auto wait = [system, &machine](bool key_skip) {
+    return [system, key_skip, &machine](Handle* h, sr::VM& vm,
+                                        std::vector<sr::Value>) {
       auto done = [object = h->object, repno = EventRepno(h), name = h->name] {
         return !object->IsMutatorRunningMatching(repno, name);
       };
       return lop::MakePollingWaitFuture(
           vm, std::move(done), key_skip,
-          system ? system->event_ptr().get() : nullptr);
+          system ? system->event_ptr().get() : nullptr,
+          std::chrono::milliseconds(5), {}, machine.WaitScope(h->owner));
     };
   };
   event_class.def("wait", wait(false), sb::vararg);
@@ -609,7 +619,8 @@ struct ObjectEventPropertyBinder {
         [event = event_class, name = std::move(name),
          getter = std::move(property_getter),
          setter = std::move(property_setter)](ObjectHandle* h) mutable {
-          return sr::Value(event.make_inst(h->object, name, getter, setter));
+          return sr::Value(
+              event.make_inst(h->object, name, getter, setter, h->owner));
         });
   }
 
@@ -747,15 +758,16 @@ void CreateCaptureObject(GraphicsObject& object,
 
 void BindObject(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  Stage* stage_state = runtime.stage.get();
+  Stage* stage_state = runtime.host().stage.get();
   if (!stage_state)
     throw std::runtime_error("Object requires a stage buffer");
   if (!runtime.make_frame_action || !runtime.make_frame_action_list)
     throw std::runtime_error("Object binding requires frame-action bindings");
-  System* system = runtime.system.get();
-  auto backend = runtime.presenter ? runtime.presenter->backend() : nullptr;
-  auto images = runtime.images;
-  AssetScanner* asset_scanner = runtime.asset_scanner.get();
+  System* system = runtime.host().system.get();
+  auto backend =
+      runtime.host().presenter ? runtime.host().presenter->backend() : nullptr;
+  auto images = runtime.host().images;
+  AssetScanner* asset_scanner = runtime.host().asset_scanner.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<ObjectHandle> object(m, "Object");
   sb::class_<ObjectChildListHandle> child(m, "ObjectChild", false);
@@ -763,34 +775,36 @@ void BindObject(SiglusMachine& runtime) {
   sb::class_<ObjectRepnoEventHandle> repno_event(m, "ObjectRepnoEvent", false);
   sb::class_<ObjectRepnoEventListHandle> repno_event_list(
       m, "ObjectRepnoEventList", false);
-  object.def(sb::init([stage_state](int layer, int index) {
-               if (index < 0)
-                 throw sr::RuntimeError("Invalid object number: " +
-                                        std::to_string(index));
-               return std::make_unique<ObjectHandle>(
-                   stage_state->objects.Get(layer, index));
-             }),
-             sb::arg("layer") = static_cast<int>(kLayerFg),
-             sb::arg("index") = 0);
+  object.def(
+      sb::init([&runtime](int layer, int index, int owner) {
+        if (index < 0)
+          throw sr::RuntimeError("Invalid object number: " +
+                                 std::to_string(index));
+        return std::make_unique<ObjectHandle>(
+            runtime.host().GetStage(owner).objects.Get(layer, index), owner);
+      }),
+      sb::arg("layer") = static_cast<int>(kLayerFg), sb::arg("index") = 0,
+      sb::arg("owner") = 0);
 
   sb::class_<ObjectListHandle> object_array(m, "ObjectArray");
   object_array.add_gc_root(object);
   object_array.def(
-      sb::init([](int layer) {
+      sb::init([](int layer, int owner) {
         if (layer != kLayerFg && layer != kLayerBg && layer != kLayerNext)
           throw sr::RuntimeError("invalid object layer: " +
                                  std::to_string(layer));
-        return std::make_unique<ObjectListHandle>(layer);
+        return std::make_unique<ObjectListHandle>(layer, owner);
       }),
-      sb::arg("layer"));
+      sb::arg("layer"), sb::arg("owner") = 0);
   object_array.def(
       "__getitem__",
-      [stage_state, object](ObjectListHandle* h, int index) mutable {
+      [&runtime, object](ObjectListHandle* h, int index) mutable {
         if (index < 0)
           throw sr::RuntimeError("Invalid object number: " +
                                  std::to_string(index));
-        return sr::Value(
-            object.make_inst(stage_state->objects.Get(h->layer, index)));
+        return sr::Value(object.make_inst(
+            runtime.host().GetStage(h->owner).objects.Get(h->layer, index),
+            h->owner));
       },
       sb::arg("index"));
 
@@ -807,7 +821,8 @@ void BindObject(SiglusMachine& runtime) {
               "object.child index out of range: " + std::to_string(index) +
               " for size " + std::to_string(size));
         h->object->TouchChild(index);
-        return sr::Value(object.make_inst(h->object->GetChildren()[index]));
+        return sr::Value(
+            object.make_inst(h->object->GetChildren()[index], h->owner));
       },
       sb::arg("index"));
   child.def(
@@ -827,22 +842,27 @@ void BindObject(SiglusMachine& runtime) {
   });
   object.add_gc_root(child);
   object.prop_r("child", [child](ObjectHandle* h) mutable {
-    return sr::Value(child.make_inst(h->object));
+    return sr::Value(child.make_inst(h->object, h->owner));
   });
 
   // Runtime C++ factories are opaque to the VM's garbage collector.
   (*vm.builtins_)["%%siglus_object_class"] = object.native_class();
-  runtime.make_object = [object](ActionOwner owner) mutable {
-    return sr::Value(object.make_inst(std::move(owner)));
+  runtime.make_owned_object = [object](ActionOwner owner, int context) mutable {
+    return sr::Value(object.make_inst(std::move(owner), context));
   };
-  object.prop_r("frame_action", [make_action = runtime.make_frame_action](
+  runtime.make_object = [&runtime](ActionOwner owner) {
+    return runtime.make_owned_object(std::move(owner), 0);
+  };
+  object.prop_r("frame_action", [make_action = runtime.make_owned_frame_action](
                                     ObjectHandle* h) {
-    return make_action(ActionReference{h->object->GetFrameAction(), h->object});
+    return make_action(ActionReference{h->object->GetFrameAction(), h->object},
+                       h->owner);
   });
-  object.prop_r("frame_action_ch",
-                [make_list = runtime.make_frame_action_list](ObjectHandle* h) {
-                  return make_list(h->object);
-                });
+  object.prop_r(
+      "frame_action_ch",
+      [make_list = runtime.make_owned_frame_action_list](ObjectHandle* h) {
+        return make_list(h->object, h->owner);
+      });
 
   auto ilist_param = [&](const char* name, auto member) {
     object.add_gc_root(*runtime.ilist_cls);
@@ -873,7 +893,7 @@ void BindObject(SiglusMachine& runtime) {
           throw sr::RuntimeError("object rep event index out of range: " +
                                  std::to_string(index));
         return sr::Value(repno_event.make_inst(h->object, index, h->name,
-                                               h->getter, h->setter));
+                                               h->getter, h->setter, h->owner));
       },
       sb::arg("index"));
   repno_event_list.def(
@@ -888,7 +908,8 @@ void BindObject(SiglusMachine& runtime) {
     object.prop_r(name, [list = repno_event_list, name = std::string(name),
                          getter = std::move(getter),
                          setter = std::move(setter)](ObjectHandle* h) mutable {
-      return sr::Value(list.make_inst(h->object, name, getter, setter));
+      return sr::Value(
+          list.make_inst(h->object, name, getter, setter, h->owner));
     });
   };
   bind_repno_event_list("x_rep_eve",
@@ -910,23 +931,23 @@ void BindObject(SiglusMachine& runtime) {
   object.def("free", [](ObjectHandle* h) { h->object->FreeOwnObjectData(); });
   object.def(
       "create_capture",
-      [captures = runtime.captures](ObjectHandle* h,
-                                    std::vector<sr::Value> args) {
+      [captures = runtime.host().captures](ObjectHandle* h,
+                                           std::vector<sr::Value> args) {
         CreateCaptureObject(*h->object, captures, std::move(args), false,
                             false);
       },
       sb::vararg);
   object.def(
       "create_capture_thumb",
-      [captures = runtime.captures](ObjectHandle* h,
-                                    std::vector<sr::Value> args) {
+      [captures = runtime.host().captures](ObjectHandle* h,
+                                           std::vector<sr::Value> args) {
         CreateCaptureObject(*h->object, captures, std::move(args), true, true);
       },
       sb::vararg);
   object.def(
       "create_save_thumb",
-      [captures = runtime.captures](ObjectHandle* h,
-                                    std::vector<sr::Value> args) {
+      [captures = runtime.host().captures](ObjectHandle* h,
+                                           std::vector<sr::Value> args) {
         CreateCaptureObject(*h->object, captures, std::move(args), true, false);
       },
       sb::vararg);
@@ -977,7 +998,7 @@ void BindObject(SiglusMachine& runtime) {
         const int y =
             args.size() == 4 ? RequireInt(args[3], "create_string y") : 0;
         StringObjectStyle style;
-        if (auto gexe = runtime.gameexe) {
+        if (auto gexe = runtime.host().gameexe) {
           style.color = (*gexe)("MWND.MOJI_COLOR").Int().value_or(0);
           style.shadow_color = (*gexe)("MWND.SHADOW_COLOR").Int().value_or(1);
           style.outline_color = (*gexe)("MWND.FUCHI_COLOR").Int().value_or(1);
@@ -995,7 +1016,7 @@ void BindObject(SiglusMachine& runtime) {
                       color);
                 },
             .color =
-                [gexe = runtime.gameexe](int index) {
+                [gexe = runtime.host().gameexe](int index) {
                   if (gexe) {
                     const int count =
                         (*gexe)("COLOR_TABLE.CNT").Int().value_or(256);
@@ -1007,9 +1028,11 @@ void BindObject(SiglusMachine& runtime) {
                   return index == 1 ? RGBColour::Black() : RGBColour::White();
                 },
             .font_settings =
-                [&runtime] {
-                  const auto& local = runtime.local_config;
-                  const auto& global = runtime.global_config;
+                [host = &runtime.host()] {
+                  const auto& local = host->system
+                                          ? host->system->text().FontConfig()
+                                          : host->local_config;
+                  const auto& global = host->global_config;
                   return StringObjectFontSettings{
                       .name = EffectiveFontName(local, global),
                       .bold = EffectiveFontBold(local, global),
@@ -1034,7 +1057,8 @@ void BindObject(SiglusMachine& runtime) {
   });
   object.def(
       "set_string_param",
-      [gexe = runtime.gameexe](ObjectHandle* h, std::vector<sr::Value> args) {
+      [gexe = runtime.host().gameexe](ObjectHandle* h,
+                                      std::vector<sr::Value> args) {
         if (args.size() != 7 && args.size() != 8)
           throw sr::RuntimeError(
               "Object.set_string_param expects 7 or 8 arguments");
@@ -1130,21 +1154,23 @@ void BindObject(SiglusMachine& runtime) {
       sb::vararg);
   object.def(
       "create_movie_wait",
-      [system, asset_scanner, backend](ObjectHandle* h, sr::VM& vm,
-                                       std::vector<sr::Value> args) {
+      [system, asset_scanner, backend, &runtime](ObjectHandle* h, sr::VM& vm,
+                                                 std::vector<sr::Value> args) {
         if (CreateMovie(*h->object, system, backend, asset_scanner,
                         std::move(args), false, true, false))
-          return WaitMovie(h->object, system, vm, false);
+          return WaitMovie(h->object, system, vm, false,
+                           runtime.WaitScope(h->owner));
         return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
   object.def(
       "create_movie_waitkey",
-      [system, asset_scanner, backend](ObjectHandle* h, sr::VM& vm,
-                                       std::vector<sr::Value> args) {
+      [system, asset_scanner, backend, &runtime](ObjectHandle* h, sr::VM& vm,
+                                                 std::vector<sr::Value> args) {
         if (CreateMovie(*h->object, system, backend, asset_scanner,
                         std::move(args), false, true, true))
-          return WaitMovie(h->object, system, vm, true);
+          return WaitMovie(h->object, system, vm, true,
+                           runtime.WaitScope(h->owner));
         return lop::MakeResolvedFuture(*vm.gc_);
       },
       sb::vararg);
@@ -1363,11 +1389,11 @@ void BindObject(SiglusMachine& runtime) {
     if (!resolved.args.empty())
       throw sr::RuntimeError(
           "button CALL requires a command with no arguments");
-    // Resolve the current scene now; the function remains owned by its module.
-    h->object->Param().button.call = resolved.function;
+    // Keep the command identity, without retaining a VM heap object.
+    h->object->Param().button.call = resolved.target;
   });
   object.def("clear_button_call", [](ObjectHandle* h) {
-    h->object->Param().button.call = sr::nil;
+    h->object->Param().button.call.reset();
     if (h->object->Param().button.config)
       h->object->Param().button.config->call.reset();
   });
@@ -1397,14 +1423,16 @@ void BindObject(SiglusMachine& runtime) {
   });
   object.def(
       "wait_movie",
-      [system](ObjectHandle* h, sr::VM& vm, std::vector<sr::Value>) {
-        return WaitMovie(h->object, system, vm, false);
+      [system, &runtime](ObjectHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        return WaitMovie(h->object, system, vm, false,
+                         runtime.WaitScope(h->owner));
       },
       sb::vararg);
   object.def(
       "wait_movie_key",
-      [system](ObjectHandle* h, sr::VM& vm, std::vector<sr::Value>) {
-        return WaitMovie(h->object, system, vm, true);
+      [system, &runtime](ObjectHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        return WaitMovie(h->object, system, vm, true,
+                         runtime.WaitScope(h->owner));
       },
       sb::vararg);
   object.def("end_movie_loop", [](ObjectHandle* h) {
@@ -1421,11 +1449,12 @@ void BindObject(SiglusMachine& runtime) {
     GraphicsObject& o = *h->object;
     o.EndAllMutators();
   });
-  object.def("alleve_wait", [system](ObjectHandle* h, sr::VM& vm) {
+  object.def("alleve_wait", [system, &runtime](ObjectHandle* h, sr::VM& vm) {
     auto done = [object = h->object] { return object->CountMutators() == 0; };
     return lop::MakePollingWaitFuture(
         vm, std::move(done), false,
-        system ? system->event_ptr().get() : nullptr);
+        system ? system->event_ptr().get() : nullptr,
+        std::chrono::milliseconds(5), {}, runtime.WaitScope(h->owner));
   });
   object.def("alleve_check", [](ObjectHandle* h) -> int {
     GraphicsObject& o = *h->object;

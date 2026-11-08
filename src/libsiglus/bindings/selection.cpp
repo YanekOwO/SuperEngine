@@ -32,7 +32,7 @@
 #include "core/stage.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/wait_for_selection.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/event_system.hpp"
@@ -144,27 +144,28 @@ std::shared_ptr<Selection> Build(SiglusMachine& machine,
                                  SelectionRequest request,
                                  std::shared_ptr<TextWindow> window) {
   const bool buttons = request.kind == SelectionRequest::Kind::Buttons;
-  auto config =
-      buttons && machine.gameexe
-          ? BtnSelTemplate::ParseSiglus(*machine.gameexe, request.template_no)
-          : BtnSelTemplate{};
-  if (!machine.system) {
+  auto config = buttons && machine.host().gameexe
+                    ? BtnSelTemplate::ParseSiglus(*machine.host().gameexe,
+                                                  request.template_no)
+                    : BtnSelTemplate{};
+  if (!machine.host().system) {
     auto s = std::make_shared<Selection>(std::move(request), config);
     s->window = std::move(window);
     s->LayoutButtons(Size(100, config.font_size));
     return s;
   }
   if (!buttons && !window) {
-    TextSystem& text = machine.system->text();
+    TextSystem& text = machine.host().system->text();
     window = request.close_window
                  ? text.GetMwnd(text.mwnd_config().default_selection_window())
                  : text.GetCurrentMwnd();
   }
-  auto s = BuildSelection(*machine.system, std::move(request), config,
-                          machine.images, machine.presenter->screen_size(),
-                          std::move(window));
+  auto s = BuildSelection(
+      *machine.host().system, std::move(request), config, machine.host().images,
+      machine.host().presenter->screen_size(), std::move(window));
   if (buttons)
-    s->sorter = {machine.stage ? machine.stage->mwnd_order : 1, 0};
+    s->sorter = {machine.host().stage ? machine.host().stage->mwnd_order : 1,
+                 0};
   return s;
 }
 
@@ -175,7 +176,8 @@ struct SelEventListener : public EventListener {
   SelEventListener(SiglusMachine& m) : machine(m) {}
 
   void OnEvent(std::shared_ptr<Event> event) override {
-    if (!event || !machine.selection_state->active_ ||
+    if (&machine.host().ActiveMachine() != &machine || !event ||
+        !machine.selection_state || !machine.selection_state->active_ ||
         !machine.selection_state->active_->Visible())
       return;
 
@@ -183,31 +185,34 @@ struct SelEventListener : public EventListener {
     auto s = state->active_;
     const auto feedback = state->HandleEvent(event);
     const auto sound = [&](int number) {
-      if (machine.system && machine.system->sound().HasSe(number))
-        machine.system->sound().PlaySe(number);
+      if (machine.host().system && machine.host().system->sound().HasSe(number))
+        machine.host().system->sound().PlaySe(number);
     };
     if (feedback.focus_changed)
       sound(0);
     if (feedback.choice)
-      machine.OnSelectionChosen(*s);
+      machine.host().OnSelectionChosen(*s);
   }
 };
 
 void BindSelection(SiglusMachine& rt) {
   auto state = std::make_shared<SelState>();
   rt.selection_state = state;
+  if (&rt.host().ActiveMachine() == &rt)
+    rt.host().selection_state = state;
   std::shared_ptr<EventListener> listener =
       std::make_shared<SelEventListener>(rt);
   rt.selection_event_listener = listener;
-  if (rt.system)
-    rt.system->event().AddListener(20, listener);
+  if (rt.host().system)
+    rt.host().system->event().AddListener(20, listener);
 
   sb::module_ m(rt.vm->gc_.get(), rt.vm->globals_.get());
   const auto bind = [&](const char* name, bool buttons, bool cancel,
                         bool close) {
     m.def(
         name,
-        [state, &rt, buttons, cancel, close](std::vector<sr::Value> raw) {
+        [&rt, buttons, cancel, close](std::vector<sr::Value> raw) {
+          auto state = rt.selection_state;
           SelectionRequest request =
               DecodeSelectionRequest(std::move(raw), buttons, cancel, true);
           request.close_window = close;
@@ -217,17 +222,22 @@ void BindSelection(SiglusMachine& rt) {
           std::shared_ptr<Selection> sel =
               Build(rt, std::move(request), /*mwnd=*/nullptr);
 
-          rt.StartSelection(sel);
+          rt.host().StartSelection(sel);
           auto wait = std::make_unique<lop::WaitForSelection>(
               state, sel,
               [&rt](std::shared_ptr<Selection> sel) {
-                rt.FinishSelection(sel);
+                rt.host().FinishSelection(sel);
               },
               [&rt](std::shared_ptr<Selection> sel) {
-                rt.CancelSelection(sel);
+                rt.host().CancelSelection(sel);
               });
           sr::Future* fut = state->pending_->MakeFuture(
-              *rt.vm, std::move(wait), rt.system->event_ptr().get());
+              *rt.vm, std::move(wait), rt.host().system->event_ptr().get(),
+              [&rt, state] {
+                return rt.selection_state == state &&
+                       &rt.host().ActiveMachine() == &rt;
+              },
+              rt.WaitScope());
           return sr::Value(fut);
         },
         sb::vararg);
@@ -241,7 +251,8 @@ void BindSelection(SiglusMachine& rt) {
   for (bool cancel : {false, true}) {
     m.def(
         cancel ? "selbtn_cancel_ready" : "selbtn_ready",
-        [state, &rt, cancel](std::vector<sr::Value> raw) -> void {
+        [&rt, cancel](std::vector<sr::Value> raw) -> void {
+          auto state = rt.selection_state;
           if (state->active_ && !state->active_->CanResume())
             throw sr::RuntimeError("A selection is already waiting");
 
@@ -257,13 +268,19 @@ void BindSelection(SiglusMachine& rt) {
           std::shared_ptr<Selection> sel =
               Build(rt, std::move(request), /*mwnd=*/nullptr);
           state->prepared_ = sel;
-          rt.stage->selection[kLayerFg] = sel;
+          rt.host()
+              .GetStage(rt.host().IsExcall() && rt.host().excall &&
+                                rt.host().excall->allocated
+                            ? 1
+                            : 0)
+              .selection[kLayerFg] = sel;
         },
         sb::vararg);
   }
   m.def(
       "selbtn_start",
-      [&rt, state](std::vector<sr::Value> raw) {
+      [&rt](std::vector<sr::Value> raw) {
+        auto state = rt.selection_state;
         // Consumes the prepared menu, attaches selbtn_start's read key, and
         // forces sync_type=0. Returns a future for the original option index or
         // -1;
@@ -283,24 +300,34 @@ void BindSelection(SiglusMachine& rt) {
         // always waits through the full close animation?
         sel->request.sync_type = 0;
 
-        rt.StartSelection(sel);
+        rt.host().StartSelection(sel);
         auto wait = std::make_unique<lop::WaitForSelection>(
             state, sel,
-            [&rt](std::shared_ptr<Selection> sel) { rt.FinishSelection(sel); },
-            [&rt](std::shared_ptr<Selection> sel) { rt.CancelSelection(sel); });
+            [&rt](std::shared_ptr<Selection> sel) {
+              rt.host().FinishSelection(sel);
+            },
+            [&rt](std::shared_ptr<Selection> sel) {
+              rt.host().CancelSelection(sel);
+            });
         sr::Future* fut = state->pending_->MakeFuture(
-            *rt.vm, std::move(wait), rt.system->event_ptr().get());
+            *rt.vm, std::move(wait), rt.host().system->event_ptr().get(),
+            [&rt, state] {
+              return rt.selection_state == state &&
+                     &rt.host().ActiveMachine() == &rt;
+            },
+            rt.WaitScope());
         return sr::Value(fut);
       },
       sb::vararg);
-  m.def("get_last_sel_msg", [state] { return state->last_message_; });
+  m.def("get_last_sel_msg",
+        [&rt] { return rt.selection_state->last_message_; });
 
   m.def("__debug_register_sel_choice",
         [&rt](int scene, int kidoku, int choice) {
-          rt.RegisterDebugSelectionChoice(scene, kidoku, choice);
+          rt.host().RegisterDebugSelectionChoice(scene, kidoku, choice);
         });
   m.def("__debug_queue_sel_choice",
-        [&rt](int choice) { rt.QueueDebugSelectionChoice(choice); });
+        [&rt](int choice) { rt.host().QueueDebugSelectionChoice(choice); });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "0_selection", BindSelection)

@@ -47,7 +47,7 @@ using ::testing::StrictMock;
 
 class SiglusG00bufBindingTest : public ::testing::Test {
  protected:
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   Archive archive{std::string(sizeof(Pack_hdr), '\0'), xorkey_t{}};
   std::shared_ptr<StrictMock<MockAssetScanner>> scanner =
       std::make_shared<StrictMock<MockAssetScanner>>();
@@ -59,20 +59,22 @@ class SiglusG00bufBindingTest : public ::testing::Test {
     runtime.gameexe->SetIntAt("G00BUF.CNT", 3);
     runtime.images =
         std::make_shared<ImageResources>(scanner, backend, ToneCurve{});
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().loader =
+        std::make_unique<Loader>(archive, *runtime.GameplayMachine().vm, false);
     for (const auto* name : {"0_memory", "flow", "1_g00buf"}) {
       const auto* bind = SiglusBindingRegistry::Find(name);
       ASSERT_NE(bind, nullptr) << name;
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
   }
 
   void Run(std::string source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(std::move(source), "<g00buf>"));
     ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
-    runtime.vm->Evaluate(compiler.Get());
+    runtime.GameplayMachine().vm->Evaluate(compiler.Get());
   }
 
   void ExpectLoad(const std::string& name) {
@@ -99,8 +101,8 @@ TEST_F(SiglusG00bufBindingTest, ExactLoadElementRetainsImageForNamedLookup) {
        {0, 1, static_cast<int>(Type::String), 0, static_cast<int>(Type::None)})
     scene.AppendInt(value);
   scene.AddTo(archive);
-  (*runtime.vm->globals_)["preload"] =
-      ResolveSceneCommand(*runtime.loader, "preload", "preload");
+  (*runtime.GameplayMachine().vm->globals_)["preload"] = ResolveSceneCommand(
+      *runtime.GameplayMachine().loader, "preload", "preload");
   ExpectLoad("line");
 
   Run("preload(\"line\");");
@@ -113,7 +115,7 @@ TEST_F(SiglusG00bufBindingTest, ExactLoadElementRetainsImageForNamedLookup) {
 TEST_F(SiglusG00bufBindingTest, SizeUsesConfiguredCapacity) {
   // Three configured slots are exposed without loading any image.
   Run("count = g00buf.size();");
-  EXPECT_EQ(runtime.vm->globals_->at("count"), sr::Value(3));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("count"), sr::Value(3));
 }
 
 TEST_F(SiglusG00bufBindingTest, ReplacingSlotReleasesPreviousImage) {
@@ -151,8 +153,7 @@ TEST_F(SiglusG00bufBindingTest, LocalResetReleasesPreloads) {
   // A preloaded image is held across a local reset; reset must release it.
   ExpectLoad("line");
   Run("g00buf[0].load(\"line\");");
-  for (auto& reset : runtime.reset_local_memory)
-    reset();
+  runtime.ResetLocalMemory();
   EXPECT_EQ(runtime.images->FindPreloaded("line"), nullptr);
 }
 
@@ -161,7 +162,8 @@ TEST_F(SiglusG00bufBindingTest, InvalidIndicesAreRejectedBeforeLoading) {
   for (int index : {-1, 3}) {
     Run("caught = 0; try { g00buf[" + std::to_string(index) +
         "].load(\"line\"); } catch (e) { caught = 1; }");
-    EXPECT_EQ(runtime.vm->globals_->at("caught"), sr::Value(1));
+    EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("caught"),
+              sr::Value(1));
   }
 }
 

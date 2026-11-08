@@ -30,12 +30,14 @@
 #include "systems/text_window.hpp"
 
 #include <compare>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
 #include <variant>
 
+struct Excall;
 class GraphicsObject;
 struct LocalConfig;
 class System;
@@ -60,6 +62,10 @@ class SiglusSceneRenderer final : public ISceneRenderer {
                       Size screen_size,
                       std::function<bool()> interface_hidden);
 
+  void SetExcall(Excall* state, int order) {
+    excall_ = state;
+    excall_order_ = order;
+  }
   void ExecuteFrame() override;
   void RenderScene() override;
   void RenderCapture(std::pair<int, int> inclusive_end);
@@ -72,8 +78,11 @@ class SiglusSceneRenderer final : public ISceneRenderer {
  private:
   enum class ObjectRange { All, Below, Within, Above };
   struct ToRender {
-    int order, layer, kind, depth, index;
+    std::int64_t order;
+    int layer, kind, depth, index;
     std::variant<GraphicsObject*, TextWindow*, Selection*> render;
+    Stage* stage;
+    int stage_layer;
     std::strong_ordering operator<=>(const ToRender& o) const {
       return std::tie(order, layer, kind, depth, index) <=>
              std::tie(o.order, o.layer, o.kind, o.depth, o.index);
@@ -92,6 +101,9 @@ class SiglusSceneRenderer final : public ISceneRenderer {
   Size screen_size_;
   std::function<bool()> interface_hidden_;
   ::Stage& stage_;
+  Excall* excall_ = nullptr;
+  int excall_order_ = 20000;
+  Stage* transition_stage_ = nullptr;
   ::System& system_;
   std::shared_ptr<MaskList> mask_list_;
   std::shared_ptr<::QuakeList> screen_quakes_;

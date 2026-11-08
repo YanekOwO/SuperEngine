@@ -47,6 +47,7 @@ namespace sr = serilang;
 // this handle to expose the same native Counter type as the global list.
 struct CounterHandle {
   std::shared_ptr<Counter> counter_;
+  int owner = -1;
 
   std::shared_ptr<Counter> Get() const {
     if (!counter_)
@@ -56,13 +57,14 @@ struct CounterHandle {
 };
 
 void BindCounter(SiglusMachine& runtime) {
-  std::shared_ptr<CounterList> list = runtime.counter_list;
+  std::shared_ptr<CounterList> list = runtime.host().counter_list;
   if (!list)
     throw std::runtime_error("counter binding requires counter state");
 
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  EventSystem* event = runtime.system ? &runtime.system->event() : nullptr;
+  EventSystem* event =
+      runtime.host().system ? &runtime.host().system->event() : nullptr;
 
   // ------------------------------------------------------------------------------
   // Counter
@@ -93,19 +95,24 @@ void BindCounter(SiglusMachine& runtime) {
   counter_class.def("stop", [](CounterHandle* h) { h->Get()->Stop(); });
   counter_class.def("resume", [](CounterHandle* h) { h->Get()->Resume(); });
   // wait until the counter reaches the requested value
-  counter_class.def("wait", [event](CounterHandle* h, sr::VM& vm, int value) {
-    auto check = [counter = *h, value] {
-      return counter.Get()->Get() >= value;
-    };
-    return lop::MakePollingWaitFuture(vm, check, false, event);
-  });
-  counter_class.def("wait_key",
-                    [event](CounterHandle* h, sr::VM& vm, int value) {
-                      auto check = [counter = *h, value] {
-                        return counter.Get()->Get() >= value;
-                      };
-                      return lop::MakePollingWaitFuture(vm, check, true, event);
-                    });
+  counter_class.def(
+      "wait", [event, &runtime](CounterHandle* h, sr::VM& vm, int value) {
+        auto check = [counter = *h, value] {
+          return counter.Get()->Get() >= value;
+        };
+        return lop::MakePollingWaitFuture(vm, check, false, event,
+                                          std::chrono::milliseconds(5), {},
+                                          runtime.WaitScope(h->owner));
+      });
+  counter_class.def(
+      "wait_key", [event, &runtime](CounterHandle* h, sr::VM& vm, int value) {
+        auto check = [counter = *h, value] {
+          return counter.Get()->Get() >= value;
+        };
+        return lop::MakePollingWaitFuture(vm, check, true, event,
+                                          std::chrono::milliseconds(5), {},
+                                          runtime.WaitScope(h->owner));
+      });
   counter_class.def("check_value", [](const CounterHandle* h, int value) {
     return h->Get()->Get() >= value ? 1 : 0;
   });
@@ -122,6 +129,7 @@ void BindCounter(SiglusMachine& runtime) {
   // CounterList
   struct CounterListHandle {
     std::shared_ptr<CounterList> list;
+    int owner = 0;
   };
   sb::class_<CounterListHandle> list_class(m, "CounterList");
   auto counter_list =
@@ -131,13 +139,20 @@ void BindCounter(SiglusMachine& runtime) {
       [counter_class](CounterListHandle* h, int index) mutable {
         std::shared_ptr<Counter> counter = h->list->GetHandle(index);
         sr::NativeInstance* handle =
-            counter_class.make_inst(std::move(counter));
+            counter_class.make_inst(std::move(counter), h->owner);
         return sr::Value(handle);
       },
       sb::arg("index"));
   counter_list.def("size",
                    [](CounterListHandle* h) -> int { return h->list->size(); });
 
+  runtime.make_counter_list = [list_class, &runtime](
+                                  std::shared_ptr<CounterList> list) mutable {
+    const int owner =
+        runtime.host().excall && list == runtime.host().excall->counters ? 1
+                                                                         : 0;
+    return sr::Value(list_class.make_inst(std::move(list), owner));
+  };
   runtime.reset_local_memory.emplace_back([list] { list->Reset(); });
 }
 

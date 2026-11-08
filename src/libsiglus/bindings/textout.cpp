@@ -43,9 +43,13 @@ namespace sr = serilang;
 
 class SiglusTextout {
  public:
-  SiglusTextout(sr::VM& vm, System* sys, LocalConfig& localcfg)
-      : vm_(vm), sys_(sys), localcfg_(localcfg) {}
+  explicit SiglusTextout(SiglusMachine& machine)
+      : machine_(machine),
+        vm_(*machine.vm),
+        sys_(machine.host().system.get()),
+        localcfg_(machine.host().local_config) {}
 
+  SiglusMachine& machine_;
   lop::PendingCoroutineTasks pending_;
   sr::VM& vm_;
   System* sys_;
@@ -54,24 +58,24 @@ class SiglusTextout {
 
 void BindTextout(SiglusMachine& runtime) {
   sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
-  m.def("__builtin_name", [sys = runtime.system.get()](std::string name) {
-    if (!sys || name.empty())
-      return;
+  m.def("__builtin_name",
+        [sys = runtime.host().system.get()](std::string name) {
+          if (!sys || name.empty())
+            return;
 
-    TextSystem& text = sys->text();
-    std::shared_ptr<TextWindow> window = text.GetCurrentMwnd();
-    if (window->HasName())
-      return;
+          TextSystem& text = sys->text();
+          std::shared_ptr<TextWindow> window = text.GetCurrentMwnd();
+          if (window->HasName())
+            return;
 
-    if (sys->local_config().multi_msg_mode)
-      window->BeginMultiMessage();
-    if (!name.empty())
-      text.GetCurrentMwnd()->Submit(msgcmd::Name{name, ""});
-  });
+          if (sys->local_config().multi_msg_mode)
+            window->BeginMultiMessage();
+          if (!name.empty())
+            text.GetCurrentMwnd()->Submit(msgcmd::Name{name, ""});
+        });
   m.def("__builtin_textout",
-        [kt = runtime.kidoku_table,
-         to = std::make_shared<SiglusTextout>(*runtime.vm, runtime.system.get(),
-                                              runtime.local_config)](
+        [kt = runtime.host().kidoku_table,
+         to = std::make_shared<SiglusTextout>(runtime)](
             int scenario, int kidoku, std::string text) -> sr::Value {
           const bool already_read = kt->HasBeenRead(scenario, kidoku);
           kt->RecordKidoku(scenario, kidoku);
@@ -93,7 +97,8 @@ void BindTextout(SiglusMachine& runtime) {
           auto state = std::make_unique<lop::SiglusTextoutOperation>(
               to->sys_, std::move(window), std::move(text));
           return sr::Value(to->pending_.MakeFuture(
-              to->vm_, std::move(state), to->sys_->event_ptr().get()));
+              to->vm_, std::move(state), to->sys_->event_ptr().get(), {},
+              to->machine_.WaitScope()));
         });
 }
 

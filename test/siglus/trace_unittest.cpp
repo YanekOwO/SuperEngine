@@ -50,31 +50,33 @@ namespace sr = serilang;
 class SiglusTraceTest : public ::testing::Test {
  protected:
   LogCapture output;
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
 
   void SetUp() override {
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
     const auto* binding = SiglusBindingRegistry::Find("trace");
     ASSERT_NE(binding, nullptr);
-    (*binding)(runtime);
+    (*binding)(runtime.GameplayMachine());
   }
 
   sr::Function* Compile(std::string source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(std::move(source), "<trace>"));
     if (!compiler.Ok())
       throw std::runtime_error(compiler.FormatErrors());
-    return runtime.vm->gc_->Allocate<sr::Function>(compiler.Get());
+    return runtime.GameplayMachine().vm->gc_->Allocate<sr::Function>(
+        compiler.Get());
   }
 
   std::shared_ptr<sr::Promise> InstallGate() {
-    auto* future = runtime.vm->gc_->Allocate<sr::Future>();
-    (*runtime.vm->globals_)["gate"] = future;
+    auto* future = runtime.GameplayMachine().vm->gc_->Allocate<sr::Future>();
+    (*runtime.GameplayMachine().vm->globals_)["gate"] = future;
     return future->promise;
   }
 
   bool GeneratesTrace(bool trace, bool debug = false) {
-    Recompiler compiler(runtime.vm->gc_);
+    Recompiler compiler(runtime.GameplayMachine().vm->gc_);
     compiler.trace_enabled_ = trace;
     compiler.is_debug_ = debug;
     compiler.Compile({Parser::ParsedToken{
@@ -108,17 +110,18 @@ TEST_F(SiglusTraceTest, LoaderEnablesRuntimeSceneTracingWithoutDebug) {
   SetupLogging(Severity::Error, {.script = true});
   Archive archive(std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
   FakeScene{.scene_name = "test", .command_name = "callback"}.AddTo(archive);
-  Loader loader(archive, *runtime.vm, false, true);
-  (*SiglusBindingRegistry::Find("0_memory"))(runtime);
+  Loader loader(archive, *runtime.GameplayMachine().vm, false, true);
+  (*SiglusBindingRegistry::Find("0_memory"))(runtime.GameplayMachine());
   auto* module = loader.Load(0);
-  runtime.vm->InvokeUntilBlocked(module->globals->at("%%script"), {});
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      module->globals->at("%%script"), {});
   EXPECT_EQ(output.Str(), "[0:1] ret ()\n");
 }
 
 TEST_F(SiglusTraceTest, ScriptTraceUsesUnifiedLocationAndContent) {
   // Ordinary fibers emit the location once, followed by concatenated terms.
   SetupLogging(Severity::Error, {.script = true});
-  runtime.vm->InvokeUntilBlocked(
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
       *Compile(R"(__builtin_trace(7, 12, "value=", 42);)"), {});
   EXPECT_EQ(output.Str(), "[7:12] value=42\n");
 }
@@ -126,7 +129,7 @@ TEST_F(SiglusTraceTest, ScriptTraceUsesUnifiedLocationAndContent) {
 TEST_F(SiglusTraceTest, ScriptSelectionSuppressesCallbackFirstInstruction) {
   // Marking occurs before callback execution, hiding even its first trace.
   SetupLogging(Severity::Error, {.script = true});
-  InvokeFrameAction(*runtime.vm,
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
                     Compile(R"(__builtin_trace(7, 12, "callback");)"), {});
   EXPECT_TRUE(output.Str().empty());
 }
@@ -134,7 +137,7 @@ TEST_F(SiglusTraceTest, ScriptSelectionSuppressesCallbackFirstInstruction) {
 TEST_F(SiglusTraceTest, FrameActionSelectionIncludesCallbackFirstInstruction) {
   // The first callback trace is categorized before any callback code executes.
   SetupLogging(Severity::Error, {.frame_action = true});
-  InvokeFrameAction(*runtime.vm,
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
                     Compile(R"(__builtin_trace(7, 12, "callback");)"), {});
   EXPECT_EQ(output.Str(), "[7:12] callback\n");
 }
@@ -142,7 +145,7 @@ TEST_F(SiglusTraceTest, FrameActionSelectionIncludesCallbackFirstInstruction) {
 TEST_F(SiglusTraceTest, FrameActionSelectionSuppressesOrdinaryScript) {
   // Callback-only output rejects unmarked ordinary script fibers.
   SetupLogging(Severity::Error, {.frame_action = true});
-  runtime.vm->InvokeUntilBlocked(
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
       *Compile(R"(__builtin_trace(7, 12, "script");)"), {});
   EXPECT_TRUE(output.Str().empty());
 }
@@ -151,8 +154,8 @@ TEST_F(SiglusTraceTest, AllSelectionIncludesScriptsAndCallbacks) {
   // Both entry paths share the same output format when both are selected.
   SetupLogging(Severity::Error, ParseTraceOptions("all"));
   auto* callback = Compile(R"(__builtin_trace(7, 12, "message");)");
-  runtime.vm->InvokeUntilBlocked(*callback, {});
-  InvokeFrameAction(*runtime.vm, callback, {});
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(*callback, {});
+  InvokeFrameAction(*runtime.GameplayMachine().vm, callback, {});
   EXPECT_EQ(output.Str(), "[7:12] message\n[7:12] message\n");
 }
 
@@ -161,10 +164,10 @@ TEST_F(SiglusTraceTest, CallbackCategorySurvivesSuspension) {
   SetupLogging(Severity::Error, {.frame_action = true});
   auto gate = InstallGate();
   InvokeFrameAction(
-      *runtime.vm, Compile(R"(await gate; __builtin_trace(7, 12, "resumed");)"),
-      {});
+      *runtime.GameplayMachine().vm,
+      Compile(R"(await gate; __builtin_trace(7, 12, "resumed");)"), {});
   gate->Resolve(sr::nil);
-  runtime.vm->RunReadyUntilBlocked();
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   EXPECT_EQ(output.Str(), "[7:12] resumed\n");
 }
 
@@ -172,34 +175,35 @@ TEST_F(SiglusTraceTest, ScriptSelectionSuppressesResumedCallback) {
   // A callback does not leak into script output after its first suspension.
   SetupLogging(Severity::Error, {.script = true});
   auto gate = InstallGate();
-  InvokeFrameAction(*runtime.vm,
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
                     Compile(R"(await gate; __builtin_trace(7, 12, "hidden");)"),
                     {});
   gate->Resolve(sr::nil);
-  runtime.vm->RunReadyUntilBlocked();
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   EXPECT_TRUE(output.Str().empty());
 }
 
 TEST_F(SiglusTraceTest, CallbackCategorySurvivesExplicitYield) {
   // Yield replaces the completion promise; the wrapper still marks the fiber.
   SetupLogging(Severity::Error, {.frame_action = true});
-  runtime.vm->InvokeUntilBlocked(*Compile(R"(
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(*Compile(R"(
     fn callback() { yield nil; __builtin_trace(7, 12, "resumed"); }
   )"),
-                                 {});
-  InvokeFrameAction(*runtime.vm, runtime.vm->globals_->at("callback"), {});
-  auto* fiber = runtime.vm->fibres_.back();
+                                                   {});
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
+                    runtime.GameplayMachine().vm->globals_->at("callback"), {});
+  auto* fiber = runtime.GameplayMachine().vm->fibres_.back();
   ASSERT_EQ(fiber->state, sr::FiberState::Suspended);
   fiber->state = sr::FiberState::Running;
-  runtime.vm->scheduler_.PushTask(fiber);
-  runtime.vm->RunReadyUntilBlocked();
+  runtime.GameplayMachine().vm->scheduler_.PushTask(fiber);
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   EXPECT_EQ(output.Str(), "[7:12] resumed\n");
 }
 
 TEST_F(SiglusTraceTest, NestedCallsKeepCallbackCategory) {
   // A normal call on the callback fiber retains the frame-action category.
   SetupLogging(Severity::Error, {.frame_action = true});
-  InvokeFrameAction(*runtime.vm, Compile(R"(
+  InvokeFrameAction(*runtime.GameplayMachine().vm, Compile(R"(
     fn nested() { __builtin_trace(7, 12, "nested"); }
     nested();
   )"),
@@ -210,13 +214,13 @@ TEST_F(SiglusTraceTest, NestedCallsKeepCallbackCategory) {
 TEST_F(SiglusTraceTest, SpawnedChildrenRemainScriptWork) {
   // A separate child of a callback is unmarked and appears in script output.
   SetupLogging(Severity::Error, {.script = true});
-  InvokeFrameAction(*runtime.vm, Compile(R"(
+  InvokeFrameAction(*runtime.GameplayMachine().vm, Compile(R"(
     fn child() { __builtin_trace(7, 13, "child"); }
     __builtin_trace(7, 12, "parent");
     spawn child();
   )"),
                     {});
-  runtime.vm->RunReadyUntilBlocked();
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   EXPECT_EQ(output.Str(), "[7:13] child\n");
 }
 
@@ -225,23 +229,26 @@ TEST_F(SiglusTraceTest,
   // The wrapper retains callable arguments while a callback explicitly
   // collects.
   SetupLogging(Severity::Error, {.frame_action = true});
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                           runtime.GameplayMachine().vm->globals_.get());
   bindings.def("collect", [](sr::VM& vm) { vm.CollectGarbage(); });
-  runtime.vm->InvokeUntilBlocked(*Compile(R"(
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(*Compile(R"(
     fn callback(value) { collect(); __builtin_trace(7, 12, value); }
   )"),
-                                 {});
-  InvokeFrameAction(*runtime.vm, runtime.vm->globals_->at("callback"),
-                    {runtime.vm->gc_->Allocate<sr::String>("retained")});
+                                                   {});
+  InvokeFrameAction(
+      *runtime.GameplayMachine().vm,
+      runtime.GameplayMachine().vm->globals_->at("callback"),
+      {runtime.GameplayMachine().vm->gc_->Allocate<sr::String>("retained")});
   EXPECT_EQ(output.Str(), "[7:12] retained\n");
 }
 
 TEST_F(SiglusTraceTest, InlineCallbackFailuresStillPropagate) {
   // An inline failure through the tagged wrapper must reach its native caller.
   SetupLogging(Severity::Error, {.frame_action = true});
-  EXPECT_THROW(
-      InvokeFrameAction(*runtime.vm, Compile(R"(throw "failure";)"), {}),
-      sr::RuntimeError);
+  EXPECT_THROW(InvokeFrameAction(*runtime.GameplayMachine().vm,
+                                 Compile(R"(throw "failure";)"), {}),
+               sr::RuntimeError);
 }
 
 TEST_F(SiglusTraceTest, SuspendedCallbackFailuresRemainUnobserved) {
@@ -249,19 +256,20 @@ TEST_F(SiglusTraceTest, SuspendedCallbackFailuresRemainUnobserved) {
   // reported.
   SetupLogging(Severity::Error, {.frame_action = true});
   auto gate = InstallGate();
-  InvokeFrameAction(*runtime.vm, Compile(R"(await gate; throw "failure";)"),
-                    {});
+  InvokeFrameAction(*runtime.GameplayMachine().vm,
+                    Compile(R"(await gate; throw "failure";)"), {});
   gate->Resolve(sr::nil);
-  EXPECT_THROW(runtime.vm->RunReadyUntilBlocked(), sr::UnhandledError);
+  EXPECT_THROW(runtime.GameplayMachine().vm->RunReadyUntilBlocked(),
+               sr::UnhandledError);
 }
 
 TEST_F(SiglusTraceTest, TracePreservesStringValueEscaping) {
   // Runtime string annotations retain their existing quoting and escaping.
   SetupLogging(Severity::Error, {.script = true});
-  runtime.vm->InvokeUntilBlocked(*Compile(R"(
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(*Compile(R"(
     __builtin_trace(7, 12, __builtin_dbgvalue("a\nb"));
   )"),
-                                 {});
+                                                   {});
   EXPECT_EQ(output.Str(), "[7:12] \"a\\nb\"\n");
 }
 

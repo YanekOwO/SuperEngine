@@ -39,7 +39,7 @@ using namespace serilang;
 void BindEvent(SiglusMachine& runtime) {
   sb::module_ m(*runtime.vm, "event");
 
-  m.def("keydown", [event = runtime.system->event_ptr()](VM& vm) {
+  m.def("keydown", [event = runtime.host().system->event_ptr()](VM& vm) {
     struct KeyDownListener : public EventListener {
       std::weak_ptr<Promise> promise;
       KeyDownListener(std::weak_ptr<Promise> p) : promise(p) {}

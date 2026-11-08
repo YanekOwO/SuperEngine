@@ -172,9 +172,9 @@ struct SiglusWipe {
 
   SiglusWipe(SiglusMachine& runtime, std::shared_ptr<Control> control)
       : runtime_(runtime),
-        system_(runtime.system.get()),
-        stage_(runtime.stage.get()),
-        global_config_(runtime.global_config),
+        system_(runtime.host().system.get()),
+        stage_(nullptr),
+        global_config_(runtime.host().global_config),
         control_(std::move(control)) {
     control_->owner = this;
   }
@@ -183,7 +183,9 @@ struct SiglusWipe {
   ~SiglusWipe() { control_->owner = nullptr; }
 
   FrameCounter MakeWipeFrameCounter(const WipeParams& params) {
-    auto source = runtime_.CreateCounter();
+    auto source = runtime_.host().CreateCounter(
+        runtime_.host().excall && stage_ == &runtime_.host().excall->stage ? 1
+                                                                           : 0);
     source->StartGame();
     FrameCounter counter(std::move(source),
                          Interpolation(Range(0, 1), InterpolationType::OneShot,
@@ -252,6 +254,9 @@ struct SiglusWipe {
 
   sr::Value Start(sr::VM& vm, WipeParams params) {
     EndCurrent(0);
+    stage_ = runtime_.host().excall && runtime_.host().excall->allocated
+                 ? &runtime_.host().excall->stage
+                 : runtime_.host().stage.get();
     if (!stage_)
       return lop::MakeResolvedFuture(*vm.gc_);
 
@@ -302,8 +307,12 @@ struct SiglusWipe {
     auto task = std::make_unique<lop::SiglusWipeOperation>(
         system_, stage_, params.wait_flag, active, std::move(progress_counter),
         global_config_);
-    lop::FutureBackedCoroutineTask pending(vm, std::move(task),
-                                           system_->event_ptr().get());
+    lop::FutureBackedCoroutineTask pending(
+        vm, std::move(task), system_->event_ptr().get(), {},
+        runtime_.WaitScope(runtime_.host().excall &&
+                                   stage_ == &runtime_.host().excall->stage
+                               ? 1
+                               : 0));
     pending.Start();
     sr::Future* future = pending_.MakeFuture(*vm.gc_, std::move(pending));
     vm.TrackPendingPromise(future->promise);
@@ -356,16 +365,16 @@ void BindWipe(SiglusMachine& runtime) {
   auto control = std::make_shared<SiglusWipe::Control>();
   auto wipe = wipe_cls.inst("wipe", runtime, control);
 
-  if (!runtime.finish_active_wipe)
-    runtime.finish_active_wipe = std::make_shared<SiglusWipeEndHook>();
-  *runtime.finish_active_wipe = [control] {
-    if (control->owner)
-      control->owner->EndCurrent(0);
-  };
-  runtime.update_wipe_after_frame_actions = [control] {
-    if (control->owner)
-      control->owner->UpdateAfterFrameActions();
-  };
+  runtime.host().wipe_hooks.push_back(
+      {runtime.lifetime,
+       [weak = std::weak_ptr(control)] {
+         if (auto value = weak.lock(); value && value->owner)
+           value->owner->EndCurrent(0);
+       },
+       [weak = std::weak_ptr(control)] {
+         if (auto value = weak.lock(); value && value->owner)
+           value->owner->UpdateAfterFrameActions();
+       }});
 
   wipe.def(
       "wipe",

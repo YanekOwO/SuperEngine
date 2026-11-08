@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "libsiglus/script_call.hpp"
 #include "vm/value.hpp"
 
 #include <string>
@@ -14,6 +15,10 @@ struct Function;
 
 namespace libsiglus::binding {
 class Loader;
+
+serilang::Value ResolveScriptCall(Loader& loader,
+                                  serilang::GarbageCollector& gc,
+                                  const ScriptCall& call);
 struct UserCommand;
 const UserCommand& ResolveSceneUserCommand(Loader& loader,
                                            std::string scene_name,

@@ -82,8 +82,8 @@ void BindGexe(SiglusMachine& runtime) {
   sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   sb::class_<GameexeHandle> gh(m, "gexe");
 
-  gh.def(
-      sb::init([gexe = runtime.gameexe]() { return new GameexeHandle(gexe); }));
+  gh.def(sb::init(
+      [gexe = runtime.host().gameexe]() { return new GameexeHandle(gexe); }));
 
   gh.def("clear", &GameexeHandle::Clear);
   gh.def("load_from", &GameexeHandle::LoadFrom);

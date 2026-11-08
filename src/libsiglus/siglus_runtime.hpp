@@ -1,0 +1,287 @@
+// -----------------------------------------------------------------------
+//
+// This file is part of RLVM, a RealLive virtual machine clone.
+//
+// -----------------------------------------------------------------------
+//
+// Copyright (C) 2026 RLVM contributors
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+//
+// -----------------------------------------------------------------------
+
+#pragma once
+
+#include "libsiglus/property_storage.hpp"
+#include "libsiglus/script_call.hpp"
+#include "libsiglus/siglus_machine.hpp"
+
+#include "core/asset_scanner.hpp"
+#include "core/capture.hpp"
+#include "core/counter.hpp"
+#include "core/event_listener.hpp"
+#include "core/excall.hpp"
+#include "core/game_config.hpp"
+#include "core/gameexe.hpp"
+#include "core/image_resources.hpp"
+#include "core/interaction_manager.hpp"
+#include "core/memory_internal/memory.hpp"
+#include "core/quake.hpp"
+#include "core/selection.hpp"
+#include "core/stage.hpp"
+#include "core/window_title.hpp"
+#include "libsiglus/bindings/loader.hpp"
+#include "libsiglus/frame_request_manager.hpp"
+#include "systems/frame_presenter.hpp"
+#include "systems/system.hpp"
+#include "vm/value.hpp"
+
+#include <chrono>
+#include <deque>
+#include <filesystem>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+namespace lop {
+struct MovieFrame;
+}
+
+namespace serilang {
+class VM;
+class Promise;
+struct Fiber;
+};  // namespace serilang
+
+template <class... Ts>
+class IntListFacade;
+template <class... Ts>
+class StrListFacade;
+struct ActionReference;
+class BgmTable;
+class DatabaseList;
+class FrameActionManager;
+class KidokuTable;
+class IPlatformImplementor;
+class MaskList;
+class ScriptInput;
+
+namespace libsiglus {
+using SiglusIntListFacade = ::IntListFacade<serilang::Fiber&>;
+using SiglusStrListFacade = ::StrListFacade<serilang::Fiber&>;
+
+class Archive;
+class SiglusSceneRenderer;
+
+using SiglusWipeEndHook = std::function<void()>;
+
+struct SiglusRuntime;
+struct SiglusMachine;
+
+struct SiglusRuntime {
+  SiglusMachine& GameplayMachine();
+  const SiglusMachine& GameplayMachine() const;
+  SiglusMachine& ActiveMachine();
+  const SiglusMachine& ActiveMachine() const;
+  std::filesystem::path base_pth, save_pth;
+  std::shared_ptr<Gameexe> gameexe;
+  std::shared_ptr<Archive> archive;
+  std::shared_ptr<const DatabaseList> databases;
+  std::unique_ptr<Memory> memory;
+  PropertyStorage properties;
+  LocalConfig local_config;
+  GlobalConfig global_config;
+  std::shared_ptr<AssetScanner> asset_scanner;
+
+  std::unique_ptr<Stage> stage;
+  std::unique_ptr<Excall> excall;
+  void InitializeExcall();
+  Stage& GetStage(int owner = 0);
+  FrameActionManager& GetFrameActions(int owner = 0);
+  bool IsExcall() const { return excall_depth_ != 0; }
+  void EnterExcall();
+  void LeaveExcall();
+  void FreeExcall(bool finish_actions = true);
+  void ResetExcall();
+  bool syscom_enabled = true;
+  bool OpenExcall(ScriptCall request);
+  std::shared_ptr<serilang::Promise> CallExcall(SiglusMachine& caller,
+                                                ScriptCall request);
+  void DriveScripts();
+  bool HasPendingScriptWork() const;
+  void DispatchFrameAction(int owner,
+                           const ActionReference& reference,
+                           FrameAction::Target target);
+  void ResetLocalMemory();
+  void QueueReturnToMenu(std::string scene,
+                         int zlabel,
+                         bool preserve,
+                         int fade_millis);
+
+  struct WipeHook {
+    std::weak_ptr<char> lifetime;
+    std::function<void()> finish;
+    std::function<void()> update;
+  };
+  std::vector<WipeHook> wipe_hooks;
+  std::vector<std::string> binding_names;
+  std::function<void(SiglusMachine&)> configure_machine;
+  bool debug = false;
+  bool trace = false;
+  bool OpenExcall(FrameAction::Target target);
+  bool OpenExcallScene(const std::string& config_key);
+  bool ScriptScopeActive(int owner) const;
+
+  std::unique_ptr<System> system;
+  std::unique_ptr<FramePresenter> presenter;
+  std::shared_ptr<WindowTitle> window_title;
+  std::shared_ptr<ImageResources> images;
+  void BindGraphics();
+  void ResetGraphics();
+  bool is_interface_hidden() const { return interface_hidden_; }
+  void ToggleInterfaceHidden() { interface_hidden_ = !interface_hidden_; }
+  std::shared_ptr<SDLSurface> RenderToSurface();
+
+  std::unique_ptr<InteractionManager> interaction_manager;
+  std::unique_ptr<InteractionManager> excall_interaction_manager;
+
+  // ------------------------------------------------------------------------------
+  std::shared_ptr<SelState> selection_state;
+  std::shared_ptr<EventListener> selection_event_listener;
+  void StartSelection(std::shared_ptr<Selection> session);
+  void FinishSelection(std::shared_ptr<Selection> session);
+  void CancelSelection(std::shared_ptr<Selection> session);
+  void UpdateSelection(int game_ms);
+  // Overrides this exact selection key for the lifetime of this machine.
+  // Choices are original option indices; -1 requests player cancellation.
+  void RegisterDebugSelectionChoice(int scene, int kidoku, int choice);
+  // Appends a choice for the next selection, ahead of indexed overrides.
+  void QueueDebugSelectionChoice(int choice);
+  // Called once after input or automation accepts a new selection result.
+  void OnSelectionChosen(const Selection& session);
+
+ private:
+  std::map<std::pair<int, int>, int> debug_selection_choices_;
+  std::deque<int> debug_selection_choice_queue_;
+  bool updating_selection_ = false;
+
+  // ------------------------------------------------------------------------------
+ public:
+  std::shared_ptr<BgmTable> bgm_table;
+  std::shared_ptr<KidokuTable> kidoku_table;
+  std::shared_ptr<CounterList> counter_list;
+  std::shared_ptr<::QuakeList> screen_quakes;
+  std::shared_ptr<FrameActionManager> frame_action_manager;
+  std::shared_ptr<MaskList> mask_list;
+
+  std::shared_ptr<SiglusSceneRenderer> renderer;
+  std::weak_ptr<lop::MovieFrame> movie_frame;
+  std::function<void()> GetFrameRenderer() const;
+  void RenderFrame();
+
+  // ------------------------------------------------------------------------------
+  std::shared_ptr<CaptureManager> captures;
+  // Queue eagerly and complete at most one request after each system frame.
+  serilang::Value RequestCapture(SiglusMachine& machine,
+                                 CaptureRequest request);
+  void ProcessCaptureFrame();
+  void ResetCaptures();
+  bool HasPendingCaptures() const;
+  bool CaptureDisplayEnabled() const;
+
+ private:
+  struct PendingCapture {
+    CaptureRequest request;
+    SiglusMachine* owner;
+    std::weak_ptr<char> lifetime;
+    std::shared_ptr<serilang::Promise> promise;
+  };
+  std::deque<PendingCapture> pending_captures_;
+  bool CanProcessCapture(const PendingCapture& job) const;
+  void CancelExpiredCaptures();
+
+  // ------------------------------------------------------------------------------
+ public:
+  std::shared_ptr<EventListener> system_event_listener;
+  std::shared_ptr<EventListener> mwnd_button_event_listener;
+  std::shared_ptr<InputListener> input_event_listener;
+  std::shared_ptr<ScriptInput> script_input;
+  std::vector<std::function<void()>> reset_local_memory;
+  std::shared_ptr<SiglusWipeEndHook> finish_active_wipe =
+      std::make_shared<SiglusWipeEndHook>();
+  std::function<void()> update_wipe_after_frame_actions;
+  std::shared_ptr<IPlatformImplementor> platform_implementor;
+
+  SiglusRuntime();
+  ~SiglusRuntime();
+  SiglusRuntime(const SiglusRuntime&) = delete;
+  SiglusRuntime& operator=(const SiglusRuntime&) = delete;
+
+  // Schedule the configured startup scene, or an explicit scene ID override.
+  void Start(std::optional<int> start_scene = std::nullopt);
+  void Run();
+  void PumpHostEvents();
+
+  // Advance one frame using given deltas.
+  void Update(std::chrono::milliseconds real_delta,
+              std::chrono::milliseconds game_delta);
+
+  // Create an inactive caller-owned counter.
+  std::shared_ptr<Counter> CreateCounter(int owner = 0);
+
+ private:
+  struct OwnedCounter {
+    std::weak_ptr<Counter> counter;
+    int owner;
+  };
+  std::vector<OwnedCounter> counters_;
+
+  // ------------------------------------------------------------------------------
+  struct PendingExcall {
+    ScriptCall request;
+    SiglusMachine* caller = nullptr;
+    std::weak_ptr<char> lifetime;
+    std::shared_ptr<serilang::Promise> completion;
+  };
+  void ApplyExcallRequests();
+  void Activate(SiglusMachine& machine);
+  void CollectCompletedExcalls();
+  std::deque<PendingExcall> pending_excalls_;
+  std::vector<std::unique_ptr<SiglusMachine>> excalls_;
+  std::unique_ptr<SiglusMachine> callbacks_[2];
+  std::vector<SiglusMachine*> drive_stack_;
+  void DriveMachine(SiglusMachine& machine, std::function<void()> run);
+  bool IsDriving(const SiglusMachine& machine) const;
+  void YieldScripts();
+  int excall_depth_ = 0;
+  // ------------------------------------------------------------------------------
+
+  bool resetting_ = false;
+  struct RestartRequest {
+    std::string scene;
+    int zlabel;
+    bool preserve;
+    std::chrono::steady_clock::time_point deadline;
+  };
+  std::optional<RestartRequest> restart_;
+  bool ProcessRestart();
+  bool interface_hidden_ = false;
+  std::unique_ptr<SiglusMachine> gameplay_;
+};
+
+}  // namespace libsiglus

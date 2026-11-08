@@ -26,7 +26,7 @@
 #include "core/group.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 
@@ -67,7 +67,7 @@ static std::optional<int> FirstOptionalInt(std::vector<sr::Value> raw_args) {
 
 void BindGroup(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  Stage* stage_state = runtime.stage.get();
+  Stage* stage_state = runtime.host().stage.get();
   if (!stage_state)
     throw std::runtime_error("Group requires a stage");
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -137,10 +137,12 @@ void BindGroup(SiglusMachine& runtime) {
   group.def("get_result_button_no", [](GroupHandle* h) {
     return h->group->result_button_no.value_or(0);
   });
-  group.prop("order", [](GroupHandle* h) { return h->group->order; },
-             [](GroupHandle* h, int order) { h->group->order = order; });
-  group.prop("layer", [](GroupHandle* h) { return h->group->layer; },
-             [](GroupHandle* h, int layer) { h->group->layer = layer; });
+  group.prop(
+      "order", [](GroupHandle* h) { return h->group->order; },
+      [](GroupHandle* h, int order) { h->group->order = order; });
+  group.prop(
+      "layer", [](GroupHandle* h) { return h->group->layer; },
+      [](GroupHandle* h, int layer) { h->group->layer = layer; });
   group.prop(
       "cancel_priority",
       [](GroupHandle* h) { return h->group->cancel_priority; },
@@ -150,21 +152,23 @@ void BindGroup(SiglusMachine& runtime) {
 
   struct GroupListHandle {
     int layer;
+    int owner = 0;
   };
   sb::class_<GroupListHandle> group_array(m, "GroupArray");
   group_array.add_gc_root(group);
   group_array.def(
-      sb::init([](int layer) {
+      sb::init([](int layer, int owner) {
         if (layer != kLayerFg && layer != kLayerBg && layer != kLayerNext)
           throw sr::RuntimeError("invalid group layer: " +
                                  std::to_string(layer));
-        return std::make_unique<GroupListHandle>(layer);
+        return std::make_unique<GroupListHandle>(layer, owner);
       }),
-      sb::arg("layer"));
+      sb::arg("layer"), sb::arg("owner") = 0);
   group_array.def(
       "__getitem__",
-      [stage_state, group](GroupListHandle* h, int index) mutable {
-        std::shared_ptr<Group> g = GetGroup(stage_state, h->layer, index);
+      [&runtime, group](GroupListHandle* h, int index) mutable {
+        std::shared_ptr<Group> g =
+            GetGroup(&runtime.host().GetStage(h->owner), h->layer, index);
         sr::NativeInstance* inst = group.make_inst(g);
         return sr::Value(inst);
       },

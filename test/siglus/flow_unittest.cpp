@@ -41,6 +41,7 @@
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
+#include "vm/future.hpp"
 #include "vm/gc.hpp"
 #include "vm/promise.hpp"
 #include "vm/value.hpp"
@@ -65,17 +66,20 @@ static Archive MakeEmptyArchive() {
   return Archive(std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
 }
 
-static ::testing::AssertionResult InitializeFlowRuntime(SiglusMachine& runtime,
+static ::testing::AssertionResult InitializeFlowRuntime(SiglusRuntime& runtime,
                                                         Archive& archive) {
-  runtime.vm =
+  runtime.archive = std::shared_ptr<Archive>(&archive, [](Archive*) {});
+  runtime.binding_names = {"0_memory", "flow"};
+  runtime.GameplayMachine().vm =
       std::make_unique<sr::VM>(std::make_shared<sr::GarbageCollector>());
-  runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
+  runtime.GameplayMachine().loader =
+      std::make_unique<Loader>(archive, *runtime.GameplayMachine().vm, false);
   for (const auto* name : {"0_memory", "flow"}) {
     const auto* bind = SiglusBindingRegistry::Find(name);
     if (bind == nullptr)
       return ::testing::AssertionFailure()
              << "Missing Siglus binding: " << name;
-    (*bind)(runtime);
+    (*bind)(runtime.GameplayMachine());
   }
   return ::testing::AssertionSuccess();
 }
@@ -248,7 +252,7 @@ TEST_F(SiglusSceneEntryTest, ZlabelResolvesLabelAndFallsBackToScript) {
 class SiglusCallMemoryTest : public ::testing::Test {
  protected:
   Archive archive = MakeEmptyArchive();
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   struct Observation {
     int integer;
     std::string string;
@@ -258,7 +262,8 @@ class SiglusCallMemoryTest : public ::testing::Test {
 
   void SetUp() override {
     ASSERT_TRUE(InitializeFlowRuntime(runtime, archive));
-    srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+    srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                             runtime.GameplayMachine().vm->globals_.get());
     bindings.def("observe", [this](sr::Fiber& fiber, int i, std::string s) {
       auto* memory = std::any_cast<MemoryHandle>(&fiber.usrdata);
       ASSERT_NE(memory, nullptr);
@@ -267,31 +272,32 @@ class SiglusCallMemoryTest : public ::testing::Test {
   }
 
   void Run(std::string source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_, false);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_, false);
     compiler.compile(
         m6::SourceBuffer::Create(std::move(source), "<SiglusCallMemoryTest>"));
     ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
-    runtime.vm->Evaluate(compiler.Get());
+    runtime.GameplayMachine().vm->Evaluate(compiler.Get());
   }
 
   void InstallTokens(std::vector<token::Token_t> body, bool trace = false) {
     std::vector<Parser::ParsedToken> tokens;
     for (auto& token : body)
       tokens.push_back({static_cast<int>(tokens.size() + 1), std::move(token)});
-    Recompiler compiler(runtime.vm->gc_);
+    Recompiler compiler(runtime.GameplayMachine().vm->gc_);
     compiler.trace_enabled_ = trace;
     compiler.Compile(tokens);
     ASSERT_TRUE(compiler.Ok());
     auto* module = compiler.module_;
-    (*runtime.vm->builtins_)["test_scene"] = sr::Value(module);
-    sr::VM bootstrap(runtime.vm->gc_);
+    (*runtime.GameplayMachine().vm->builtins_)["test_scene"] =
+        sr::Value(module);
+    sr::VM bootstrap(runtime.GameplayMachine().vm->gc_);
     bootstrap.gc_threshold_ = 0;
     bootstrap.globals_ = module->globals;
     bootstrap.Evaluate(compiler.GetCode());
     auto* dispatcher = module->globals->at("%%dispatch").Get_if<sr::Function>();
-    (*runtime.vm->globals_)["entry"] =
-        MakeSceneEntry(*runtime.vm->gc_, dispatcher, compiler.GetMainLine(), 0,
-                       SceneCallKind::Scene);
+    (*runtime.GameplayMachine().vm->globals_)["entry"] =
+        MakeSceneEntry(*runtime.GameplayMachine().vm->gc_, dispatcher,
+                       compiler.GetMainLine(), 0, SceneCallKind::Scene);
   }
 
   static Variable Temp(int id) { return Variable{.type = Type::Int, .id = id}; }
@@ -338,8 +344,47 @@ class SiglusCallMemoryTest : public ::testing::Test {
     scene.AppendInt(static_cast<int>(Type::String));
     scene.AddTo(archive);
     Run("fn probe(n) { " + body + " }");
-    srbind::module_ math(*runtime.vm, "math");
-    (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
+    srbind::module_ math(*runtime.GameplayMachine().vm, "math");
+    (*math.dict())["tostr"] =
+        runtime.GameplayMachine().vm->globals_->at("probe");
+  }
+
+  void AddExtendedProbe(std::string body,
+                        std::shared_ptr<sr::Promise> gate = {}) {
+    AddFarcallProbe(body);
+    runtime.configure_machine = [this, body = std::move(body),
+                                 gate =
+                                     std::move(gate)](SiglusMachine& machine) {
+      srbind::module_ bindings(machine.vm->gc_.get(),
+                               machine.vm->globals_.get());
+      bindings.def("observe",
+                   [this](sr::Fiber& fiber, int integer, std::string text) {
+                     auto* memory = std::any_cast<MemoryHandle>(&fiber.usrdata);
+                     ASSERT_NE(memory, nullptr);
+                     observations.push_back(
+                         {integer, std::move(text), memory->StackDepth()});
+                   });
+      if (gate) {
+        auto* future = machine.vm->gc_->Allocate<sr::Future>();
+        future->promise = gate;
+        (*machine.vm->globals_)["gate"] = sr::Value(future);
+      }
+      Execute(*machine.vm, "fn probe(n) { " + body + " }");
+      srbind::module_ math(*machine.vm, "math");
+      (*math.dict())["tostr"] = machine.vm->globals_->at("probe");
+    };
+  }
+
+  void StartExtended(const std::string& body) {
+    Run("fn start_extended() { " + body + " }");
+    runtime.GameplayMachine().vm->InvokeUntilBlocked(
+        runtime.GameplayMachine().vm->globals_->at("start_extended"), {});
+    DriveScripts();
+  }
+
+  void DriveScripts() {
+    for (int iteration = 0; iteration < 4; ++iteration)
+      runtime.DriveScripts();
   }
 
   sr::Value AddProbe(std::string name, std::string body) {
@@ -360,12 +405,14 @@ class SiglusCallMemoryTest : public ::testing::Test {
     const int scene_id = scene.AddTo(archive);
 
     Run("fn probe(n) { " + body + " }");
-    srbind::module_ math(*runtime.vm, "math");
-    (*math.dict())["tostr"] = runtime.vm->globals_->at("probe");
-    auto command = ResolveSceneCommand(*runtime.loader, name, name);
-    (*runtime.vm->globals_)["command"] = sr::Value(command);
+    srbind::module_ math(*runtime.GameplayMachine().vm, "math");
+    (*math.dict())["tostr"] =
+        runtime.GameplayMachine().vm->globals_->at("probe");
+    auto command =
+        ResolveSceneCommand(*runtime.GameplayMachine().loader, name, name);
+    (*runtime.GameplayMachine().vm->globals_)["command"] = sr::Value(command);
     EXPECT_EQ(Dispatcher(command)->globals,
-              runtime.loader->Load(scene_id)->globals);
+              runtime.GameplayMachine().loader->Load(scene_id)->globals);
     return command;
   }
 };
@@ -392,8 +439,8 @@ TEST_F(SiglusCallMemoryTest, ConsecutiveCommandsStartFreshAndRestoreCaller) {
   EXPECT_EQ(observations[2].integer, 42);
   EXPECT_EQ(observations[2].string, "caller");
   EXPECT_EQ(observations[2].depth, 1);
-  EXPECT_EQ(runtime.vm->globals_->at("first").Str(), "face");
-  EXPECT_EQ(runtime.vm->globals_->at("second").Str(), "face");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("first").Str(), "face");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("second").Str(), "face");
 }
 
 TEST_F(SiglusCallMemoryTest, RecursiveCommandsRestoreEveryCaller) {
@@ -420,7 +467,7 @@ TEST_F(SiglusCallMemoryTest, RecursiveCommandsRestoreEveryCaller) {
   EXPECT_EQ(observations[6].integer, 99);
   EXPECT_EQ(observations[6].string, "root");
   EXPECT_EQ(observations[6].depth, 1);
-  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "done");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(), "done");
 }
 
 TEST_F(SiglusCallMemoryTest, ExceptionRestoresCallerBeforeCatch) {
@@ -438,7 +485,8 @@ TEST_F(SiglusCallMemoryTest, ExceptionRestoresCallerBeforeCatch) {
   EXPECT_EQ(observations[0].integer, 42);
   EXPECT_EQ(observations[0].string, "caller");
   EXPECT_EQ(observations[0].depth, 1);
-  EXPECT_EQ(runtime.vm->globals_->at("error").Str(), "failure");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "failure");
 }
 
 TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
@@ -449,16 +497,16 @@ TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
     observe(L[0], K[0]);
     return "resumed";
   )");
-  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
-  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
-  runtime.vm->InvokeUntilBlocked(command, {sr::Value(17)});
+  auto* gate = runtime.GameplayMachine().vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.GameplayMachine().vm->globals_)["gate"] = sr::Value(gate);
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(command, {sr::Value(17)});
 
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 0);
   EXPECT_EQ(observations[0].string, "");
   EXPECT_EQ(observations[0].depth, 2);
-  ASSERT_EQ(runtime.vm->fibres_.size(), 1);
-  auto* callback = runtime.vm->fibres_.front();
+  ASSERT_EQ(runtime.GameplayMachine().vm->fibres_.size(), 1);
+  auto* callback = runtime.GameplayMachine().vm->fibres_.front();
   EXPECT_EQ(callback->state, sr::FiberState::Suspended);
   std::size_t completed_depth = 0;
   callback->completion_promise->AddWaker([&](const auto& result) {
@@ -468,7 +516,7 @@ TEST_F(SiglusCallMemoryTest, DirectCallbackKeepsBanksUntilResumed) {
   });
 
   gate->completion_promise->Resolve(sr::nil);
-  runtime.vm->Run();
+  runtime.GameplayMachine().vm->Run();
 
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[1].integer, 17);
@@ -510,38 +558,44 @@ TEST_F(SiglusCallMemoryTest, PreservesArgumentTypesAndReturnValues) {
     scene.AppendInt(1);
     scene.AppendInt(static_cast<int>(type));
     scene.AddTo(archive);
-    (*runtime.vm->globals_)[name] =
-        sr::Value(ResolveSceneCommand(*runtime.loader, name, name));
+    (*runtime.GameplayMachine().vm->globals_)[name] = sr::Value(
+        ResolveSceneCommand(*runtime.GameplayMachine().loader, name, name));
   }
   FakeScene{.scene_name = "empty", .command_name = "empty"}.AddTo(archive);
-  (*runtime.vm->globals_)["empty"] =
-      sr::Value(ResolveSceneCommand(*runtime.loader, "empty", "empty"));
+  (*runtime.GameplayMachine().vm->globals_)["empty"] = sr::Value(
+      ResolveSceneCommand(*runtime.GameplayMachine().loader, "empty", "empty"));
   Run(R"(
     integer_result = integer(73);
     string_result = string("unchanged");
     empty_result = empty();
   )");
 
-  EXPECT_EQ(runtime.vm->globals_->at("integer_result"), sr::Value(73));
-  EXPECT_EQ(runtime.vm->globals_->at("string_result").Str(), "unchanged");
-  EXPECT_EQ(runtime.vm->globals_->at("empty_result"), sr::nil);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("integer_result"),
+            sr::Value(73));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("string_result").Str(),
+            "unchanged");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("empty_result"),
+            sr::nil);
 }
 
 TEST_F(SiglusCallMemoryTest, ZeroInstructionTokensRemainJumpTargets) {
   // Consecutive labels have token entries even when neither emits bytecode.
   InstallTokens({token::Goto{1}, token::Return{{Integer(0)}}, token::Label{0},
                  token::Label{1}, token::Return{{Integer(42)}}, token::Eof{}});
-  auto* code = Dispatcher(runtime.vm->globals_->at("entry"))->chunk;
+  auto* code =
+      Dispatcher(runtime.GameplayMachine().vm->globals_->at("entry"))->chunk;
   EXPECT_EQ(code->line_offset.size(), 6);
   EXPECT_EQ(code->line_offset.at(3), code->line_offset.at(4));
   Run("result = entry();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
 }
 
 TEST_F(SiglusCallMemoryTest, TraceAnnotationsRemainAtTokenBoundaries) {
   // Trace instrumentation runs at the target token before the scene resumes.
   std::vector<std::string> annotations;
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                           runtime.GameplayMachine().vm->globals_.get());
   bindings.def(
       "__builtin_trace",
       [&](int scene, int line, std::vector<sr::Value> terms) {
@@ -557,14 +611,15 @@ TEST_F(SiglusCallMemoryTest, TraceAnnotationsRemainAtTokenBoundaries) {
   Run("result = entry();");
   ASSERT_EQ(annotations.size(), 3);
   EXPECT_NE(annotations[1].find(":4]"), std::string::npos);
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
 }
 
 TEST_F(SiglusCallMemoryTest, SceneFallthroughReturnsNil) {
   // EOF supplies normal termination through the dispatcher's shared epilogue.
   InstallTokens({token::Label{0}, token::Eof{}});
   Run("result = entry();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::nil);
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::nil);
 }
 
 TEST_F(SiglusCallMemoryTest, RecompiledGosubReturnsItsArgument) {
@@ -575,7 +630,8 @@ TEST_F(SiglusCallMemoryTest, RecompiledGosubReturnsItsArgument) {
        token::Subroutine{.source_entry = 42, .args = {Type::Int}},
        Argument(0, 1), token::Return{{Temp(1)}}, token::Eof{}});
   Run("result = entry();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(73));
 }
 
 TEST_F(SiglusCallMemoryTest, NestedGosubPreservesCallerLocals) {
@@ -590,7 +646,8 @@ TEST_F(SiglusCallMemoryTest, NestedGosubPreservesCallerLocals) {
        token::Subroutine{.source_entry = 43, .args = {Type::Int}},
        Argument(0, 3), token::Return{{Temp(3)}}, token::Eof{}});
   Run("result = entry();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(73));
 }
 
 TEST_F(SiglusCallMemoryTest, NestedGosubPreservesDeclaredLocal) {
@@ -611,14 +668,16 @@ TEST_F(SiglusCallMemoryTest, NestedGosubPreservesDeclaredLocal) {
        token::Assign{.dst = local, .src = Integer(99)}, token::Return{},
        token::Eof{}});
   Run("result = entry();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
 }
 
 TEST_F(SiglusCallMemoryTest, MultipleReturnValuesRemainOrdered) {
   // A dispatcher return preserves the original multi-value list representation.
   InstallTokens({token::Return{{Integer(42), String("value")}}, token::Eof{}});
   Run("result = entry();");
-  auto* values = runtime.vm->globals_->at("result").Get_if<sr::List>();
+  auto* values =
+      runtime.GameplayMachine().vm->globals_->at("result").Get_if<sr::List>();
   ASSERT_NE(values, nullptr);
   ASSERT_EQ(values->items.size(), 2);
   EXPECT_EQ(values->items[0], sr::Value(42));
@@ -627,9 +686,10 @@ TEST_F(SiglusCallMemoryTest, MultipleReturnValuesRemainOrdered) {
 
 TEST_F(SiglusCallMemoryTest, SuspendedGosubPreservesItsArgument) {
   // Suspend in a subroutine and retain its argument when its caller resumes.
-  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
-  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  auto* gate = runtime.GameplayMachine().vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.GameplayMachine().vm->globals_)["gate"] = sr::Value(gate);
+  srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                           runtime.GameplayMachine().vm->globals_.get());
   bindings.def("__builtin_textout",
                [gate](int, int, std::string) { return sr::Value(gate); });
   InstallTokens(
@@ -639,12 +699,15 @@ TEST_F(SiglusCallMemoryTest, SuspendedGosubPreservesItsArgument) {
        token::Textout{.kidoku = 0, .str = String("pause")}, Argument(0, 1),
        token::Return{{Temp(1)}}, token::Eof{}});
   Run("fn start() { global result; result = entry(); }");
-  runtime.vm->InvokeUntilBlocked(runtime.vm->globals_->at("start"), {});
-  ASSERT_EQ(runtime.vm->fibres_.size(), 1);
-  EXPECT_EQ(runtime.vm->fibres_.front()->state, sr::FiberState::Suspended);
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(
+      runtime.GameplayMachine().vm->globals_->at("start"), {});
+  ASSERT_EQ(runtime.GameplayMachine().vm->fibres_.size(), 1);
+  EXPECT_EQ(runtime.GameplayMachine().vm->fibres_.front()->state,
+            sr::FiberState::Suspended);
   gate->completion_promise->Resolve(sr::nil);
-  runtime.vm->Run();
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(73));
+  runtime.GameplayMachine().vm->Run();
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(73));
 }
 
 TEST_F(SiglusCallMemoryTest, RecompiledUserCommandRestoresCallerBanks) {
@@ -688,16 +751,16 @@ TEST_F(SiglusCallMemoryTest, SuspendedFarcallKeepsBanksUntilResumed) {
       "observe(L[0], K[0]); await gate; "
       "observe(L[0], K[0]); return \"done\";");
   InstallTokens({FarCall("far"), token::Return{{Temp(0)}}, token::Eof{}});
-  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
-  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
+  auto* gate = runtime.GameplayMachine().vm->gc_->Allocate<sr::Fiber>();
+  (*runtime.GameplayMachine().vm->globals_)["gate"] = sr::Value(gate);
   Run("fn start() { L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], K[0]); "
       "}");
-  auto start = runtime.vm->globals_->at("start");
-  runtime.vm->InvokeUntilBlocked(start, {});
+  auto start = runtime.GameplayMachine().vm->globals_->at("start");
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(start, {});
   ASSERT_EQ(observations.size(), 1);
-  runtime.vm->CollectGarbage();
+  runtime.GameplayMachine().vm->CollectGarbage();
   gate->completion_promise->Resolve(sr::nil);
-  runtime.vm->Run();
+  runtime.GameplayMachine().vm->Run();
   ASSERT_EQ(observations.size(), 3);
   EXPECT_EQ(observations[1].integer, 7);
   EXPECT_EQ(observations[1].string, "farcall");
@@ -711,9 +774,9 @@ TEST_F(SiglusCallMemoryTest, ExtendedCallRestoresBanksAndClearsInput) {
   runtime.script_input->OnEvent(
       std::make_shared<Event>(KeyDown{KeyCode::SPACE}));
   EXPECT_TRUE(runtime.script_input->Get(ScriptInput::Source::Decide).on_down);
-  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  AddExtendedProbe("observe(L[0], K[0]); return n;");
   InstallTokens({FarCall("far", true), token::Eof{}});
-  Run("L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], K[0]);");
+  StartExtended("L[0] = 42; K[0] = \"root\"; entry(); observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[0].integer, 7);
   EXPECT_EQ(observations[0].string, "farcall");
@@ -723,29 +786,89 @@ TEST_F(SiglusCallMemoryTest, ExtendedCallRestoresBanksAndClearsInput) {
   EXPECT_FALSE(runtime.script_input->Get(ScriptInput::Source::Decide).on_down);
 }
 
-TEST_F(SiglusCallMemoryTest, ExtendedCallCleansUpAfterException) {
-  // Throw inside an extended call; restore the original bank stack on unwind.
-  AddFarcallProbe("L[0] = 99; throw \"failure\";");
+TEST_F(SiglusCallMemoryTest, ExtendedStringResultOutlivesItsExecutionHeap) {
+  // Destroy a child after return; its copied result remains rooted in gameplay.
+  AddExtendedProbe("return \"child result\";");
+  std::weak_ptr<sr::GarbageCollector> child_heap;
+  auto configure = runtime.configure_machine;
+  runtime.configure_machine = [configure, &child_heap](SiglusMachine& machine) {
+    child_heap = machine.vm->gc_;
+    configure(machine);
+  };
+  InstallTokens({FarCall("far", true), token::Return{{Temp(0)}}, token::Eof{}});
+  StartExtended("global result; result = entry();");
+  ASSERT_TRUE(child_heap.expired());
+  runtime.GameplayMachine().vm->CollectGarbage();
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(),
+            "child result");
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedFailureIsCopiedIntoTheCaller) {
+  // A child exception becomes a caller-owned exception after the child exits.
+  AddExtendedProbe("throw \"child failure\";");
   InstallTokens({FarCall("far", true), token::Eof{}});
-  Run("L[0] = 42; try { entry(); } catch (e) {} observe(L[0], K[0]);");
+  StartExtended("global error; try { entry(); } catch (e) { error = e; }");
+  runtime.GameplayMachine().vm->CollectGarbage();
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("error").Str(),
+            "child failure");
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedScopeRemainsActiveDuringSuspension) {
+  // A suspended child retains EX scope until its independent machine returns.
+  auto gate = std::make_shared<sr::Promise>();
+  AddExtendedProbe("await gate; return n;", gate);
+  InstallTokens({FarCall("far", true), token::Eof{}});
+  StartExtended("entry();");
+  EXPECT_TRUE(runtime.IsExcall());
+  gate->Resolve(sr::nil);
+  DriveScripts();
+  EXPECT_FALSE(runtime.IsExcall());
+}
+
+TEST_F(SiglusCallMemoryTest, SceneJumpKeepsCallerBanksAndReturnsToCaller) {
+  // A jump replaces a farcall's dispatcher without discarding its caller.
+  AddFarcallProbe("observe(L[0], K[0]); return n;");
+  auto* destination = runtime.GameplayMachine().loader->Load("far");
+  (void)destination;
+  elm::Member jump("jump");
+  auto call =
+      elm::Node::BuildCall({0, {String("far"), Integer(0)}, Type::None});
+  elm::AccessChain chain{
+      .root = std::monostate(),
+      .nodes = {elm::Node(Type::Callable, jump), std::move(call)}};
+  InstallTokens({token::Command{.chain = std::move(chain),
+                                .dst = Variable{Type::None, 0}},
+                 token::Eof{}});
+  Run("L[0] = 42; K[0] = \"caller\"; entry(); observe(L[0], K[0]);");
+  ASSERT_EQ(observations.size(), 2);
+  EXPECT_EQ(observations[0].integer, 42);
+  EXPECT_EQ(observations[1].integer, 42);
+  EXPECT_EQ(observations[1].depth, 1);
+}
+
+TEST_F(SiglusCallMemoryTest, ExtendedCallCleansUpAfterException) {
+  // A rejected EX result returns to the caller with its original bank stack.
+  AddExtendedProbe("L[0] = 99; throw \"failure\";");
+  InstallTokens({FarCall("far", true), token::Eof{}});
+  StartExtended(
+      "L[0] = 42; try { entry(); } catch (e) {} "
+      "observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 42);
   EXPECT_EQ(observations[0].depth, 1);
 }
 
 TEST_F(SiglusCallMemoryTest, ExtendedCallRetainsBanksDuringSuspension) {
-  // Suspend an extended call; resume in its banks before restoring the caller.
-  AddFarcallProbe("observe(L[0], K[0]); await gate; return n;");
+  // A suspended EX machine owns its banks while the caller remains parked.
+  auto gate = std::make_shared<sr::Promise>();
+  AddExtendedProbe("observe(L[0], K[0]); await gate; return n;", gate);
   InstallTokens({FarCall("far", true), token::Eof{}});
-  auto* gate = runtime.vm->gc_->Allocate<sr::Fiber>();
-  (*runtime.vm->globals_)["gate"] = sr::Value(gate);
-  Run("fn start() { L[0] = 42; entry(); observe(L[0], K[0]); }");
-  runtime.vm->InvokeUntilBlocked(runtime.vm->globals_->at("start"), {});
+  StartExtended("L[0] = 42; entry(); observe(L[0], K[0]);");
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 7);
   EXPECT_EQ(observations[0].depth, 2);
-  gate->completion_promise->Resolve(sr::nil);
-  runtime.vm->Run();
+  gate->Resolve(sr::nil);
+  DriveScripts();
   ASSERT_EQ(observations.size(), 2);
   EXPECT_EQ(observations[1].integer, 42);
   EXPECT_EQ(observations[1].depth, 1);
@@ -772,9 +895,9 @@ TEST_F(SiglusCallMemoryTest, StoredCommandSurvivesGarbageCollection) {
   // The scene module roots a borrowed adapter after its script alias is
   // removed.
   auto callback = AddProbe("stored", "observe(n, K[0]); return n;");
-  runtime.vm->globals_->erase("command");
-  runtime.vm->CollectGarbage();
-  runtime.vm->InvokeUntilBlocked(callback, {sr::Value(17)});
+  runtime.GameplayMachine().vm->globals_->erase("command");
+  runtime.GameplayMachine().vm->CollectGarbage();
+  runtime.GameplayMachine().vm->InvokeUntilBlocked(callback, {sr::Value(17)});
   ASSERT_EQ(observations.size(), 1);
   EXPECT_EQ(observations[0].integer, 17);
 }
@@ -784,12 +907,13 @@ TEST_F(SiglusCallMemoryTest, StoredCommandSurvivesGarbageCollection) {
 class FrameActionIntegrationTest : public ::testing::Test {
  protected:
   Archive archive = MakeEmptyArchive();
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   Stage stage;
   LocalConfig config;
   std::shared_ptr<FrameActionManager> manager;
   FrameAction::Target target{1, 5};
   sr::Module* owner = nullptr;
+  SiglusMachine* callback = nullptr;
   int calls = 0;
 
   void SetUp() override {
@@ -799,23 +923,36 @@ class FrameActionIntegrationTest : public ::testing::Test {
               .command_name = "animate",
               .args = {Type::FrameAction}}
         .AddTo(archive);
-    owner = runtime.loader->Load(target.scene_id);
     manager = std::make_shared<FrameActionManager>(stage, config, 2);
-    srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+    srbind::module_ bindings(runtime.GameplayMachine().vm->gc_.get(),
+                             runtime.GameplayMachine().vm->globals_.get());
     runtime.frame_action_manager = manager;
     runtime.counter_list = std::make_shared<CounterList>(0);
     for (const auto* name : {"1_counter", "1_frame_action"}) {
       const auto* bind = SiglusBindingRegistry::Find(name);
       ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
-    bindings.def("replacement", [this](sr::Value) { ++calls; });
+    runtime.binding_names.insert(runtime.binding_names.end(),
+                                 {"1_counter", "1_frame_action"});
+    runtime.configure_machine = [this](SiglusMachine& machine) {
+      callback = &machine;
+      owner = machine.loader->Load(target.scene_id);
+      srbind::module_ bindings(machine.vm->gc_.get(),
+                               machine.vm->globals_.get());
+      bindings.def("replacement", [this](sr::Value) { ++calls; });
+      (*owner->globals)[GetUsercmdId(target.entry)] =
+          machine.vm->globals_->at("replacement");
+    };
     manager->Start({manager->global_action(), {}}, -1, false, target, {});
+    runtime.DispatchFrameAction(0, {manager->global_action(), {}}, target);
+    ASSERT_NE(callback, nullptr);
+    calls = 0;
   }
 
   void ReplaceEntry() {
     (*owner->globals)[GetUsercmdId(target.entry)] =
-        runtime.vm->globals_->at("replacement");
+        callback->vm->globals_->at("replacement");
   }
 
   void Dispatch() {
@@ -824,12 +961,75 @@ class FrameActionIntegrationTest : public ::testing::Test {
   }
 };
 
+TEST_F(FrameActionIntegrationTest,
+       SuspendedCallbackResumesWhileOrdinaryTimeIsStopped) {
+  // Stop ordinary counters after a callback awaits a frame; its script
+  // continuation still runs.
+  (*SiglusBindingRegistry::Find("frame"))(*callback);
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
+  bindings.def("observe_continuation", [this] { ++calls; });
+  Execute(*callback->vm, R"(
+    fn replacement(action) { await frame(); observe_continuation(); }
+  )");
+  ReplaceEntry();
+  Dispatch();
+  manager->CancelGlobals();
+  ASSERT_EQ(calls, 0);
+  runtime.local_config.time_stop = true;
+  runtime.local_config.counter_time_stop = true;
+  runtime.local_config.frame_action_time_stop = true;
+  runtime.local_config.stage_time_stop = true;
+  runtime.Update(std::chrono::milliseconds(17), std::chrono::milliseconds(17));
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(FrameActionIntegrationTest,
+       PendingCallbackKeepsHostAliveAfterGameplayCompletes) {
+  // Finish gameplay before a callback awaits a frame; the host must keep
+  // updating until that callback's continuation completes.
+  auto& gameplay = runtime.GameplayMachine();
+  Execute(*gameplay.vm, "fn gameplay_entry() {}");
+  gameplay.vm->ScheduleExecute(gameplay.vm->globals_->at("gameplay_entry"));
+  runtime.DriveScripts();
+  ASSERT_FALSE(gameplay.vm->HasPendingWork());
+  (*SiglusBindingRegistry::Find("frame"))(*callback);
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
+  bindings.def("observe_continuation", [this] { ++calls; });
+  Execute(*callback->vm, R"(
+    fn replacement(action) { await frame(); observe_continuation(); }
+  )");
+  ReplaceEntry();
+  Dispatch();
+  manager->CancelGlobals();
+
+  EXPECT_TRUE(runtime.HasPendingScriptWork());
+  runtime.Update(std::chrono::milliseconds(17), std::chrono::milliseconds(17));
+
+  EXPECT_EQ(calls, 1);
+  EXPECT_FALSE(runtime.HasPendingScriptWork());
+}
+
+TEST_F(FrameActionIntegrationTest, DispatchUsesItsOwnSceneModule) {
+  // A gameplay-only replacement must not enter the callback's independent heap.
+  auto& gameplay = runtime.GameplayMachine();
+  srbind::module_ bindings(gameplay.vm->gc_.get(), gameplay.vm->globals_.get());
+  bindings.def("other_replacement", [this](sr::Value) { calls += 1000; });
+  (*gameplay.loader->Load(target.scene_id)
+        ->globals)[GetUsercmdId(target.entry)] =
+      gameplay.vm->globals_->at("other_replacement");
+  Dispatch();
+  EXPECT_EQ(calls, 1);
+}
+
 TEST_F(FrameActionIntegrationTest, DispatchUsesCurrentEntry) {
   // Replace an entry after starting; each dispatch must fetch its new callable.
   ReplaceEntry();
   Dispatch();
   EXPECT_EQ(calls, 1);
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
   bindings.def("replacement", [this](sr::Value) { calls += 10; });
   ReplaceEntry();
   Dispatch();
@@ -840,8 +1040,8 @@ TEST_F(FrameActionIntegrationTest, DispatchUsesFrameActionTraceCategory) {
   // A manager-dispatched callback reaches the frame-action trace stream.
   LogCapture output;
   SetupLogging(Severity::Error, {.frame_action = true});
-  (*SiglusBindingRegistry::Find("trace"))(runtime);
-  Execute(*runtime.vm, R"(
+  (*SiglusBindingRegistry::Find("trace"))(*callback);
+  Execute(*callback->vm, R"(
     fn replacement(action) { __builtin_trace(1, 2, "dispatch"); }
   )");
   ReplaceEntry();
@@ -853,8 +1053,8 @@ TEST_F(FrameActionIntegrationTest, FinalCallbackUsesFrameActionTraceCategory) {
   // Explicit finalization uses the same callback category as regular dispatch.
   LogCapture output;
   SetupLogging(Severity::Error, {.frame_action = true});
-  (*SiglusBindingRegistry::Find("trace"))(runtime);
-  Execute(*runtime.vm, R"(
+  (*SiglusBindingRegistry::Find("trace"))(*callback);
+  Execute(*callback->vm, R"(
     fn replacement(action) { __builtin_trace(1, 2, "final"); }
   )");
   ReplaceEntry();
@@ -888,7 +1088,7 @@ TEST_F(FrameActionIntegrationTest, TargetRetainsSelectedCommand) {
                               .included = true}
                         .AddTo(archive);
   ReplaceEntry();
-  EXPECT_EQ(runtime.loader->ResolveUserCommand(*owner, "animate").target,
+  EXPECT_EQ(callback->loader->ResolveUserCommand(*owner, "animate").target,
             (FrameAction::Target{other, 5}));
   Dispatch();
   EXPECT_EQ(calls, 1);
@@ -897,8 +1097,8 @@ TEST_F(FrameActionIntegrationTest, TargetRetainsSelectedCommand) {
 TEST_F(FrameActionIntegrationTest, CallbackSurvivesGarbageCollection) {
   // Keep the replacement only in scene globals; collection must retain it.
   ReplaceEntry();
-  runtime.vm->globals_->erase("replacement");
-  runtime.vm->CollectGarbage();
+  callback->vm->globals_->erase("replacement");
+  callback->vm->CollectGarbage();
   Dispatch();
   EXPECT_EQ(calls, 1);
 }
@@ -928,17 +1128,18 @@ TEST_F(FrameActionIntegrationTest, MissingFinalEntryResetsAction) {
 
 TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
   // Dispatch mixed arguments; the native action handle precedes typed values.
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
   bindings.def(
       "replacement", [this](sr::Value handle, int number, std::string text) {
         ++calls;
         const auto* instance = handle.Get_if<sr::NativeInstance>();
         ASSERT_NE(instance, nullptr);
         EXPECT_EQ(sr::Value(instance->klass),
-                  runtime.vm->builtins_->at("%%siglus_frame_action_class"));
+                  callback->vm->builtins_->at("%%siglus_frame_action_class"));
         EXPECT_EQ(number, 7);
         EXPECT_EQ(text, "argument");
-        (*runtime.vm->globals_)["observed_action"] = handle;
+        (*callback->vm->globals_)["observed_action"] = handle;
       });
   ReplaceEntry();
   manager->global_action()->arguments = {7, std::string("argument")};
@@ -946,7 +1147,7 @@ TEST_F(FrameActionIntegrationTest, DispatchConvertsGlobalArgumentsInOrder) {
   Dispatch();
 
   ASSERT_EQ(calls, 1);
-  Execute(*runtime.vm, "observed_action.counter.set(47);");
+  Execute(*callback->vm, "observed_action.counter.set(47);");
   EXPECT_EQ(manager->global_action()->counter->Get(), 47);
 }
 
@@ -957,12 +1158,13 @@ TEST_F(FrameActionIntegrationTest,
   stage.objects.Resize(kLayerFg, 1);
   auto object = stage.objects.Get(kLayerFg, 0);
   int converted = 0;
-  runtime.make_object = [&](ActionOwner owner) {
+  callback->make_object = [&](ActionOwner owner) {
     ++converted;
     EXPECT_EQ(owner, object);
     return sr::Value(89);
   };
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
   bindings.def("replacement", [this](sr::Value handle, int owner, int number,
                                      std::string text) {
     ++calls;
@@ -986,13 +1188,14 @@ TEST_F(FrameActionIntegrationTest,
   // End through the manager; the script handle exposes final flags and time.
   int end_action = -1;
   int time = -1;
-  srbind::module_ bindings(runtime.vm->gc_.get(), runtime.vm->globals_.get());
+  srbind::module_ bindings(callback->vm->gc_.get(),
+                           callback->vm->globals_.get());
   bindings.def("observe_frame", [&](int end, int counter) {
     ++calls;
     end_action = end;
     time = counter;
   });
-  Execute(*runtime.vm, R"(
+  Execute(*callback->vm, R"(
     fn replacement(action) {
       observe_frame(action.is_end_action(), action.counter.get());
     }
@@ -1011,14 +1214,15 @@ TEST_F(FrameActionIntegrationTest,
 TEST_F(FrameActionIntegrationTest, NativeFactoriesSurviveGarbageCollection) {
   // Remove global wrappers before collection; factories must retain class
   // roots.
-  runtime.vm->globals_->erase("frame_action");
-  runtime.vm->globals_->erase("frame_action_ch");
-  runtime.vm->CollectGarbage();
-  (*runtime.vm->globals_)["retained_action"] =
-      runtime.make_frame_action(ActionReference{manager->global_action(), {}});
-  (*runtime.vm->globals_)["retained_list"] = runtime.make_frame_action_list({});
+  callback->vm->globals_->erase("frame_action");
+  callback->vm->globals_->erase("frame_action_ch");
+  callback->vm->CollectGarbage();
+  (*callback->vm->globals_)["retained_action"] = callback->make_frame_action(
+      ActionReference{manager->global_action(), {}});
+  (*callback->vm->globals_)["retained_list"] =
+      callback->make_frame_action_list({});
 
-  Execute(*runtime.vm, R"(
+  Execute(*callback->vm, R"(
     retained_action.counter.set(23);
     retained_list[1].counter.set(47);
   )");
@@ -1031,12 +1235,201 @@ TEST_F(FrameActionIntegrationTest, NativeFactoriesSurviveGarbageCollection) {
 TEST_F(FrameActionIntegrationTest, GlobalChannelListRemainsFixedSize) {
   // Resize the bound global list; reject the request and retain its channel
   // count.
-  Execute(*runtime.vm, R"(
+  Execute(*callback->vm, R"(
     caught = 0;
     try { frame_action_ch.resize(3); } catch (error) { caught = 1; }
   )");
-  EXPECT_EQ(runtime.vm->globals_->at("caught"), sr::Value(1));
+  EXPECT_EQ(callback->vm->globals_->at("caught"), sr::Value(1));
   EXPECT_EQ(manager->global_channels().size(), 2);
+}
+
+class SiglusRestartTest : public ::testing::Test {
+ protected:
+  SiglusRuntime runtime;
+  std::shared_ptr<sr::Promise> gate = std::make_shared<sr::Promise>();
+  std::vector<int> observations;
+  std::weak_ptr<sr::GarbageCollector> callback_heap;
+  FrameAction::Target menu{1, 5};
+  FrameAction::Target callback{2, 5};
+  int restart_delay_millis = 0;
+
+  void SetUp() override {
+    runtime.archive = std::make_shared<Archive>(MakeEmptyArchive());
+    runtime.archive->prop_ = {
+        {.form = Type::Int, .size = 0, .name = "retained"}};
+    FakeScene{.scene_name = "title", .command_name = "title"}.AddTo(
+        *runtime.archive);
+    FakeScene{.scene_name = "menu", .command_name = "menu"}.AddTo(
+        *runtime.archive);
+    FakeScene{.scene_name = "callback",
+              .command_name = "callback",
+              .args = {Type::FrameAction}}
+        .AddTo(*runtime.archive);
+    runtime.stage = std::make_unique<Stage>();
+    runtime.counter_list = std::make_shared<CounterList>(0);
+    runtime.frame_action_manager = std::make_shared<FrameActionManager>(
+        *runtime.stage, runtime.local_config, 0);
+    runtime.binding_names = {"0_memory", "flow", "1_counter", "1_frame_action"};
+    runtime.configure_machine = [this](SiglusMachine& machine) {
+      if (machine.callback_owner >= 0)
+        callback_heap = machine.vm->gc_;
+      srbind::module_ bindings(machine.vm->gc_.get(),
+                               machine.vm->globals_.get());
+      bindings.def("observe",
+                   [this](int value) { observations.push_back(value); });
+      bindings.def("request_restart", [this] {
+        runtime.QueueReturnToMenu("title", 0, false, restart_delay_millis);
+      });
+      auto* future = machine.vm->gc_->Allocate<sr::Future>();
+      future->promise = gate;
+      (*machine.vm->globals_)["gate"] = sr::Value(future);
+      Execute(*machine.vm, R"(
+        fn restart_entry() { request_restart(); observe(1); }
+        fn menu_entry() { await gate; observe(2); }
+        fn callback_entry(action) { await gate; observe(3); }
+        fn callback_restart_entry(action) { request_restart(); observe(3); }
+        fn title_entry(descriptor) { observe(4); }
+      )");
+      auto* title = machine.loader->Load(0);
+      const auto* original =
+          title->globals->at(GetZlabelId(0)).Get<sr::BoundMethod*>();
+      (*title->globals)[GetZlabelId(0)] =
+          machine.vm->gc_->Allocate<sr::BoundMethod>(
+              machine.vm->globals_->at("title_entry"),
+              original->additional_args);
+      (*machine.loader->Load(menu.scene_id)
+            ->globals)[GetUsercmdId(menu.entry)] =
+          machine.vm->globals_->at("menu_entry");
+      (*machine.loader->Load(callback.scene_id)
+            ->globals)[GetUsercmdId(callback.entry)] =
+          machine.vm->globals_->at("callback_entry");
+    };
+    runtime.GameplayMachine().Initialize();
+  }
+
+  void ScheduleRestart(SiglusMachine& machine) {
+    machine.vm->ScheduleExecute(machine.vm->globals_->at("restart_entry"));
+  }
+};
+
+TEST_F(SiglusRestartTest, RestartReplacesTheGameplayVmAtTheHostSafePoint) {
+  // Queue a restart from running script code; keep its heap alive until the
+  // next host drive, then execute the title entry in a fresh gameplay VM.
+  const std::weak_ptr old_heap = runtime.GameplayMachine().vm->gc_;
+  ScheduleRestart(runtime.GameplayMachine());
+
+  runtime.DriveScripts();
+
+  EXPECT_FALSE(old_heap.expired());
+  EXPECT_TRUE(observations.empty());
+  runtime.DriveScripts();
+  EXPECT_TRUE(old_heap.expired());
+  EXPECT_EQ(observations, std::vector<int>{4});
+}
+
+TEST_F(SiglusRestartTest, RestartPreservesSharedProperties) {
+  // Store a property before restarting; its value belongs to the host and is
+  // readable through the replacement VM's freshly bound property facade.
+  Execute(*runtime.GameplayMachine().vm, "__globalprop[0] = 71;");
+  ScheduleRestart(runtime.GameplayMachine());
+  runtime.DriveScripts();
+  runtime.DriveScripts();
+
+  Execute(*runtime.GameplayMachine().vm, "retained = __globalprop[0];");
+
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("retained"),
+            sr::Value(71));
+}
+
+TEST_F(SiglusRestartTest, DelayedRestartPausesTheRequestingCallback) {
+  // A callback queues return-to-menu with a fade deadline; frame updates must
+  // leave its post-command continuation paused until the host replaces it.
+  restart_delay_millis = 60000;
+  const auto configure = runtime.configure_machine;
+  runtime.configure_machine = [this, configure](SiglusMachine& machine) {
+    configure(machine);
+    (*machine.loader->Load(callback.scene_id)
+          ->globals)[GetUsercmdId(callback.entry)] =
+        machine.vm->globals_->at("callback_restart_entry");
+  };
+  runtime.DispatchFrameAction(
+      0, {runtime.frame_action_manager->global_action(), {}}, callback);
+  ASSERT_TRUE(observations.empty());
+
+  runtime.Update(std::chrono::milliseconds(17), std::chrono::milliseconds(17));
+
+  EXPECT_TRUE(observations.empty());
+}
+
+TEST_F(SiglusRestartTest, NestedCallbackFreeRetainsTheOuterExecutingMachine) {
+  // An EX callback enters a normal callback that frees EX resources; the EX
+  // VM must survive its native call and be destroyed at the next host boundary.
+  runtime.InitializeExcall();
+  runtime.excall->Alloc({.flag_count = 1000,
+                         .counter_count = 16,
+                         .frame_action_count = 4,
+                         .object_count = 256,
+                         .effect_count = 0,
+                         .group_count = 16,
+                         .quake_count = 16,
+                         .window_count = 1});
+  std::weak_ptr<sr::GarbageCollector> outer_heap;
+  const auto configure = runtime.configure_machine;
+  runtime.configure_machine = [this, configure,
+                               &outer_heap](SiglusMachine& machine) {
+    configure(machine);
+    srbind::module_ bindings(machine.vm->gc_.get(), machine.vm->globals_.get());
+    if (machine.callback_owner == 1) {
+      outer_heap = machine.vm->gc_;
+      bindings.def("nested_callback", [this, &outer_heap](sr::Value) {
+        observations.push_back(1);
+        runtime.DispatchFrameAction(
+            0, {runtime.frame_action_manager->global_action(), {}}, callback);
+        EXPECT_FALSE(outer_heap.expired());
+        observations.push_back(3);
+      });
+    } else {
+      bindings.def("nested_callback", [this](sr::Value) {
+        observations.push_back(2);
+        runtime.FreeExcall(false);
+      });
+    }
+    (*machine.loader->Load(callback.scene_id)
+          ->globals)[GetUsercmdId(callback.entry)] =
+        machine.vm->globals_->at("nested_callback");
+  };
+
+  runtime.DispatchFrameAction(1, {runtime.excall->actions->global_action(), {}},
+                              callback);
+
+  EXPECT_EQ(observations, (std::vector<int>{1, 2, 3}));
+  runtime.Update(std::chrono::milliseconds(0), std::chrono::milliseconds(0));
+  EXPECT_TRUE(outer_heap.expired());
+}
+
+TEST_F(SiglusRestartTest, RestartDiscardsSuspendedExcallAndCallbackMachines) {
+  // Park an EX entry and callback on a C++ gate, then restart from the EX VM.
+  // Their heaps must disappear and resolving the gate must not resume them.
+  const std::weak_ptr old_gameplay = runtime.GameplayMachine().vm->gc_;
+  runtime.DispatchFrameAction(
+      0, {runtime.frame_action_manager->global_action(), {}}, callback);
+  ASSERT_FALSE(callback_heap.expired());
+  ASSERT_TRUE(runtime.OpenExcall(menu));
+  runtime.DriveScripts();
+  const std::weak_ptr old_excall = runtime.ActiveMachine().vm->gc_;
+  ScheduleRestart(runtime.ActiveMachine());
+  runtime.DriveScripts();
+  EXPECT_FALSE(old_excall.expired());
+
+  runtime.DriveScripts();
+  gate->Resolve(sr::nil);
+  runtime.DriveScripts();
+
+  EXPECT_TRUE(old_gameplay.expired());
+  EXPECT_TRUE(old_excall.expired());
+  EXPECT_TRUE(callback_heap.expired());
+  EXPECT_FALSE(runtime.IsExcall());
+  EXPECT_EQ(observations, std::vector<int>{4});
 }
 
 }  // namespace libsiglus::binding

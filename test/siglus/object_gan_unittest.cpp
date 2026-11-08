@@ -28,7 +28,7 @@
 #include "core/object_internal/drawer/gan.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "mock_graphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/bytestream.hpp"
@@ -43,13 +43,13 @@ namespace libsiglus::binding {
 class SiglusObjectGanTest : public ::testing::Test {
  protected:
   ScopedTemporary files;
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   std::shared_ptr<SDLSurface> atlas = std::make_shared<SDLSurface>(Size(4, 3));
   std::shared_ptr<::testing::StrictMock<MockGraphicsBackend>> backend =
       std::make_shared<::testing::StrictMock<MockGraphicsBackend>>();
 
   void SetUp() override {
-    runtime.vm = std::make_unique<serilang::VM>(
+    runtime.GameplayMachine().vm = std::make_unique<serilang::VM>(
         std::make_shared<serilang::GarbageCollector>());
     runtime.stage = std::make_unique<Stage>(1);
     runtime.counter_list = std::make_shared<CounterList>(0);
@@ -67,7 +67,7 @@ class SiglusObjectGanTest : public ::testing::Test {
     for (auto key : {"0_memory", "1_counter", "1_frame_action", "1_object"}) {
       auto* bind = SiglusBindingRegistry::Find(key);
       ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
 
     Run("object = Object(); object.create(\"display_atlas\", 1, 20, 30);");
@@ -88,7 +88,9 @@ class SiglusObjectGanTest : public ::testing::Test {
         name, std::make_pair("gan", path));
   }
 
-  inline void Run(const std::string& code) { Execute(*runtime.vm, code); }
+  inline void Run(const std::string& code) {
+    Execute(*runtime.GameplayMachine().vm, code);
+  }
 
   inline GraphicsObject& Object() {
     return *runtime.stage->objects.Get(kLayerFg, 0);

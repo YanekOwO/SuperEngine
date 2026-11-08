@@ -29,7 +29,7 @@
 #include "core/object_internal/drawer/number.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "mock_graphics_backend.hpp"
 #include "number_test_support.hpp"
 #include "systems/igraphics_backend.hpp"
@@ -44,13 +44,13 @@ namespace libsiglus::binding {
 
 class SiglusObjectNumberTest : public ::testing::Test {
  protected:
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   std::shared_ptr<SDLSurface> atlas = MakeNumberTestAtlas();
   std::shared_ptr<::testing::NiceMock<::MockGraphicsBackend>> backend =
       std::make_shared<::testing::NiceMock<::MockGraphicsBackend>>();
 
   void SetUp() override {
-    runtime.vm = std::make_unique<serilang::VM>(
+    runtime.GameplayMachine().vm = std::make_unique<serilang::VM>(
         std::make_shared<serilang::GarbageCollector>());
     runtime.stage = std::make_unique<Stage>(3);
     runtime.counter_list = std::make_shared<CounterList>(0);
@@ -66,13 +66,15 @@ class SiglusObjectNumberTest : public ::testing::Test {
     for (auto key : {"0_memory", "1_counter", "1_frame_action", "1_object"}) {
       auto* bind = SiglusBindingRegistry::Find(key);
       ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
 
     Run("a = Object();");
   }
 
-  void Run(const std::string& code) { Execute(*runtime.vm, code); }
+  void Run(const std::string& code) {
+    Execute(*runtime.GameplayMachine().vm, code);
+  }
 
   GraphicsObject& Object(int index = 0) {
     return *runtime.stage->objects.Get(kLayerFg, index);
@@ -83,7 +85,9 @@ class SiglusObjectNumberTest : public ::testing::Test {
   }
 
   int Int(std::string_view name) {
-    return *runtime.vm->globals_->at(std::string(name)).Get_if<int>();
+    return *runtime.GameplayMachine()
+                .vm->globals_->at(std::string(name))
+                .Get_if<int>();
   }
 };
 
@@ -235,7 +239,10 @@ TEST_F(SiglusObjectNumberTest, SizeQueriesReturnUnscaledRequestedCut) {
 TEST_F(SiglusObjectNumberTest, FilePathQueryReturnsAtlasFilename) {
   // Number objects expose the filename used to create their atlas.
   Run("a.create_number(\"font\"); path = a.get_file_path();");
-  EXPECT_EQ(runtime.vm->globals_->at("path").Get_if<serilang::String>()->str_,
+  EXPECT_EQ(runtime.GameplayMachine()
+                .vm->globals_->at("path")
+                .Get_if<serilang::String>()
+                ->str_,
             "font");
 }
 
@@ -257,7 +264,10 @@ TEST_F(SiglusObjectNumberTest, NonNumberSettersLeaveOtherDrawersIntact) {
     value = a.get_number(); text = a.get_string();
   )");
   EXPECT_EQ(Int("value"), 0);
-  EXPECT_EQ(runtime.vm->globals_->at("text").Get_if<serilang::String>()->str_,
+  EXPECT_EQ(runtime.GameplayMachine()
+                .vm->globals_->at("text")
+                .Get_if<serilang::String>()
+                ->str_,
             "text");
 }
 

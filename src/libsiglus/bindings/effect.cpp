@@ -26,7 +26,7 @@
 #include "core/effect.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -43,24 +43,26 @@ namespace sr = serilang;
 
 struct EffectHandle {
   std::shared_ptr<Effect> effect;
+  int owner = 0;
 };
 
 struct EffectEventHandle {
   std::shared_ptr<Effect> effect;
   int property;
+  int owner = 0;
 };
 
 void BindEffect(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  Stage* stage = runtime.stage.get();
+  Stage* stage = runtime.host().stage.get();
   if (!stage)
     throw std::runtime_error("Effect requires a stage");
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
 
   sb::class_<EffectEventHandle> event(m, "EffectEvent", false);
   for (const bool real_time : {false, true}) {
-    auto make_counter = [&runtime, real_time] {
-      auto counter = runtime.CreateCounter();
+    auto make_counter = [&runtime, real_time](int owner) {
+      auto counter = runtime.host().CreateCounter(owner);
       if (real_time)
         counter->StartReal();
       else
@@ -85,17 +87,18 @@ void BindEffect(SiglusMachine& runtime) {
           });
           const int start = h->effect->Get(h->property);
           h->effect->Set(h->property, value);
-          h->effect->StartEvent(h->property,
-                                MakeFrameCounter(duration, delay, start, value,
-                                                 speed, make_counter()));
+          h->effect->StartEvent(
+              h->property, MakeFrameCounter(duration, delay, start, value,
+                                            speed, make_counter(h->owner)));
         },
         sb::vararg);
     auto repeating = [make_counter](InterpolationType type) {
       return [make_counter, type](EffectEventHandle* h, int start, int end,
                                   int duration, int delay, int speed) {
         h->effect->StartEvent(
-            h->property, MakeRepeatingFrameCounter(type, duration, delay, start,
-                                                   end, speed, make_counter()));
+            h->property,
+            MakeRepeatingFrameCounter(type, duration, delay, start, end, speed,
+                                      make_counter(h->owner)));
       };
     };
     event.def(real_time ? "loop_real" : "loop",
@@ -112,9 +115,9 @@ void BindEffect(SiglusMachine& runtime) {
   event.def("check", [](EffectEventHandle* h) -> int {
     return h->effect->IsEventRunning(h->property);
   });
-  auto wait = [system = runtime.system.get()](bool key_skip) {
-    return [system, key_skip](EffectEventHandle* h, sr::VM& vm,
-                              std::vector<sr::Value>) {
+  auto wait = [&runtime, system = runtime.host().system.get()](bool key_skip) {
+    return [&runtime, system, key_skip](EffectEventHandle* h, sr::VM& vm,
+                                        std::vector<sr::Value>) {
       auto done = [effect = h->effect, property = h->property] {
         return !effect->IsEventRunning(property);
       };
@@ -124,7 +127,8 @@ void BindEffect(SiglusMachine& runtime) {
       return lop::MakePollingWaitFuture(
           vm, std::move(done), key_skip,
           system ? system->event_ptr().get() : nullptr,
-          std::chrono::milliseconds(5), std::move(on_key));
+          std::chrono::milliseconds(5), std::move(on_key),
+          runtime.WaitScope(h->owner));
     };
   };
   event.def("wait", wait(false), sb::vararg);
@@ -154,7 +158,7 @@ void BindEffect(SiglusMachine& runtime) {
       if (i < 14) {
         const std::string event_name = name + "_eve";
         effect.prop_r(event_name.c_str(), [event, i](EffectHandle* h) mutable {
-          return sr::Value(event.make_inst(h->effect, i));
+          return sr::Value(event.make_inst(h->effect, i, h->owner));
         });
       }
     } catch (const std::runtime_error&) {
@@ -163,32 +167,34 @@ void BindEffect(SiglusMachine& runtime) {
 
   struct EffectListHandle {
     int layer;
+    int owner = 0;
   };
   sb::class_<EffectListHandle> effect_array(m, "EffectArray");
   effect_array.add_gc_root(effect);
   effect_array.def(
-      sb::init([](int layer) {
+      sb::init([](int layer, int owner) {
         if (layer != kLayerFg && layer != kLayerBg && layer != kLayerNext)
           throw sr::RuntimeError("invalid effect layer: " +
                                  std::to_string(layer));
-        return std::make_unique<EffectListHandle>(layer);
+        return std::make_unique<EffectListHandle>(layer, owner);
       }),
-      sb::arg("layer"));
+      sb::arg("layer"), sb::arg("owner") = 0);
   effect_array.def(
       "__getitem__",
-      [stage, effect](EffectListHandle* h, int index) mutable {
-        std::shared_ptr<Effect> e = stage->effects.Get(h->layer, index);
-        sr::NativeInstance* inst = effect.make_inst(e);
+      [&runtime, effect](EffectListHandle* h, int index) mutable {
+        std::shared_ptr<Effect> e =
+            runtime.host().GetStage(h->owner).effects.Get(h->layer, index);
+        sr::NativeInstance* inst = effect.make_inst(e, h->owner);
         return sr::Value(inst);
       },
       sb::arg("index"));
-  effect_array.def("size", [stage](EffectListHandle* h) -> int {
-    return stage->effects[h->layer].size();
+  effect_array.def("size", [&runtime](EffectListHandle* h) -> int {
+    return runtime.host().GetStage(h->owner).effects[h->layer].size();
   });
   effect_array.def(
       "resize",
-      [stage](EffectListHandle* h, int size) {
-        return stage->effects[h->layer].resize(size);
+      [&runtime](EffectListHandle* h, int size) {
+        return runtime.host().GetStage(h->owner).effects[h->layer].resize(size);
       },
       sb::arg("size"));
 

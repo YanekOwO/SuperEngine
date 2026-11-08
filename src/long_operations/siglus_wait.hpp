@@ -39,6 +39,13 @@ class VM;
 
 namespace lop {
 
+// Native producers may outlive the script invocation that created them. Their
+// owner supplies input/progress eligibility and resource lifetime explicitly.
+struct NativeWaitScope {
+  std::function<bool()> active;
+  std::function<bool()> alive;
+};
+
 serilang::Value MakeResolvedFuture(serilang::GarbageCollector& gc,
                                    int result = 0);
 serilang::Value MakePollingWaitFuture(
@@ -47,7 +54,8 @@ serilang::Value MakePollingWaitFuture(
     bool key_skip = false,
     EventSystem* event_system = nullptr,
     std::chrono::milliseconds poll_interval = std::chrono::milliseconds(5),
-    std::function<void()> on_key = {});
+    std::function<void()> on_key = {},
+    NativeWaitScope scope = {});
 
 // Owns a native operation and exposes its result through a VM promise. Lazy
 // until first VM await unless Start() is called. All operation suspensions must
@@ -60,7 +68,9 @@ class FutureBackedCoroutineTask {
  public:
   FutureBackedCoroutineTask(serilang::VM& vm,
                             std::unique_ptr<LongOperation> operation,
-                            EventSystem* event_system = nullptr);
+                            EventSystem* event_system = nullptr,
+                            std::function<bool()> active = {},
+                            NativeWaitScope scope = {});
   ~FutureBackedCoroutineTask();
   FutureBackedCoroutineTask(const FutureBackedCoroutineTask&) = delete;
   FutureBackedCoroutineTask& operator=(const FutureBackedCoroutineTask&) =
@@ -82,7 +92,9 @@ class PendingCoroutineTasks {
  public:
   serilang::Future* MakeFuture(serilang::VM& vm,
                                std::unique_ptr<LongOperation> operation,
-                               EventSystem* event_system = nullptr);
+                               EventSystem* event_system = nullptr,
+                               std::function<bool()> active = {},
+                               NativeWaitScope scope = {});
   serilang::Future* MakeFuture(serilang::GarbageCollector& gc,
                                FutureBackedCoroutineTask task);
   void PruneDone();

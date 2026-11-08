@@ -62,21 +62,22 @@ struct MaskEventHandle {
 };
 
 void BindMask(SiglusMachine& runtime) {
-  std::shared_ptr<MaskList> list = runtime.mask_list;
+  std::shared_ptr<MaskList> list = runtime.host().mask_list;
   if (!list)
     throw std::runtime_error("mask binding requires mask state");
 
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
-  EventSystem* event = runtime.system ? &runtime.system->event() : nullptr;
-  auto images = runtime.images;
+  EventSystem* event =
+      runtime.host().system ? &runtime.host().system->event() : nullptr;
+  auto images = runtime.host().images;
 
   // ------------------------------------------------------------------------------
   // MaskEvent
   sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
   for (const bool real_time : {false, true}) {
     auto make_counter = [&runtime, real_time] {
-      auto counter = runtime.CreateCounter();
+      auto counter = runtime.host().CreateCounter();
       if (real_time)
         counter->StartReal();
       else
@@ -128,20 +129,24 @@ void BindMask(SiglusMachine& runtime) {
   // wait until event finishes
   event_class.def(
       "wait",
-      [](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+      [&runtime](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return lop::MakePollingWaitFuture(vm, check, false, h->event_);
+        return lop::MakePollingWaitFuture(vm, check, false, h->event_,
+                                          std::chrono::milliseconds(5), {},
+                                          runtime.WaitScope(0));
       },
       sb::vararg);
   event_class.def(
       "wait_key",
-      [](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+      [&runtime](MaskEventHandle* h, sr::VM& vm, std::vector<sr::Value>) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return lop::MakePollingWaitFuture(vm, check, true, h->event_);
+        return lop::MakePollingWaitFuture(vm, check, true, h->event_,
+                                          std::chrono::milliseconds(5), {},
+                                          runtime.WaitScope(0));
       },
       sb::vararg);
 

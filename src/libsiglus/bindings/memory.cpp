@@ -26,10 +26,11 @@
 #include "core/input.hpp"
 #include "core/memory_internal/facade.hpp"
 #include "libsiglus/archive.hpp"
+#include "libsiglus/bindings/properties.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/property.hpp"
 #include "libsiglus/scene_entry.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "log/domain_logger.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -96,7 +97,7 @@ struct IntBitView {
   using reader_t = int (SiglusIntListFacade::*)(Fiber&, int);
   using writer_t = void (SiglusIntListFacade::*)(Fiber&, int, int);
 
-  SiglusIntListFacade* owner;
+  std::shared_ptr<SiglusIntListFacade> owner;
   reader_t reader;
   writer_t writer;
 };
@@ -104,16 +105,17 @@ struct IntBitView {
 void BindIntBitProperties(sb::module_& m,
                           sb::class_<SiglusIntListFacade>& ilist) {
   sb::class_<IntBitView> view(m, "__SiglusIntBitView");
+  ilist.add_gc_root(view);
   view.def(
       "__getitem__",
       +[](IntBitView* self, Fiber& fiber, int index) -> int {
-        return (*self->owner.*self->reader)(fiber, index);
+        return (self->owner.get()->*self->reader)(fiber, index);
       },
       sb::arg("idx"));
   view.def(
       "__setitem__",
       +[](IntBitView* self, Fiber& fiber, int index, int value) {
-        (*self->owner.*self->writer)(fiber, index, value);
+        (self->owner.get()->*self->writer)(fiber, index, value);
       },
       sb::arg("idx"), sb::arg("val"));
 
@@ -130,11 +132,12 @@ void BindIntBitProperties(sb::module_& m,
       {"b16", &SiglusIntListFacade::b16, &SiglusIntListFacade::write_b16},
   };
   for (const auto& [name, reader, writer] : properties) {
-    ilist.prop_r(name,
-                 [view, reader, writer](SiglusIntListFacade* self) mutable {
-                   NativeInstance* inst = view.make_inst(self, reader, writer);
-                   return Value(inst);
-                 });
+    ilist.prop_r(
+        name, [view, reader, writer](SiglusIntListFacade* self) mutable {
+          NativeInstance* inst = view.make_inst(
+              std::make_shared<SiglusIntListFacade>(*self), reader, writer);
+          return Value(inst);
+        });
   }
 }
 
@@ -184,9 +187,9 @@ void BindStrSequenceMethods(sb::class_<SiglusStrListFacade>& slist) {
 void BindMemory(SiglusMachine& rt) {
   VM& vm = *rt.vm;
   sb::module_ m(vm.gc_.get(), rt.vm->globals_.get());
-  if (!rt.memory)
-    rt.memory = std::make_unique<Memory>();
-  Memory& memory = *rt.memory;
+  if (!rt.host().memory)
+    rt.host().memory = std::make_unique<Memory>();
+  Memory& memory = *rt.host().memory;
 
   auto ilist =
       std::make_shared<sb::class_<SiglusIntListFacade>>(m, "__SiglusIntList");
@@ -204,55 +207,23 @@ void BindMemory(SiglusMachine& rt) {
   m.def(
       "make_intlist",
       [cls = ilist](VM& vm, int size) -> Value {
-        auto getter = [storage = std::vector<int>()](
-                          Fiber&) mutable -> std::vector<int>& {
-          return storage;
-        };
+        auto getter = [storage = std::make_shared<std::vector<int>>()](
+                          Fiber&) -> std::vector<int>& { return *storage; };
         return cls->make_inst(std::move(getter), size);
       },
       sb::arg("size"));
   m.def(
       "make_strlist",
       [cls = slist](VM& vm, int size) -> Value {
-        auto getter = [storage = std::vector<std::string>()](
-                          Fiber&) mutable -> std::vector<std::string>& {
-          return storage;
+        auto getter = [storage = std::make_shared<std::vector<std::string>>()](
+                          Fiber&) -> std::vector<std::string>& {
+          return *storage;
         };
         return cls->make_inst(std::move(getter), size);
       },
       sb::arg("size"));
 
-  std::string src = "__globalprop = [];\n";
-  // install archive-global user properties
-  if (rt.archive) {
-    Archive& archive = *rt.archive;
-    for (size_t i = 0; i < archive.prop_.size(); ++i) {
-      Property& p = archive.prop_[i];
-      switch (p.form) {
-        case Type::Int:
-          src += "__globalprop.append(0);";
-          break;
-        case Type::IntList:
-          src += std::format("__globalprop.append(make_intlist({}));", p.size);
-          break;
-        case Type::String:
-          src += "__globalprop.append(\"\");";
-          break;
-        case Type::StrList:
-          src += std::format("__globalprop.append(make_strlist({}));", p.size);
-          break;
-
-        default: {
-          static DomainLogger log("Memory");
-          log(Severity::Error)
-              << "failed to install global property: " << p.ToDebugString();
-          src += "__globalprop.append(nil);\n";
-          break;
-        }
-      }
-    }
-  }
-  Execute(vm, std::move(src));
+  BindProperties(rt);
 
   auto bind_int_bank = [&](std::string_view name, IntBank bank) {
     auto getter = [&memory, bank](Fiber& fiber) -> std::vector<int>& {
@@ -284,8 +255,7 @@ void BindMemory(SiglusMachine& rt) {
   bind_str_bank("LN", StrBank::local_name);
   bind_str_bank("GN", StrBank::global_name);
 
-  rt.reset_local_memory.emplace_back([&memory, &vm, gameexe = rt.gameexe]() {
-    memory.PartialReset(LocalMemory{});
+  rt.reset_local_memory.emplace_back([&vm]() {
     for (Fiber* fiber : vm.fibres_) {
       if (auto* handle = std::any_cast<MemoryHandle>(&fiber->usrdata)) {
         handle->ResetStackMemory(
@@ -293,8 +263,6 @@ void BindMemory(SiglusMachine& rt) {
                         .K = {std::vector<std::string>(kRootStackBankSize)}});
       }
     }
-    if (gameexe)
-      memory.LoadFrom(*gameexe);
   });
   m.def(
       "__builtin_push_frame",
@@ -308,10 +276,10 @@ void BindMemory(SiglusMachine& rt) {
 
   m.def(
       "__builtin_init_call",
-      [&memory](Fiber& fiber, Value entry, Value arguments) -> bool {
+      [&memory, &rt](Fiber& fiber, Value entry, Value arguments) -> bool {
         const auto* descriptor = RequireList(entry, "scene entry");
         const auto* args = RequireList(arguments, "scene arguments");
-        if (descriptor->items.size() != 3)
+        if (descriptor->items.size() != 3 && descriptor->items.size() != 4)
           throw RuntimeError("invalid scene entry descriptor");
         const int arity = RequireInt(descriptor->items[1], "scene arity");
         const int kind = RequireInt(descriptor->items[2], "scene call kind");
@@ -321,6 +289,8 @@ void BindMemory(SiglusMachine& rt) {
         if (kind < static_cast<int>(SceneCallKind::Scene) ||
             kind > static_cast<int>(SceneCallKind::Extended))
           throw RuntimeError("invalid scene call kind");
+        if (descriptor->items.size() == 4)
+          return descriptor->items[3].Get<bool>();
         if (kind == static_cast<int>(SceneCallKind::Farcall) ||
             kind == static_cast<int>(SceneCallKind::Extended)) {
           if (args->items.size() != 2)
@@ -330,6 +300,8 @@ void BindMemory(SiglusMachine& rt) {
           const auto* strings =
               RequireList(args->items[1], "farcall K arguments");
           PushCallFrame(fiber, memory, integers->items, strings->items);
+          if (kind == static_cast<int>(SceneCallKind::Extended))
+            rt.host().EnterExcall();
           return true;
         }
         auto& locals = fiber.frames.back().fast_locals;
@@ -352,14 +324,10 @@ void BindMemory(SiglusMachine& rt) {
           throw RuntimeError("Siglus call frame stack underflow");
         handle.PopStackFrame();
         const auto* descriptor = entry.Get_if<List>();
-        if (descriptor && descriptor->items.size() == 3 &&
+        if (descriptor && descriptor->items.size() >= 3 &&
             descriptor->items[2] ==
-                Value(static_cast<int>(SceneCallKind::Extended))) {
-          if (rt.script_input)
-            rt.script_input->Clear();
-          if (rt.input_event_listener)
-            rt.input_event_listener->ClearState();
-        }
+                Value(static_cast<int>(SceneCallKind::Extended)))
+          rt.host().LeaveExcall();
       },
       sb::arg("entry") = nil);
 }

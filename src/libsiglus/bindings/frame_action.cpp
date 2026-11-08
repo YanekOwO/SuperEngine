@@ -26,7 +26,7 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/trace.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/object.hpp"
@@ -121,6 +121,8 @@ class FrameActionListHandle {
   FrameActionListHandle(ActionOwner owner, FrameActionManager* manager)
       : owner_(std::move(owner)), manager_(manager) {}
 
+  FrameActionManager* manager() const { return manager_; }
+
   ActionReference Get(int index) {
     auto& actions = Resolve();
     if (index < 0 || static_cast<std::size_t>(index) >= actions.size())
@@ -157,23 +159,32 @@ class FrameActionListHandle {
 }  // namespace
 
 void BindFrameActions(SiglusMachine& runtime) {
-  if (!runtime.frame_action_manager || !runtime.make_counter)
+  if (!runtime.host().frame_action_manager || !runtime.make_counter)
     throw std::runtime_error(
         "frame-action binding requires action and counter state");
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<FrameActionHandle> action_class(m, "FrameAction", false);
   sb::class_<FrameActionListHandle> list_class(m, "FrameActionList", false);
-  auto* manager = runtime.frame_action_manager.get();
+  runtime.host().InitializeExcall();
+  auto* manager = runtime.host().frame_action_manager.get();
 
-  runtime.make_frame_action = [action_class,
-                               manager](ActionReference reference) mutable {
-    (void)ResolveAction(reference);
-    return sr::Value(action_class.make_inst(std::move(reference), manager));
+  runtime.make_owned_frame_action =
+      [action_class, &runtime](ActionReference reference, int owner) mutable {
+        (void)ResolveAction(reference);
+        return sr::Value(action_class.make_inst(
+            std::move(reference), &runtime.host().GetFrameActions(owner)));
+      };
+  runtime.make_frame_action = [&runtime](ActionReference reference) {
+    return runtime.make_owned_frame_action(std::move(reference), 0);
   };
-  runtime.make_frame_action_list = [list_class,
-                                    manager](ActionOwner owner) mutable {
-    return sr::Value(list_class.make_inst(std::move(owner), manager));
+  runtime.make_owned_frame_action_list =
+      [list_class, &runtime](ActionOwner object, int owner) mutable {
+        return sr::Value(list_class.make_inst(
+            std::move(object), &runtime.host().GetFrameActions(owner)));
+      };
+  runtime.make_frame_action_list = [&runtime](ActionOwner object) {
+    return runtime.make_owned_frame_action_list(std::move(object), 0);
   };
 
   auto start = [loader = runtime.loader.get()](
@@ -206,34 +217,25 @@ void BindFrameActions(SiglusMachine& runtime) {
   });
   list_class.def(
       "__getitem__",
-      [make_action = runtime.make_frame_action](FrameActionListHandle* list,
-                                                int index) {
-        return make_action(list->Get(index));
+      [action_class](FrameActionListHandle* list, int index) mutable {
+        return sr::Value(
+            action_class.make_inst(list->Get(index), list->manager()));
       },
       sb::arg("index"));
   list_class.def("size", &FrameActionListHandle::Size);
   list_class.def("resize", &FrameActionListHandle::Resize, sb::arg("size"));
 
-  manager->SetExec([&runtime](const ActionReference& reference,
-                              FrameAction::Target target) {
-    auto& vm = *runtime.vm;
-    const auto& action = *reference.action;
-    std::vector<sr::Value> arguments;
-    arguments.reserve(1 + (reference.owner ? 1 : 0) + action.arguments.size());
-    // (frame_action, owner?, arg...)
-    arguments.emplace_back(runtime.make_frame_action(reference));
-    if (reference.owner)
-      arguments.emplace_back(runtime.make_object(reference.owner));
-    for (const FrameAction::Argument& argument : action.arguments) {
-      if (const int* value = std::get_if<int>(&argument))
-        arguments.emplace_back(*value);
-      else
-        arguments.emplace_back(
-            vm.gc_->Allocate<sr::String>(std::get<std::string>(argument)));
-    }
-    sr::Value command = runtime.loader->ResolveUserCommandTarget(target);
-    InvokeFrameAction(vm, command, std::move(arguments));
-  });
+  // Shared managers install one host dispatcher; callbacks get local wrappers.
+  if (&runtime == &runtime.host().GameplayMachine()) {
+    auto& host = runtime.host();
+    manager->SetExec([&host](const ActionReference& reference, auto target) {
+      host.DispatchFrameAction(0, reference, target);
+    });
+    host.excall->actions->SetExec(
+        [&host](const ActionReference& reference, auto target) {
+          host.DispatchFrameAction(1, reference, target);
+        });
+  }
 
   (*vm.builtins_)["%%siglus_frame_action_class"] = action_class.native_class();
   (*vm.builtins_)["%%siglus_frame_action_list_class"] =

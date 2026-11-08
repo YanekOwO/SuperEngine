@@ -1409,6 +1409,113 @@ TEST_F(ElementParserTest, PcmchWaitCallsAreAwaitable) {
   }
 }
 
+TEST_F(ElementParserTest, ExcallAllocIsAnImplicitCall) {
+  // An unbound EX-call member executes and returns its declared result type.
+  auto parsed = chain(65, 4);
+  EXPECT_EQ(parsed, "excall.alloc()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallFreeIsAnImplicitCall) {
+  // An unbound EX-call member executes and returns its declared result type.
+  auto parsed = chain(65, 5);
+  EXPECT_EQ(parsed, "excall.free()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallCheckAllocIsAnImplicitCall) {
+  // An unbound EX-call member executes and returns its declared result type.
+  auto parsed = chain(65, 8);
+  EXPECT_EQ(parsed, "excall.check_alloc()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallIsExcallIsAnImplicitCall) {
+  // An unbound EX-call member executes and returns its declared result type.
+  auto parsed = chain(65, 12);
+  EXPECT_EQ(parsed, "excall.is_excall()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallSetFontNameUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 87};
+  element.ForceBind({0, {v("menu")}, Type::None});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallResetFontNameUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 89};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallGetFontNameUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 88};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::String);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallSetFontBoldUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 90};
+  element.ForceBind({0, {v(1)}, Type::None});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallResetFontBoldUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 91};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallGetFontBoldUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 92};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallSetFontShadowUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 93};
+  element.ForceBind({0, {v(3)}, Type::None});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallResetFontShadowUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 94};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ExcallGetFontShadowUsesASimpleCall) {
+  // EX font controls execute with their declared result type.
+  ElementCode element{65, 13, 95};
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
 TEST_F(ElementParserTest, G00bufLoadPreservesDynamicIndexAndFilename) {
   // A computed buffer index loads a filename; parsing must retain both inputs.
   ElementCode element{124, -1, 0, 0};

@@ -24,10 +24,13 @@
 #pragma once
 
 #include "core/frame_action.hpp"
+#include "libsiglus/property.hpp"
 #include "libsiglus/types.hpp"
 #include "vm/object.hpp"
 #include "vm/vm.hpp"
 
+#include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -50,6 +53,12 @@ class Loader {
                   bool debug = true,
                   bool trace = false)
       : archive_(ar), vm_(v), is_debug_(debug), trace_enabled_(trace) {}
+
+  using PropertyFactory =
+      std::function<serilang::Value(int, std::span<const Property>)>;
+  void SetPropertyFactory(PropertyFactory factory) {
+    property_factory_ = std::move(factory);
+  }
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);
@@ -74,6 +83,7 @@ class Loader {
   const UserCommand& FindUserCommand(const SceneCommandTable& scene,
                                      std::string_view command_name) const;
 
+  PropertyFactory property_factory_;
   Archive& archive_;
   serilang::VM& vm_;
   bool is_debug_;

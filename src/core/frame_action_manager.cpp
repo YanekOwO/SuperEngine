@@ -183,3 +183,16 @@ void FrameActionManager::CancelGlobals() {
     if (action)
       action->Reset();
 }
+
+void FrameActionManager::FinishAll() {
+  VisitActions(
+      global_action_, global_channels_, stage_,
+      [this](const ActionReference& reference, bool) { End(reference); });
+}
+
+void FrameActionManager::CancelAll() {
+  VisitActions(global_action_, global_channels_, stage_,
+               [](const ActionReference& reference, bool) {
+                 reference.action->Reset();
+               });
+}

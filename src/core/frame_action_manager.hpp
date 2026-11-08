@@ -75,6 +75,8 @@ class FrameActionManager {
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
                           std::chrono::milliseconds game_delta);
   void CancelGlobals();
+  void FinishAll();
+  void CancelAll();
 
  private:
   void RunFinal(const ActionReference& reference);

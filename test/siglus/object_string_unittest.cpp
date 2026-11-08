@@ -47,12 +47,14 @@ class SiglusObjectStringTest : public ::testing::Test {
   std::string pack_data = std::string(sizeof(Pack_hdr), '\0');
   xorkey_t key{};
   Archive archive{pack_data, key};
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
 
   void SetUp() override {
-    runtime.vm = std::make_unique<serilang::VM>(
+    runtime.archive = std::shared_ptr<Archive>(&archive, [](Archive*) {});
+    runtime.GameplayMachine().vm = std::make_unique<serilang::VM>(
         std::make_shared<serilang::GarbageCollector>());
-    runtime.loader = std::make_unique<Loader>(archive, *runtime.vm, false);
+    runtime.GameplayMachine().loader =
+        std::make_unique<Loader>(archive, *runtime.GameplayMachine().vm, false);
     runtime.stage = std::make_unique<Stage>(3);
     runtime.gameexe = std::make_shared<Gameexe>();
     runtime.gameexe->SetIntAt("MWND.MOJI_COLOR", 0);
@@ -61,17 +63,20 @@ class SiglusObjectStringTest : public ::testing::Test {
     runtime.counter_list = std::make_shared<CounterList>(0);
     runtime.frame_action_manager = std::make_shared<FrameActionManager>(
         *runtime.stage, runtime.local_config, 0);
-    for (const auto* key :
-         {"0_memory", "1_counter", "1_frame_action", "1_object"}) {
+    runtime.binding_names = {"0_memory", "1_counter", "1_frame_action",
+                             "1_object"};
+    for (const auto& key : runtime.binding_names) {
       auto* bind = SiglusBindingRegistry::Find(key);
       ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
 
     Run("parent = Object(); parent.child.resize(1); label = parent.child[0];");
   }
 
-  inline void Run(const std::string& code) { Execute(*runtime.vm, code); }
+  inline void Run(const std::string& code) {
+    Execute(*runtime.GameplayMachine().vm, code);
+  }
 
   inline GraphicsObject& Object(int index = 0) {
     return *runtime.stage->objects.Get(kLayerFg, index);
@@ -82,7 +87,7 @@ class SiglusObjectStringTest : public ::testing::Test {
   void ExpectReadback(std::string_view expected) {
     Run("actual_text = label.get_string(); width = label.get_size_x(); "
         "height = label.get_size_y();");
-    const auto& globals = *runtime.vm->globals_;
+    const auto& globals = *runtime.GameplayMachine().vm->globals_;
     const auto* text = globals.at("actual_text").Get_if<serilang::String>();
     ASSERT_NE(text, nullptr);
     EXPECT_EQ(text->str_, expected);
@@ -131,7 +136,7 @@ TEST_F(SiglusObjectStringTest, FrameActionChannelHandleSurvivesListResize) {
       "action = channels[1];");
   auto retained = Label().GetFrameAction(1);
   Run("channels.resize(0);");
-  runtime.vm->CollectGarbage();
+  runtime.GameplayMachine().vm->CollectGarbage();
 
   Run("action.counter.set(37);");
 
@@ -140,26 +145,27 @@ TEST_F(SiglusObjectStringTest, FrameActionChannelHandleSurvivesListResize) {
 }
 
 TEST_F(SiglusObjectStringTest, FrameActionCallbackReceivesBoundOwner) {
-  // Dispatch a child action after collection; its owner wrapper targets the
-  // child.
+  // Create and collect a callback-local command; dispatch still gives it an
+  // owner wrapper targeting the shared child object.
   const int scene_id = FakeScene{.scene_name = "animation",
                                  .command_name = "animate",
                                  .args = {Type::FrameAction, Type::Object}}
                            .AddTo(archive);
-  Run(R"(
-    fn animate(action, object) {
-      object.set_pos(29, 31);
-      action.counter.set(7);
-    }
-  )");
-  (*runtime.loader->Load(scene_id)->globals)[GetUsercmdId(5)] =
-      runtime.vm->globals_->at("animate");
-  runtime.vm->globals_->erase("animate");
+  runtime.configure_machine = [scene_id](SiglusMachine& machine) {
+    Execute(*machine.vm, R"(
+      fn animate(action, object) {
+        object.set_pos(29, 31);
+        action.counter.set(7);
+      }
+    )");
+    (*machine.loader->Load(scene_id)->globals)[GetUsercmdId(5)] =
+        machine.vm->globals_->at("animate");
+    machine.vm->globals_->erase("animate");
+    machine.vm->CollectGarbage();
+  };
   auto child = Object().GetChildren()[0];
   runtime.frame_action_manager->Start({child->GetFrameAction(), child}, -1,
                                       false, {scene_id, 5}, {});
-  runtime.vm->CollectGarbage();
-
   runtime.frame_action_manager->AdvanceAndDispatch(
       std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
@@ -187,10 +193,15 @@ TEST_F(SiglusObjectStringTest, SupportsAllCreateFormsAndDefaults) {
   EXPECT_EQ(Object(1).Param().visible(), 1);
   EXPECT_EQ(Object(2).Param().x(), 40);
   EXPECT_EQ(Object(2).Param().y(), 50);
-  EXPECT_EQ(runtime.vm->globals_->at("text").Get_if<serilang::String>()->str_,
+  EXPECT_EQ(runtime.GameplayMachine()
+                .vm->globals_->at("text")
+                .Get_if<serilang::String>()
+                ->str_,
             "日本A");
-  EXPECT_EQ(runtime.vm->globals_->at("width"), serilang::Value(0));
-  EXPECT_EQ(runtime.vm->globals_->at("height"), serilang::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("width"),
+            serilang::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("height"),
+            serilang::Value(0));
 }
 
 TEST_F(SiglusObjectStringTest,
@@ -243,7 +254,8 @@ TEST_F(SiglusObjectStringTest, InvalidCallsPreserveExistingObject) {
     SCOPED_TRACE(code);
     Run("caught = 0; try { " + std::string(code) +
         " } catch (e) { caught = 1; }");
-    EXPECT_EQ(runtime.vm->globals_->at("caught"), serilang::Value(1));
+    EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("caught"),
+              serilang::Value(1));
     ASSERT_EQ(Object().GetDrawer<StringDrawer>(), original);
     EXPECT_EQ(original->text(), "original");
     EXPECT_EQ(original->style().size, 12);
@@ -260,7 +272,10 @@ TEST_F(SiglusObjectStringTest, SettersIgnoreNonStringObjectsAndFreeClearsText) {
   )");
   EXPECT_FALSE(Object().HasDrawer());
   for (auto key : {"empty", "cleared"})
-    EXPECT_EQ(runtime.vm->globals_->at(key).Get_if<serilang::String>()->str_,
+    EXPECT_EQ(runtime.GameplayMachine()
+                  .vm->globals_->at(key)
+                  .Get_if<serilang::String>()
+                  ->str_,
               "");
 }
 
@@ -2111,7 +2126,8 @@ TEST_F(SiglusObjectStringTest, SprbRbTennisDebugReadback) {
     if (label.get_string() != "A#DB") { label.set_string("A#DB"); updates = updates + 1; }
     if (label.get_string() != "A#DB") { label.set_string("A#DB"); updates = updates + 1; }
   )");
-  EXPECT_EQ(runtime.vm->globals_->at("updates"), serilang::Value(1));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("updates"),
+            serilang::Value(1));
 
   // Expected: source-derived glyphs, style, readback, and retained state.
   auto* drawer = Label().GetDrawer<StringDrawer>();

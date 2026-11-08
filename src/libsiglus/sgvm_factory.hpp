@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -32,7 +32,7 @@ namespace libsiglus {
 
 class SGVMFactory {
  public:
-  std::unique_ptr<SiglusMachine> Create();
+  std::unique_ptr<SiglusRuntime> Create();
 
   static std::unique_ptr<Stage> CreateStage(Gameexe& gameexe);
 

@@ -23,6 +23,8 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "srbind/srbind.hpp"
+
 #include "libsiglus/bindings/util.hpp"
 
 namespace libsiglus::binding {

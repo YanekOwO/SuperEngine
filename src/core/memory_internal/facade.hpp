@@ -32,6 +32,7 @@
 #include <format>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -181,10 +182,10 @@ class IntListFacade {
  private:
   storage_type& storage(Ts... context) const {
     auto& result = getter_(std::forward<Ts>(context)...);
-    if (!initialized_) {
+    if (!*initialized_) {
       if (default_size_ > 0)
         result.resize(default_size_);
-      initialized_ = true;
+      *initialized_ = true;
     }
     return result;
   }
@@ -201,7 +202,7 @@ class IntListFacade {
 
   getter_t getter_;
   std::size_t default_size_;
-  mutable bool initialized_ = false;
+  std::shared_ptr<bool> initialized_ = std::make_shared<bool>(false);
 };
 
 template <class... Ts>
@@ -252,15 +253,15 @@ class StrListFacade {
  private:
   storage_type& storage(Ts... context) const {
     auto& result = getter_(std::forward<Ts>(context)...);
-    if (!initialized_) {
+    if (!*initialized_) {
       if (default_size_ > 0)
         result.resize(default_size_);
-      initialized_ = true;
+      *initialized_ = true;
     }
     return result;
   }
 
   getter_t getter_;
   std::size_t default_size_;
-  mutable bool initialized_ = false;
+  std::shared_ptr<bool> initialized_ = std::make_shared<bool>(false);
 };

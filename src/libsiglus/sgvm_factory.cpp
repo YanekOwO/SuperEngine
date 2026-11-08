@@ -43,7 +43,7 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "log/domain_logger.hpp"
 #include "m6/vm_factory.hpp"
@@ -110,7 +110,7 @@ static Gameexe LoadGameexe(std::shared_ptr<AssetScanner> scanner) {
 }
 
 static std::shared_ptr<CaptureManager> CreateCaptureManager(
-    SiglusMachine& runtime) {
+    SiglusRuntime& runtime) {
   auto& presenter = *runtime.presenter;
   const auto screen_size = presenter.screen_size();
   auto captures = std::make_shared<CaptureManager>(
@@ -164,24 +164,27 @@ std::unique_ptr<Stage> SGVMFactory::CreateStage(Gameexe& gexe) {
   return std::make_unique<Stage>(obj_count, effect_cnt, 0, quake_count);
 }
 
-std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
-  std::unique_ptr<SiglusMachine> ret = std::make_unique<SiglusMachine>();
-  SiglusMachine& rt = *ret;
+std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
+  std::unique_ptr<SiglusRuntime> ret = std::make_unique<SiglusRuntime>();
+  SiglusRuntime& rt = *ret;
 
   rt.platform_implementor = platform_implementor_;
-  rt.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-  rt.frame_requests = std::make_unique<FrameRequestManager>([vm = rt.vm.get()] {
-    auto promise = std::make_shared<sr::Promise>();
-    vm->TrackPendingPromise(promise);
-    return promise;
-  });
-  sr::VM& vm = *rt.vm;
+  rt.debug = debug_;
+  rt.trace = trace_;
+  rt.GameplayMachine().vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
+  rt.GameplayMachine().frame_requests = std::make_unique<FrameRequestManager>(
+      [vm = rt.GameplayMachine().vm.get()] {
+        auto promise = std::make_shared<sr::Promise>();
+        vm->TrackPendingPromise(promise);
+        return promise;
+      });
+  sr::VM& vm = *rt.GameplayMachine().vm;
   std::shared_ptr<sr::GarbageCollector> gc = vm.gc_;
 
   fs::path seen_path = CorrectPath(base_path_, "scene.pck");
   MappedFile archive_mf(seen_path);
   rt.archive = std::make_shared<Archive>(Archive::Create(archive_mf.Read()));
-  rt.loader =
+  rt.GameplayMachine().loader =
       std::make_unique<binding::Loader>(*rt.archive, vm, debug_, trace_);
 
   rt.base_pth = base_path_;
@@ -200,6 +203,7 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   const int default_window = mwnd_config.default_window();
 
   rt.stage = CreateStage(gexe);
+  rt.InitializeExcall();
 
   rt.local_config = MakeSiglusLocalConfig(gexe);
   rt.global_config = MakeSiglusGlobalConfig(gexe);
@@ -210,6 +214,12 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   rt.system = std::make_unique<System>(gexe, *rt.stage, rt.local_config,
                                        rt.global_config, rt.asset_scanner,
                                        std::move(mwnd_config), system_options);
+  rt.system->text().SetExcallStage(
+      &rt.excall->stage, [&rt] { return rt.excall->allocated; },
+      [&rt] { return rt.IsExcall(); });
+  rt.system->text().SetFontConfigSource([&rt]() -> const LocalConfig& {
+    return rt.IsExcall() ? rt.excall->config : rt.local_config;
+  });
   auto backend = std::make_shared<SDLGraphicsBackend>();
   rt.presenter =
       std::make_unique<FramePresenter>(backend, GetSiglusScreenSize(gexe),
@@ -236,6 +246,8 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   rt.renderer = std::make_shared<SiglusSceneRenderer>(
       *rt.stage, *rt.system, rt.mask_list, rt.screen_quakes, rt.local_config,
       rt.presenter->screen_size(), [&rt] { return rt.is_interface_hidden(); });
+  rt.renderer->SetExcall(rt.excall.get(),
+                         gexe("EXCALL.ORDER").Int().value_or(20000));
   rt.BindGraphics();
   rt.captures = CreateCaptureManager(rt);
   rt.reset_local_memory.emplace_back([&rt] { rt.ResetCaptures(); });
@@ -248,38 +260,39 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       *rt.stage, rt.local_config, static_cast<std::size_t>(frame_action_count));
 
   rt.system->text().SetMwndFrameActionHandler(
-      [manager = rt.frame_action_manager, loader = rt.loader.get()](
-          std::shared_ptr<GraphicsObject> object,
-          const MwndConfig::CallTarget& target) {
+      [&rt](std::shared_ptr<GraphicsObject> object,
+            const MwndConfig::CallTarget& target) {
         if (!target.command || target.command->empty())
           throw sr::RuntimeError(
               "WAKU.BTN.FRAME_ACTION requires a scene and command");
-        const auto& command =
-            ResolveSceneUserCommand(*loader, target.scene, *target.command);
+        const auto& command = ResolveSceneUserCommand(
+            *rt.ActiveMachine().loader, target.scene, *target.command);
         if (command.args != std::vector<Type>{Type::FrameAction, Type::Object})
           throw sr::RuntimeError(
               "WAKU.BTN.FRAME_ACTION requires a command taking FrameAction, "
               "Object");
-        manager->Start({object->GetFrameAction(), object}, -1, false,
-                       command.target, {});
+        auto& manager = rt.GetFrameActions(
+            rt.system->text().creating_excall_window() ? 1 : 0);
+        manager.Start({object->GetFrameAction(), object}, -1, false,
+                      command.target, {});
       });
 
   rt.system->text().SetMwndCallHandler(
-      [loader = rt.loader.get(), &vm](const MwndConfig::CallTarget& target) {
-        sr::Value entry;
+      [&rt](const MwndConfig::CallTarget& target) {
         if (target.command) {
-          entry = binding::ResolveSceneCommand(*loader, target.scene,
-                                               *target.command);
-        } else {
-          entry = binding::ResolveSceneEntry(*loader, target.scene,
-                                             target.entrypoint.value_or(0));
-        }
-        vm.ScheduleExecute(entry);
+          const auto& command = binding::ResolveSceneUserCommand(
+              *rt.ActiveMachine().loader, target.scene, *target.command);
+          rt.OpenExcall(command.target);
+        } else
+          rt.OpenExcall(
+              ScriptCall{.target = SceneTarget{target.scene,
+                                               target.entrypoint.value_or(0)}});
       });
 
   rt.system->text().SetMwndActionHandler(
       [local = &rt.local_config, global = &rt.global_config,
-       gameexe = rt.gameexe](const MwndConfig::Button& button, bool execute) {
+       gameexe = rt.gameexe,
+       &rt](const MwndConfig::Button& button, bool execute) {
         using Action = MwndConfig::ButtonAction;
         const int id = button.action_option;
         if (id < 0)
@@ -295,6 +308,15 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
                      .value_or(1));
         };
         switch (button.action) {
+          case Action::Save:
+          case Action::Load:
+          case Action::Config:
+            if (execute)
+              rt.OpenExcallScene(button.action == Action::Save ? "SAVE_SCENE"
+                                 : button.action == Action::Load
+                                     ? "LOAD_SCENE"
+                                     : "CONFIG_SCENE");
+            return true;
           case Action::LocalSwitch:
             if (static_cast<std::size_t>(id) >=
                 local->syscommenu.local_extra_switch.size())
@@ -383,16 +405,26 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
       });
 
   struct SystemEventListener : public EventListener {
-    sr::VM& vm;
-    SiglusMachine& runtime;
-    SystemEventListener(sr::VM& v, SiglusMachine& rt) : vm(v), runtime(rt) {}
+    SiglusRuntime& runtime;
+    explicit SystemEventListener(SiglusRuntime& rt) : runtime(rt) {}
     void OnEvent(std::shared_ptr<Event> event) override {
       if (std::visit(
               [&](auto& event) -> bool {
                 using T = std::decay_t<decltype(event)>;
                 if constexpr (std::same_as<T, Quit>) {
-                  vm.RequestStop();
+                  runtime.GameplayMachine().vm->RequestStop();
                   return true;
+                }
+                if constexpr (std::same_as<T, MouseDown>) {
+                  if (event.button == MouseButton::RIGHT &&
+                      !runtime.IsExcall() && runtime.syscom_enabled &&
+                      !runtime.local_config.ignore_r)
+                    return runtime.OpenExcallScene("CANCEL_SCENE");
+                }
+                if constexpr (std::same_as<T, KeyDown>) {
+                  if (event.code == KeyCode::ESCAPE && !runtime.IsExcall() &&
+                      runtime.syscom_enabled)
+                    return runtime.OpenExcallScene("CANCEL_SCENE");
                 }
                 if constexpr (std::same_as<T, VideoExpose>) {
                   return true;
@@ -413,13 +445,14 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
         *event = std::monostate();
     }
   };
-  rt.system_event_listener = std::make_shared<SystemEventListener>(vm, rt);
+  rt.system_event_listener = std::make_shared<SystemEventListener>(rt);
   rt.system->event().AddListener(30, rt.system_event_listener);
   vm.SetHostEventPump([&rt] { rt.PumpHostEvents(); });
 
   for (auto it = binding::SiglusBindingRegistry::cbegin();
        it != binding::SiglusBindingRegistry::cend(); ++it) {
-    it->second(rt);
+    rt.binding_names.push_back(it->first);
+    it->second(rt.GameplayMachine());
   }
   std::shared_ptr<InputListener> input = rt.input_event_listener;
 
@@ -437,67 +470,76 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
     config.se_no = object.Param().GetButtonSe();
     return config;
   };
-  rt.interaction_manager->SetMwndButtonHandlers(
-      [text = &rt.system->text(), button_config](const GraphicsObject& object,
-                                                 int slot) {
-        const auto state = text->GetMwndButtonPresentation(
-            button_config(object, slot),
-            object.Param().button.call.Type() != sr::ObjType::Nil);
-        return InteractionManager::ButtonPresentation{
-            state.visible, state.enabled, state.touch_enabled, state.activated};
-      },
-      [text = &rt.system->text(), sound = &rt.system->sound(), &vm,
-       button_config](std::shared_ptr<GraphicsObject> object, int slot,
-                      InteractionManager::MwndButtonEvent event) {
-        using Event = InteractionManager::MwndButtonEvent;
-        const auto config = button_config(*object, slot);
-        const MwndConfig::ButtonSound* sounds =
-            text->mwnd_config_.GetButtonSound(config.se_no);
+  rt.excall_interaction_manager = std::make_unique<InteractionManager>(
+      rt.excall->stage, *input, ButtonActionTable::ParseSiglus(gexe));
+  const auto bind_buttons = [&](InteractionManager& interaction) {
+    interaction.SetMwndButtonHandlers(
+        [text = &rt.system->text(), button_config](const GraphicsObject& object,
+                                                   int slot) {
+          const auto state = text->GetMwndButtonPresentation(
+              button_config(object, slot),
+              object.Param().button.call.has_value());
+          return InteractionManager::ButtonPresentation{
+              state.visible, state.enabled, state.touch_enabled,
+              state.activated};
+        },
+        [text = &rt.system->text(), sound = &rt.system->sound(), button_config,
+         &rt](std::shared_ptr<GraphicsObject> object, int slot,
+              InteractionManager::MwndButtonEvent event) {
+          using Event = InteractionManager::MwndButtonEvent;
+          const auto config = button_config(*object, slot);
+          const MwndConfig::ButtonSound* sounds =
+              text->mwnd_config_.GetButtonSound(config.se_no);
 
-        switch (event) {
-          case Event::Hit: {
-            int se = -1;
-            if (sounds)
-              se = sounds->hit;
-            if (se >= 0)
-              sound->PlaySe(se);
-          } break;
-          case Event::Push: {
-            int se = -1;
-            if (sounds)
-              se = sounds->push;
-            if (se >= 0)
-              sound->PlaySe(se);
-          } break;
-          case Event::Decide: {
-            int se = -1;
-            if (sounds)
-              se = sounds->decide;
-            if (se >= 0)
-              sound->PlaySe(se);
+          switch (event) {
+            case Event::Hit: {
+              int se = -1;
+              if (sounds)
+                se = sounds->hit;
+              if (se >= 0)
+                sound->PlaySe(se);
+            } break;
+            case Event::Push: {
+              int se = -1;
+              if (sounds)
+                se = sounds->push;
+              if (se >= 0)
+                sound->PlaySe(se);
+            } break;
+            case Event::Decide: {
+              int se = -1;
+              if (sounds)
+                se = sounds->decide;
+              if (se >= 0)
+                sound->PlaySe(se);
+            }
+              [[fallthrough]];
+            case Event::Repeat:
+              if (object->Param().button.call.has_value())
+                rt.OpenExcall(*object->Param().button.call);
+              else
+                text->ExecuteMwndButton(config);
+              break;
           }
-            [[fallthrough]];
-          case Event::Repeat:
-            if (object->Param().button.call.Type() != sr::ObjType::Nil)
-              vm.ScheduleExecute(object->Param().button.call);
-            else
-              text->ExecuteMwndButton(config);
-            break;
-        }
-      },
-      rt.system->event().GetClock());
+        },
+        rt.system->event().GetClock());
+  };
+  bind_buttons(*rt.interaction_manager);
+  bind_buttons(*rt.excall_interaction_manager);
 
   struct MwndButtonEventListener final : EventListener {
-    InteractionManager& interaction;
-    explicit MwndButtonEventListener(InteractionManager& manager)
-        : interaction(manager) {}
+    SiglusRuntime& runtime;
+    explicit MwndButtonEventListener(SiglusRuntime& runtime)
+        : runtime(runtime) {}
     void OnEvent(std::shared_ptr<Event> event) override {
-      if (event && interaction.HandleMwndButtonEvent(*event))
+      auto* interaction = runtime.IsExcall() && runtime.excall->allocated
+                              ? runtime.excall_interaction_manager.get()
+                              : runtime.interaction_manager.get();
+      if (event && interaction && interaction->HandleMwndButtonEvent(*event))
         *event = std::monostate();
     }
   };
-  rt.mwnd_button_event_listener =
-      std::make_shared<MwndButtonEventListener>(*rt.interaction_manager);
+  rt.mwnd_button_event_listener = std::make_shared<MwndButtonEventListener>(rt);
   rt.system->event().AddListener(18, rt.mwnd_button_event_listener);
   sb::module_ m(gc.get(), vm.globals_.get());
 
@@ -511,6 +553,10 @@ std::unique_ptr<SiglusMachine> SGVMFactory::Create() {
   });
   m.def("savepoint", [] {
     // TODO: implement save/load and serialization support
+    return 0;
+  });
+  m.def("check_savepoint", [] {
+    // Snapshot storage does not yet provide a resumable selection savepoint.
     return 0;
   });
 

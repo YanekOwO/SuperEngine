@@ -26,7 +26,7 @@
 #include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "systems/system.hpp"
@@ -51,6 +51,7 @@ namespace sr = serilang;
 
 struct QuakeHandle {
   std::shared_ptr<QuakeState> quake;
+  int owner = 0;
 };
 
 static int ReadArg(const std::vector<sr::Value>& args,
@@ -97,15 +98,15 @@ static QuakeState::StartParams ParseParams(std::vector<sr::Value> args,
   return params;
 }
 
-static void StartQuake(QuakeHandle* h,
-                       QuakeState::StartParams params) {
+static void StartQuake(QuakeHandle* h, QuakeState::StartParams params) {
   h->quake->Start(params);
 }
 
 static sr::Value WaitQuake(QuakeHandle* h,
                            System* system,
                            sr::VM& vm,
-                           bool key_skip) {
+                           bool key_skip,
+                           lop::NativeWaitScope scope) {
   auto done = [quake = h->quake, system]() {
     if (system && system->ShouldFastForward()) {
       quake->End(0);
@@ -117,22 +118,22 @@ static sr::Value WaitQuake(QuakeHandle* h,
   return lop::MakePollingWaitFuture(
       vm, std::move(done), key_skip,
       system ? system->event_ptr().get() : nullptr,
-      std::chrono::milliseconds(5), std::move(on_key));
+      std::chrono::milliseconds(5), std::move(on_key), std::move(scope));
 }
 
 void BindQuake(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  if (!runtime.screen_quakes) {
-    int count = runtime.gameexe
-                    ? (*runtime.gameexe)("QUAKE.CNT").Int().value_or(16)
+  if (!runtime.host().screen_quakes) {
+    int count = runtime.host().gameexe
+                    ? (*runtime.host().gameexe)("QUAKE.CNT").Int().value_or(16)
                     : 16;
     count = std::clamp(count, 0, 256);
-    runtime.screen_quakes =
+    runtime.host().screen_quakes =
         std::make_shared<QuakeList>(static_cast<std::size_t>(count));
   }
-  std::shared_ptr<QuakeList> screen_quakes = runtime.screen_quakes;
-  Stage* stage_state = runtime.stage.get();
-  System* system = runtime.system.get();
+  std::shared_ptr<QuakeList> screen_quakes = runtime.host().screen_quakes;
+  Stage* stage_state = runtime.host().stage.get();
+  System* system = runtime.host().system.get();
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<QuakeHandle> quake(m, "Quake");
   quake.def(sb::init([screen_quakes, stage_state](int layer, int index) {
@@ -155,16 +156,18 @@ void BindQuake(SiglusMachine& runtime) {
       sb::vararg);
   quake.def(
       "start_wait",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+      [system, &runtime](QuakeHandle* h, sr::VM& vm,
+                         std::vector<sr::Value> args) {
         StartQuake(h, ParseParams(std::move(args), false));
-        return WaitQuake(h, system, vm, false);
+        return WaitQuake(h, system, vm, false, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
       "start_wait_key",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+      [system, &runtime](QuakeHandle* h, sr::VM& vm,
+                         std::vector<sr::Value> args) {
         StartQuake(h, ParseParams(std::move(args), false));
-        return WaitQuake(h, system, vm, true);
+        return WaitQuake(h, system, vm, true, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
@@ -181,16 +184,18 @@ void BindQuake(SiglusMachine& runtime) {
       sb::vararg);
   quake.def(
       "start_all_wait",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+      [system, &runtime](QuakeHandle* h, sr::VM& vm,
+                         std::vector<sr::Value> args) {
         StartQuake(h, ParseParams(std::move(args), true));
-        return WaitQuake(h, system, vm, false);
+        return WaitQuake(h, system, vm, false, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
       "start_all_wait_key",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value> args) {
+      [system, &runtime](QuakeHandle* h, sr::VM& vm,
+                         std::vector<sr::Value> args) {
         StartQuake(h, ParseParams(std::move(args), true));
-        return WaitQuake(h, system, vm, true);
+        return WaitQuake(h, system, vm, true, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
@@ -212,14 +217,14 @@ void BindQuake(SiglusMachine& runtime) {
       sb::vararg);
   quake.def(
       "wait",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value>) {
-        return WaitQuake(h, system, vm, false);
+      [system, &runtime](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        return WaitQuake(h, system, vm, false, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
       "wait_key",
-      [system](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value>) {
-        return WaitQuake(h, system, vm, true);
+      [system, &runtime](QuakeHandle* h, sr::VM& vm, std::vector<sr::Value>) {
+        return WaitQuake(h, system, vm, true, runtime.WaitScope(h->owner));
       },
       sb::vararg);
   quake.def(
@@ -229,24 +234,24 @@ void BindQuake(SiglusMachine& runtime) {
 
   struct QuakeListHandle {
     int layer;
+    int owner = 0;
   };
   sb::class_<QuakeListHandle> quake_array(m, "QuakeArray");
   quake_array.add_gc_root(quake);
   quake_array.def(
-      sb::init([](int layer) {
+      sb::init([](int layer, int owner) {
         if (layer != kLayerFg && layer != kLayerBg && layer != kLayerNext)
           throw sr::RuntimeError("invalid quake layer: " +
                                  std::to_string(layer));
-        return std::make_unique<QuakeListHandle>(layer);
+        return std::make_unique<QuakeListHandle>(layer, owner);
       }),
-      sb::arg("layer"));
+      sb::arg("layer"), sb::arg("owner") = 0);
   quake_array.def(
       "__getitem__",
-      [stage_state, quake](QuakeListHandle* h, int index) mutable {
-        if (!stage_state)
-          throw std::runtime_error("Stage quake requires a stage");
-        std::shared_ptr<QuakeState> q = stage_state->GetQuake(h->layer, index);
-        sr::NativeInstance* inst = quake.make_inst(q);
+      [&runtime, quake](QuakeListHandle* h, int index) mutable {
+        std::shared_ptr<QuakeState> q =
+            runtime.host().GetStage(h->owner).GetQuake(h->layer, index);
+        sr::NativeInstance* inst = quake.make_inst(q, h->owner);
         return sr::Value(inst);
       },
       sb::arg("index"));

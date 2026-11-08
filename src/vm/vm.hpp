@@ -71,6 +71,9 @@ class VM {
   Fiber* AddFiber(Code* entry);
   Fiber* ScheduleExecute(Function* fn);
   Fiber* ScheduleExecute(Value callable);
+  // A native control-flow command can replace its call without returning a
+  // value.
+  void ReplaceCurrentCall(Fiber& fiber, Value destination);
 
   // Invoke a script callback on a VM-owned isolated fiber through its first
   // suspension or completion. Suspended continuations use the normal scheduler.
@@ -89,6 +92,12 @@ class VM {
   bool HasPendingWork();
   inline void RequestStop() noexcept { stop_requested_ = true; }
   inline bool IsStopRequested() const noexcept { return stop_requested_; }
+  // Return from the current drive at the next instruction boundary. Runnable
+  // fibers remain queued; the request is consumed when the outer drive returns.
+  inline void RequestHostYield() noexcept { host_yield_requested_ = true; }
+  inline bool IsHostYieldRequested() const noexcept {
+    return host_yield_requested_;
+  }
 
   /// Pop an exception from f.op_stack and unwind to the nearest handler.
   void Error(Fiber& f);
@@ -147,6 +156,7 @@ class VM {
   void ExecuteFiber(Fiber* fib);
 
   bool stop_requested_ = false;
+  bool host_yield_requested_ = false;
   std::size_t dead_fibre_count_ = 0;
   bool failed_fibre_pending_ = false;
 

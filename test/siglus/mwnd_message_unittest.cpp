@@ -31,7 +31,7 @@
 #include "core/mwnd_config.hpp"
 #include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/registry.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
 #include "mock_clock.hpp"
@@ -78,26 +78,28 @@ class SiglusMwndMessageTest : public ::testing::Test {
  protected:
   DummyDriverHint video_{SDL_HINT_VIDEO_DRIVER};
   DummyDriverHint audio_{SDL_HINT_AUDIO_DRIVER};
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   MockClock* clock = nullptr;
   int refreshes = 0;
 
   void SetUp() override {
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-    runtime.frame_requests =
-        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
-          auto promise = std::make_shared<sr::Promise>();
-          vm->TrackPendingPromise(promise);
-          return promise;
-        });
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().frame_requests =
+        std::make_unique<FrameRequestManager>(
+            [vm = runtime.GameplayMachine().vm.get()] {
+              auto promise = std::make_shared<sr::Promise>();
+              vm->TrackPendingPromise(promise);
+              return promise;
+            });
     auto time = std::make_unique<MockClock>(Clock::timepoint_t{});
     clock = time.get();
-    runtime.vm->scheduler_ =
+    runtime.GameplayMachine().vm->scheduler_ =
         sr::Scheduler(std::make_unique<sr::RecordingPoller>(), std::move(time));
     runtime.archive = std::make_shared<Archive>(
         std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
-    runtime.loader =
-        std::make_unique<Loader>(*runtime.archive, *runtime.vm, false);
+    runtime.GameplayMachine().loader = std::make_unique<Loader>(
+        *runtime.archive, *runtime.GameplayMachine().vm, false);
     runtime.kidoku_table = std::make_shared<KidokuTable>();
     runtime.gameexe = std::make_shared<Gameexe>();
     for (const auto* setting :
@@ -128,7 +130,7 @@ class SiglusMwndMessageTest : public ::testing::Test {
          {"0_memory", "flow", "1_mwnd", "textout", "3_script"}) {
       const auto* binding = SiglusBindingRegistry::Find(name);
       ASSERT_NE(binding, nullptr);
-      (*binding)(runtime);
+      (*binding)(runtime.GameplayMachine());
     }
     Run(R"(
       class MessageStageLayer {
@@ -146,18 +148,19 @@ class SiglusMwndMessageTest : public ::testing::Test {
   }
 
   void Run(const std::string& source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(source, "<mwnd message>"));
     if (!compiler.Ok())
       throw std::runtime_error(compiler.FormatErrors());
-    auto* function = runtime.vm->gc_->Allocate<sr::Function>(compiler.Get());
-    runtime.vm->InvokeUntilBlocked(*function, {});
+    auto* function = runtime.GameplayMachine().vm->gc_->Allocate<sr::Function>(
+        compiler.Get());
+    runtime.GameplayMachine().vm->InvokeUntilBlocked(*function, {});
   }
 
   void Advance(std::chrono::milliseconds delta) {
     clock->AdvanceTime(delta);
     Text().AdvanceMessageText(delta);
-    runtime.vm->RunReadyUntilBlocked();
+    runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   }
 
   void PressSpace() {
@@ -169,7 +172,7 @@ class SiglusMwndMessageTest : public ::testing::Test {
     event.type = SDL_EVENT_KEY_UP;
     SDL_PushEvent(&event);
     runtime.system->event().ExecuteEventSystem();
-    runtime.vm->RunReadyUntilBlocked();
+    runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   }
 
   void SetCtrl(bool pressed) {
@@ -186,7 +189,7 @@ class SiglusMwndMessageTest : public ::testing::Test {
     return Text().GetMwnd(index);
   }
   bool Completed(const char* name = "completed") {
-    return runtime.vm->globals_->contains(name);
+    return runtime.GameplayMachine().vm->globals_->contains(name);
   }
 
   void InstallPrint(std::initializer_list<int> element) {
@@ -202,8 +205,9 @@ class SiglusMwndMessageTest : public ::testing::Test {
     if (*element.begin() == 12)
       scene.AppendInt(0);  // Global print carries a read marker after its call.
     scene.AddTo(*runtime.archive);
-    (*runtime.vm->globals_)["print_message"] =
-        ResolveSceneCommand(*runtime.loader, "message", "print_message");
+    (*runtime.GameplayMachine().vm->globals_)["print_message"] =
+        ResolveSceneCommand(*runtime.GameplayMachine().loader, "message",
+                            "print_message");
   }
 };
 
@@ -312,8 +316,9 @@ TEST_F(SiglusMwndMessageTest, CtrlPauseResumesAfterFrameCompletion) {
   Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
   Advance(100ms);
   EXPECT_FALSE(Completed());
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed());
 }
@@ -323,15 +328,18 @@ TEST_F(SiglusMwndMessageTest, CtrlYieldsEveryMessage) {
   SetCtrl(true);
   Run("advanced = 0; while (advanced < 10) { "
       "await mwnd.pp(); advanced = advanced + 1; } completed = 1;");
-  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+            sr::Value(0));
   for (int advanced = 1; advanced <= 10; ++advanced) {
-    ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-    runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+    ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+    runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+        runtime.script_input.get());
     Advance(5ms);
-    EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(advanced));
+    EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+              sr::Value(advanced));
   }
   EXPECT_TRUE(Completed());
-  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusMwndMessageTest, VsyncOffStillYieldsEveryMessage) {
@@ -340,10 +348,12 @@ TEST_F(SiglusMwndMessageTest, VsyncOffStillYieldsEveryMessage) {
   SetCtrl(true);
   Run("advanced = 0; while (advanced < 6) { "
       "await mwnd.pp(); advanced = advanced + 1; }");
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
-  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+            sr::Value(1));
 }
 
 TEST_F(SiglusMwndMessageTest, CtrlPpWaitsForAFrame) {
@@ -351,8 +361,9 @@ TEST_F(SiglusMwndMessageTest, CtrlPpWaitsForAFrame) {
   SetCtrl(true);
   Run("await mwnd.pp(); completed = 1;");
   EXPECT_FALSE(Completed());
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed());
   EXPECT_FALSE(Window()->message_state()->clear_ready);
@@ -364,8 +375,9 @@ TEST_F(SiglusMwndMessageTest, CtrlPageDefersClearUntilAFrameCompletes) {
   SetCtrl(true);
   Run("await mwnd.page(); completed = 1;");
   EXPECT_FALSE(Window()->message_state()->clear_ready);
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed());
   EXPECT_TRUE(Window()->message_state()->clear_ready);
@@ -376,10 +388,11 @@ TEST_F(SiglusMwndMessageTest, CtrlPressedDuringPauseStillWaitsForAFrame) {
   // but must not let that key event bypass the display boundary.
   Run("await mwnd.r(); completed = 1;");
   SetCtrl(true);
-  runtime.vm->RunReadyUntilBlocked();
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
   EXPECT_FALSE(Completed());
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed());
 }
@@ -401,8 +414,9 @@ TEST_F(SiglusMwndMessageTest, ReleasingCtrlFinishesTheCommittedAdvance) {
   Run("await mwnd.r(); advanced = 1; await mwnd.print(\"AB\"); "
       "completed = 1;");
   SetCtrl(false);
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed("advanced"));
   EXPECT_FALSE(Completed());
@@ -416,7 +430,7 @@ TEST_F(SiglusMwndMessageTest, ReadSkipUsesMessagePacing) {
   Text().SetSkipMode(true);
   Run("await mwnd.r(); completed = 1;");
   EXPECT_FALSE(Completed());
-  EXPECT_TRUE(runtime.frame_requests->BeginFrameRequests());
+  EXPECT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusMwndMessageTest, MessageOnlyWaitDoesNotRequestAPacingFrame) {
@@ -425,7 +439,7 @@ TEST_F(SiglusMwndMessageTest, MessageOnlyWaitDoesNotRequestAPacingFrame) {
   SetCtrl(true);
   Run("await mwnd.print(\"AB\"); await mwnd.msg_wait(); completed = 1;");
   EXPECT_TRUE(Completed());
-  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusMwndMessageTest, ForcedFastForwardWaitsForTheFirstMessageFrame) {
@@ -434,8 +448,9 @@ TEST_F(SiglusMwndMessageTest, ForcedFastForwardWaitsForTheFirstMessageFrame) {
   runtime.system->set_force_fast_forward();
   Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
   EXPECT_FALSE(Completed());
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
   EXPECT_TRUE(Completed());
 }
@@ -446,10 +461,12 @@ TEST_F(SiglusMwndMessageTest, ForcedFastForwardStillYieldsEveryMessage) {
   runtime.system->set_force_fast_forward();
   Run("advanced = 0; while (advanced < 8) { "
       "await mwnd.pp(); advanced = advanced + 1; }");
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   Advance(5ms);
-  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+            sr::Value(1));
 }
 
 TEST_F(SiglusMwndMessageTest, ResetRejectsThePacingWaitWithoutClearingText) {
@@ -457,9 +474,9 @@ TEST_F(SiglusMwndMessageTest, ResetRejectsThePacingWaitWithoutClearingText) {
   // abandoned pause must not apply its clear-ready cleanup.
   SetCtrl(true);
   Run("caught = 0; try { await mwnd.r(); } catch (e) { caught = 1; }");
-  runtime.frame_requests->Reset();
+  runtime.GameplayMachine().frame_requests->Reset();
   Advance(5ms);
-  EXPECT_EQ(runtime.vm->globals_->at("caught"), sr::Value(1));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("caught"), sr::Value(1));
   EXPECT_FALSE(Window()->message_state()->clear_ready);
 }
 
@@ -483,7 +500,7 @@ TEST_F(SiglusMwndMessageTest, CtrlMessageIsPresentedBeforeReplacement) {
   runtime.update_wipe_after_frame_actions = [&] {
     clock->AdvanceTime(10ms);
     if (++frames > 5)
-      runtime.vm->RequestStop();
+      runtime.GameplayMachine().vm->RequestStop();
   };
   SetCtrl(true);
   Run("set_mwnd(4); mwnd.msg_block(); await mwnd.print(\"AB\"); "
@@ -499,20 +516,22 @@ class SiglusFastForwardOptionsTest : public ::testing::Test {
  protected:
   DummyDriverHint video_{SDL_HINT_VIDEO_DRIVER};
   DummyDriverHint audio_{SDL_HINT_AUDIO_DRIVER};
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   MockClock* clock = nullptr;
 
   void SetUp() override {
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-    runtime.frame_requests =
-        std::make_unique<FrameRequestManager>([vm = runtime.vm.get()] {
-          auto promise = std::make_shared<sr::Promise>();
-          vm->TrackPendingPromise(promise);
-          return promise;
-        });
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().frame_requests =
+        std::make_unique<FrameRequestManager>(
+            [vm = runtime.GameplayMachine().vm.get()] {
+              auto promise = std::make_shared<sr::Promise>();
+              vm->TrackPendingPromise(promise);
+              return promise;
+            });
     auto time = std::make_unique<MockClock>(Clock::timepoint_t{});
     clock = time.get();
-    runtime.vm->scheduler_ =
+    runtime.GameplayMachine().vm->scheduler_ =
         sr::Scheduler(std::make_unique<sr::RecordingPoller>(), std::move(time));
     runtime.gameexe = std::make_shared<Gameexe>();
     runtime.gameexe->parseLine("MWND.CNT = 1");
@@ -524,18 +543,19 @@ class SiglusFastForwardOptionsTest : public ::testing::Test {
         runtime.global_config, runtime.asset_scanner,
         MwndConfig::ParseSiglus(*runtime.gameexe),
         SystemOptions{.fast_forward = true});
-    (*SiglusBindingRegistry::Find("1_mwnd"))(runtime);
+    (*SiglusBindingRegistry::Find("1_mwnd"))(runtime.GameplayMachine());
     SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
     runtime.system->event().ExecuteEventSystem();
   }
 
   void Run(const std::string& source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(source, "<automated message>"));
     if (!compiler.Ok())
       throw std::runtime_error(compiler.FormatErrors());
-    auto* function = runtime.vm->gc_->Allocate<sr::Function>(compiler.Get());
-    runtime.vm->InvokeUntilBlocked(*function, {});
+    auto* function = runtime.GameplayMachine().vm->gc_->Allocate<sr::Function>(
+        compiler.Get());
+    runtime.GameplayMachine().vm->InvokeUntilBlocked(*function, {});
   }
 };
 
@@ -544,28 +564,32 @@ TEST_F(SiglusFastForwardOptionsTest,
   // CLI skipping retains its first message until an actual engine frame
   // completes, rather than allowing unrestricted message replacement.
   Run("await mwnd.print(\"AB\"); await mwnd.r(); completed = 1;");
-  EXPECT_FALSE(runtime.vm->globals_->contains("completed"));
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("completed"));
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   clock->AdvanceTime(5ms);
-  runtime.vm->RunReadyUntilBlocked();
-  EXPECT_TRUE(runtime.vm->globals_->contains("completed"));
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  EXPECT_TRUE(runtime.GameplayMachine().vm->globals_->contains("completed"));
 }
 
 TEST_F(SiglusFastForwardOptionsTest, CliFastForwardYieldsEveryMessage) {
   // CLI skipping must suspend at every message until an engine frame completes.
   Run("advanced = 0; while (advanced < 18) { "
       "await mwnd.pp(); advanced = advanced + 1; } completed = 1;");
-  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+            sr::Value(0));
   for (int advanced = 1; advanced <= 18; ++advanced) {
-    ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-    runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+    ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+    runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+        runtime.script_input.get());
     clock->AdvanceTime(5ms);
-    runtime.vm->RunReadyUntilBlocked();
-    EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(advanced));
+    runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+    EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+              sr::Value(advanced));
   }
-  EXPECT_TRUE(runtime.vm->globals_->contains("completed"));
-  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+  EXPECT_TRUE(runtime.GameplayMachine().vm->globals_->contains("completed"));
+  EXPECT_FALSE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusFastForwardOptionsTest,
@@ -574,11 +598,13 @@ TEST_F(SiglusFastForwardOptionsTest,
   runtime.system->set_force_fast_forward();
   Run("advanced = 0; while (advanced < 8) { "
       "await mwnd.pp(); advanced = advanced + 1; }");
-  ASSERT_TRUE(runtime.frame_requests->BeginFrameRequests());
-  runtime.frame_requests->CompleteFrameRequests(runtime.script_input.get());
+  ASSERT_TRUE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
+  runtime.GameplayMachine().frame_requests->CompleteFrameRequests(
+      runtime.script_input.get());
   clock->AdvanceTime(5ms);
-  runtime.vm->RunReadyUntilBlocked();
-  EXPECT_EQ(runtime.vm->globals_->at("advanced"), sr::Value(1));
+  runtime.GameplayMachine().vm->RunReadyUntilBlocked();
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("advanced"),
+            sr::Value(1));
 }
 
 TEST_F(SiglusFastForwardOptionsTest, CliFastForwardRespectsCtrlDisable) {
@@ -586,8 +612,8 @@ TEST_F(SiglusFastForwardOptionsTest, CliFastForwardRespectsCtrlDisable) {
   // disable Ctrl skipping rather than turning it into forced fast-forward.
   runtime.local_config.disable_ctrl = true;
   Run("await mwnd.r(); completed = 1;");
-  EXPECT_FALSE(runtime.vm->globals_->contains("completed"));
-  EXPECT_FALSE(runtime.frame_requests->BeginFrameRequests());
+  EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("completed"));
+  EXPECT_FALSE(runtime.GameplayMachine().frame_requests->BeginFrameRequests());
 }
 
 TEST_F(SiglusMwndMessageTest, MultiMessageStreamsRemainNonblocking) {

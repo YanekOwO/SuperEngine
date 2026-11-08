@@ -224,7 +224,7 @@ void WriteFlags(const CaptureFileOptions& options,
 
 void BindCapture(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  const auto captures = runtime.captures;
+  const auto captures = runtime.host().captures;
   if (!captures)
     throw sr::RuntimeError("Capture support is unavailable");
   sb::module_ globals(vm.gc_.get(), vm.globals_.get());
@@ -261,7 +261,7 @@ void BindCapture(SiglusMachine& runtime) {
 
 void BindCaptureFiles(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
-  const auto captures = runtime.captures;
+  const auto captures = runtime.host().captures;
   auto* module = vm.builtins_->at("syscom").Get_if<sr::Module>();
   sb::module_ syscom(vm.gc_.get(), module->globals.get());
   syscom.def("create_capture_buffer", [captures](int width, int height) {
@@ -280,7 +280,7 @@ void BindCaptureFiles(SiglusMachine& runtime) {
   });
   syscom.def(
       "save_capture_buffer_to_file",
-      [captures, platform = runtime.platform_implementor](
+      [captures, platform = runtime.host().platform_implementor](
           sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
         const auto options = DecodeCaptureFileOptions(std::move(args), true);
         if (!captures->Snapshot(CaptureKind::Buffer))
@@ -296,7 +296,7 @@ void BindCaptureFiles(SiglusMachine& runtime) {
       sb::vararg);
   syscom.def(
       "load_flag_from_capture_file",
-      [captures, platform = runtime.platform_implementor](
+      [captures, platform = runtime.host().platform_implementor](
           sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
         const auto options = DecodeCaptureFileOptions(std::move(args), false);
         const auto path =

@@ -25,7 +25,7 @@
 #include "sgvm_instance.hpp"
 
 #include "libsiglus/sgvm_factory.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "utilities/file.hpp"
 #include "vm/vm.hpp"
@@ -46,10 +46,10 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
     factory.trace_ = trace_;
     factory.fast_forward_ = fast_forward_;
     factory.platform_implementor_ = platform_implementor_;
-    std::unique_ptr<SiglusMachine> machine = factory.Create();
-    SiglusMachine& rt = *machine;
+    std::unique_ptr<SiglusRuntime> machine = factory.Create();
+    SiglusRuntime& rt = *machine;
 
-    sr::VM& vm = *rt.vm;
+    sr::VM& vm = *rt.GameplayMachine().vm;
     (*vm.globals_)["__debug"] = debug_;
     (*vm.globals_)["__scene"] =
         start_scene_ ? sr::Value(*start_scene_) : sr::nil;
@@ -59,19 +59,19 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
       try {
         auto source =
             m6::SourceBuffer::Create(LoadFileStr(path), path.string());
-        m6::CompilerPipeline compiler(machine->vm->gc_);
+        m6::CompilerPipeline compiler(machine->GameplayMachine().vm->gc_);
         compiler.compile(std::move(source));
         if (!compiler.Ok())
           throw std::runtime_error(compiler.FormatErrors());
 
-        machine->vm->AddFiber(compiler.Get());
+        machine->GameplayMachine().vm->AddFiber(compiler.Get());
         machine->Run();
       } catch (const std::exception& e) {
         throw std::runtime_error(
             std::format("Hook '{}': {}", path.string(), e.what()));
       }
 
-      if (vm.IsStopRequested())
+      if (rt.GameplayMachine().vm->IsStopRequested())
         return 0;
     }
 

@@ -140,6 +140,104 @@ class VMTest : public ::testing::Test {
   }
 };
 
+TEST_F(VMTest, HostYieldRetainsQueuedWork) {
+  // A pending host yield leaves queued script work intact for the next drive.
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(42);
+  append_ins(code, {Push{0}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  vm.RequestHostYield();
+  vm.RunReadyUntilBlocked();
+  EXPECT_FALSE(fiber->completion_promise->HasResult());
+  EXPECT_FALSE(vm.IsHostYieldRequested());
+  vm.RunReadyUntilBlocked();
+  EXPECT_EQ(fiber->completion_promise->result->value(), Value(42));
+}
+
+TEST_F(VMTest, NativeHostYieldPreservesTheNextInstruction) {
+  // Yield inside a native call; its script continuation runs only on
+  // resumption.
+  auto* yield = gc->Allocate<NativeFunction>(
+      "yield", [](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
+        vm.RequestHostYield();
+        return nil;
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(yield, 42);
+  append_ins(code, {Push{0}, Call{0, 0}, Pop{}, Push{1}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  vm.RunReadyUntilBlocked();
+  EXPECT_FALSE(fiber->completion_promise->HasResult());
+  EXPECT_FALSE(vm.IsStopRequested());
+  vm.RunReadyUntilBlocked();
+  EXPECT_EQ(fiber->completion_promise->result->value(), Value(42));
+}
+
+TEST_F(VMTest, TimerHostYieldRetainsQueuedWork) {
+  // A due timer yields before script dispatch, without dropping the ready
+  // fiber.
+  UseNonWaitingClock();
+  vm.scheduler_.PushCallbackAfter([&] { vm.RequestHostYield(); },
+                                  std::chrono::milliseconds(0));
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(42);
+  append_ins(code, {Push{0}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  vm.RunReadyUntilBlocked();
+  EXPECT_FALSE(fiber->completion_promise->HasResult());
+  vm.RunReadyUntilBlocked();
+  EXPECT_EQ(fiber->completion_promise->result->value(), Value(42));
+}
+
+TEST_F(VMTest, InlineHostYieldQueuesTheCallbackContinuation) {
+  // Inline callbacks must retain their continuation when native code yields.
+  auto* yield = gc->Allocate<NativeFunction>(
+      "yield", [](VM& vm, Fiber&, uint8_t, uint8_t) -> Value {
+        vm.RequestHostYield();
+        return nil;
+      });
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(yield, 42);
+  append_ins(code, {Push{0}, Call{0, 0}, Pop{}, Push{1}, Return{}});
+  auto* callback = gc->Allocate<Function>(code);
+  vm.InvokeUntilBlocked(*callback, {});
+  auto completion = vm.fibres_.back()->completion_promise;
+  EXPECT_FALSE(completion->HasResult());
+  vm.RunReadyUntilBlocked();
+  EXPECT_EQ(completion->result->value(), Value(42));
+}
+
+TEST_F(VMTest, BlockingRunReturnsOnHostYield) {
+  // Blocking evaluation yields to its host instead of immediately driving
+  // again.
+  UseNonWaitingClock();
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(42);
+  append_ins(code, {Push{0}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  vm.RequestHostYield();
+  vm.Run();
+  EXPECT_FALSE(fiber->completion_promise->HasResult());
+  vm.Run();
+  EXPECT_EQ(fiber->completion_promise->result->value(), Value(42));
+}
+
+TEST_F(VMTest, LatePromiseRejectionDoesNotResumeAKilledFiber) {
+  // A host-cancelled waiter ignores rejection after its fiber is collected.
+  auto* gate = gc->Allocate<Future>();
+  (*vm.globals_)["gate"] = Value(gate);
+  auto* code = gc->Allocate<Code>();
+  code->const_pool = value_vector(Value(gate));
+  append_ins(code, {Push{0}, Await{}, Return{}});
+  auto* fiber = vm.AddFiber(code);
+  vm.RunReadyUntilBlocked();
+  fiber->Kill(nil);
+  vm.RunReadyUntilBlocked();
+  vm.CollectGarbage();
+  EXPECT_NO_THROW(gate->promise->Reject("cancelled"));
+  EXPECT_NO_THROW(vm.RunReadyUntilBlocked());
+}
+
 TEST_F(VMTest, BinaryAdd) {
   auto* chunk = gc->Allocate<Code>();
   chunk->const_pool = value_vector(1.0, 2.0);
@@ -675,6 +773,22 @@ TEST_F(VMTest, WatchdogCanCancelAnInfiniteScript) {
 
   EXPECT_EQ(pumps, 2);
   EXPECT_TRUE(vm.IsStopRequested());
+}
+
+TEST_F(VMTest, HostPumpCanYieldAnInfiniteScript) {
+  // Cooperative host servicing can pause a busy script without stopping its VM.
+  auto& clock = UseNonWaitingClock();
+  auto* tick = gc->Allocate<NativeFunction>(
+      "tick", [&](VM&, Fiber&, uint8_t, uint8_t) -> Value {
+        clock.AdvanceTime(std::chrono::milliseconds(1));
+        return nil;
+      });
+  vm.SetHostEventPump([&] { vm.RequestHostYield(); });
+  auto* fiber = vm.AddFiber(LoopCalling(tick));
+  vm.RunReadyUntilBlocked();
+  EXPECT_FALSE(vm.IsStopRequested());
+  EXPECT_FALSE(fiber->completion_promise->HasResult());
+  EXPECT_FALSE(vm.scheduler_.IsIdle());
 }
 
 TEST_F(VMTest, WatchdogCanCancelAnInfiniteInlineCallback) {

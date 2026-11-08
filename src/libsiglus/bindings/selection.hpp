@@ -22,7 +22,7 @@
 // -----------------------------------------------------------------------
 
 #include "core/selection.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "vm/value.hpp"
 
 namespace libsiglus::binding {

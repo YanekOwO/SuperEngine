@@ -23,13 +23,8 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
-#include "core/frame_action_manager.hpp"
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
-#include "core/input.hpp"
-#include "core/mask.hpp"
-#include "core/stage.hpp"
-#include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "platforms/implementor.hpp"
 #include "srbind/srbind.hpp"
@@ -39,12 +34,10 @@
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
 #include "vm/object.hpp"
-#include "vm/promise.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <format>
 #include <memory>
 #include <stdexcept>
@@ -113,15 +106,14 @@ void ResetLocalSyscomState(System* sys,
 }  // namespace
 
 void BindSyscom(SiglusMachine& runtime) {
-  auto* sys = runtime.system.get();
+  auto* sys = runtime.host().system.get();
   if (!sys)
     throw std::runtime_error("syscom bindings require a System");
-  auto* stage = runtime.stage.get();
-  auto* loader = runtime.loader.get();
-  auto gameexe = runtime.gameexe;
-  auto* local_config = &runtime.local_config;
-  auto* global_config = &runtime.global_config;
-  ResetLocalSyscomState(sys, gameexe, *local_config);
+  auto gameexe = runtime.host().gameexe;
+  auto* local_config = &runtime.host().local_config;
+  auto* global_config = &runtime.host().global_config;
+  if (&runtime == &runtime.host().GameplayMachine())
+    ResetLocalSyscomState(sys, gameexe, *local_config);
   runtime.reset_local_memory.emplace_back([sys, gameexe, local_config] {
     ResetLocalSyscomState(sys, gameexe, *local_config);
   });
@@ -130,11 +122,18 @@ void BindSyscom(SiglusMachine& runtime) {
 
   VM& vm = *runtime.vm;
   sb::module_ m(vm, "syscom");
-  m.def("menu_enable", [sys] { sys->EnableSyscom(); });
-  m.def("menu_disable", [sys] { sys->DisableSyscom(); });
-  m.def("btn_enable_all",
-        [&cfg = runtime.local_config] { cfg.mwnd_btn_disable_all = false; });
-  m.def("btn_enable", [&cfg = runtime.local_config](int slot) {
+  m.def("menu_enable", [sys, &runtime] {
+    runtime.host().syscom_enabled = true;
+    sys->EnableSyscom();
+  });
+  m.def("menu_disable", [sys, &runtime] {
+    runtime.host().syscom_enabled = false;
+    sys->DisableSyscom();
+  });
+  m.def("btn_enable_all", [&cfg = runtime.host().local_config] {
+    cfg.mwnd_btn_disable_all = false;
+  });
+  m.def("btn_enable", [&cfg = runtime.host().local_config](int slot) {
     if (slot < 0)
       return;
     auto& disabled = cfg.mwnd_btn_disable;
@@ -278,17 +277,19 @@ void BindSyscom(SiglusMachine& runtime) {
              "set_exist_localmode", "get_exist_localmode",
              "is_localmode_enable");
 
+  m.def("menu", [&runtime] { runtime.host().OpenExcallScene("CANCEL_SCENE"); });
+  m.def("open_save",
+        [&runtime] { runtime.host().OpenExcallScene("SAVE_SCENE"); });
+  m.def("open_load",
+        [&runtime] { runtime.host().OpenExcallScene("LOAD_SCENE"); });
+  m.def("open_config_menu",
+        [&runtime] { runtime.host().OpenExcallScene("CONFIG_SCENE"); });
   m.def(
       "return_to_menu",
-      [sys, stage, loader, gameexe, &runtime,
-       &input = runtime.input_event_listener, &mask_list = runtime.mask_list,
-       &platform = runtime.platform_implementor,
-       &reset_local_memory = runtime.reset_local_memory,
-       &frame_actions = runtime.frame_action_manager,
-       &finish_active_wipe = runtime.finish_active_wipe](
-          VM& vm, Fiber& fiber, std::vector<Value> args) {
+      [sys, gameexe, &runtime, &platform = runtime.host().platform_implementor](
+          VM& vm, std::vector<Value> args) {
         ReturnMenuParams params = ReturnMenuParams::Parse(std::move(args));
-        if (!gameexe || !loader)
+        if (!gameexe)
           throw RuntimeError("return_to_menu requires game configuration");
 
         if (params.warning && platform) {
@@ -296,69 +297,24 @@ void BindSyscom(SiglusMachine& runtime) {
               (*gameexe)("WARNINGINFO.RETURNMENU_WARNING_STR")
                   .Str()
                   .value_or("Return to the title screen?");
-          if (!platform->AskUserPrompt(prompt, "", "Yes", "No")) {
+          if (!platform->AskUserPrompt(prompt, "", "Yes", "No"))
             return;
-          }
         }
 
         auto [scene_name, zlabel] = ReadMenuScene(*gameexe);
-        serilang::Value entry =
-            ResolveSceneEntry(*loader, std::move(scene_name), zlabel);
-
-        if (params.se_play && sys)
+        if (params.se_play)
           sys->sound().PlaySe(6);
 
-        if (finish_active_wipe && *finish_active_wipe)
-          (*finish_active_wipe)();
-
-        auto restart = [&vm, sys, stage, &runtime, &input, &mask_list,
-                        &reset_local_memory, &frame_actions,
-                        &finish_active_wipe, entry,
-                        preserve = params.preserve_backlog]() mutable {
-          // Cancel timers before resetting the stage they refer to.
-          if (finish_active_wipe && *finish_active_wipe)
-            (*finish_active_wipe)();
-          if (frame_actions)
-            frame_actions->CancelGlobals();
-          for (auto& cb : reset_local_memory)
-            if (cb)
-              cb();
-          if (stage)
-            stage->Reset();
-          if (mask_list)
-            mask_list->Reset();
-
-          runtime.ResetGraphics();
-          if (preserve) {
-            sys->sound().Reset();
-            sys->EnableSyscom();
-          } else {
-            sys->Reset();
-          }
-
-          if (input)
-            input->ResetState();
-          vm.ScheduleExecute(entry);
-        };
-
-        fiber.frames.clear();
-        if (params.fade_out && sys && !sys->ShouldFastForward()) {
-          const int duration =
+        int fade_millis = 0;
+        if (params.fade_out && !sys->ShouldFastForward()) {
+          fade_millis =
               std::max(0, (*gameexe)("LOAD.WIPE").IntAt(1).value_or(0));
-          if (duration > 0) {
-            sys->sound().BgmFadeOut(duration);
-            auto faded = std::make_shared<Promise>();
-            vm.TrackPendingPromise(faded);
-            vm.scheduler_.PushCallbackAfter(
-                [faded, restart = std::move(restart)]() mutable {
-                  faded->Resolve(nil);
-                  restart();
-                },
-                std::chrono::milliseconds(duration));
-            return;
-          }
+          if (fade_millis > 0)
+            sys->sound().BgmFadeOut(fade_millis);
         }
-        restart();
+        runtime.host().QueueReturnToMenu(std::move(scene_name), zlabel,
+                                         params.preserve_backlog, fade_millis);
+        vm.RequestHostYield();
       },
       sb::vararg);
 
@@ -380,8 +336,6 @@ void BindSyscom(SiglusMachine& runtime) {
     return false;
   });
 
-  // Storage is intentionally unavailable; metadata describes an empty slot.
-  m.def("open_load", [] {});
   m.def("load", [](int, int, int, int) {});
   m.def("qload", [](int, int, int, int) {});
   m.def("delete_save", [](int) { return 0; });
@@ -417,13 +371,14 @@ void BindSyscom(SiglusMachine& runtime) {
                  &MenuEntryConfig::exist);
 
   m.def("end_game", [sys, &runtime, gameexe](int warning) {
-    if (warning && runtime.platform_implementor) {
+    if (warning && runtime.host().platform_implementor) {
       const std::string prompt =
           gameexe ? (*gameexe)("WARNINGINFO.GAMEEND_WARNING_STR")
                         .Str()
                         .value_or("Quit the game?")
                   : "Quit the game?";
-      if (!runtime.platform_implementor->AskUserPrompt(prompt, "", "Yes", "No"))
+      if (!runtime.host().platform_implementor->AskUserPrompt(prompt, "", "Yes",
+                                                              "No"))
         return;
     }
     sys->RequestQuit();
@@ -433,6 +388,38 @@ void BindSyscom(SiglusMachine& runtime) {
   m.def("set_enable_hidemwnd", [local_config](bool value) {
     local_config->syscommenu.hide_mwnd.enable = value;
   });
+  const auto menu_entry = [&](std::string name,
+                              MenuEntryConfig SyscomMenuConfig::* member) {
+    for (const bool enable : {false, true}) {
+      const std::string field = enable ? "enable_" : "exist_";
+      const std::string setter = "set_" + field + name;
+      const std::string getter = "get_" + field + name;
+      if (!m.dict()->contains(setter))
+        m.def(setter, [local_config, member, enable](int value) {
+          auto& entry = local_config->syscommenu.*member;
+          (enable ? entry.enable : entry.exist) = value != 0;
+        });
+      if (!m.dict()->contains(getter))
+        m.def(getter, [local_config, member, enable] {
+          const auto& entry = local_config->syscommenu.*member;
+          return (enable ? entry.enable : entry.exist) ? 1 : 0;
+        });
+    }
+    const std::string check = "is_" + name + "_enable";
+    if (!m.dict()->contains(check))
+      m.def(check, [local_config, member] {
+        const auto& entry = local_config->syscommenu.*member;
+        return entry.exist && entry.enable ? 1 : 0;
+      });
+  };
+  menu_entry("hidemwnd", &SyscomMenuConfig::hide_mwnd);
+  menu_entry("msgback", &SyscomMenuConfig::msg_back);
+  menu_entry("retsel", &SyscomMenuConfig::return_to_sel);
+  menu_entry("retmenu", &SyscomMenuConfig::return_to_menu);
+  menu_entry("endgame", &SyscomMenuConfig::game_end);
+  menu_entry("save", &SyscomMenuConfig::save);
+  menu_entry("load", &SyscomMenuConfig::load);
+
   const auto add_global_bool =
       [&](bool GlobalSystemConfig::* field, std::string_view setter,
           std::string_view reset, std::string_view getter) {

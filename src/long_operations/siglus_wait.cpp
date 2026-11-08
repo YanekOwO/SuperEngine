@@ -60,13 +60,16 @@ bool IsAdvanceInput(const Event& event) {
 
 class VmWaitBackend final : public IWaitBackend {
  public:
-  VmWaitBackend(sr::Scheduler& scheduler, EventSystem* events)
-      : scheduler_(scheduler), events_(events) {}
+  VmWaitBackend(sr::Scheduler& scheduler,
+                EventSystem* events,
+                std::function<bool()> active)
+      : scheduler_(scheduler), events_(events), active_(std::move(active)) {}
 
   std::unique_ptr<IWaitRegistration> Register(std::chrono::milliseconds delay,
                                               bool interrupt_on_input,
                                               Completion completion) override {
-    auto request = std::make_shared<Request>(std::move(completion));
+    auto request =
+        std::make_shared<Request>(std::move(completion), &scheduler_, active_);
     auto registration = std::make_unique<Registration>(request);
     if (events_ && interrupt_on_input)
       events_->AddListener(request);
@@ -82,11 +85,33 @@ class VmWaitBackend final : public IWaitBackend {
   }
 
  private:
-  struct Request final : EventListener {
-    explicit Request(Completion completion)
-        : completion(std::move(completion)) {}
+  struct Request final : EventListener, std::enable_shared_from_this<Request> {
+    Request(Completion completion,
+            sr::Scheduler* scheduler,
+            std::function<bool()> active)
+        : scheduler(scheduler),
+          active(std::move(active)),
+          completion(std::move(completion)) {}
+    sr::Scheduler* scheduler;
+    std::function<bool()> active;
 
     void Notify(WaitOutcome outcome) {
+      // Event dispatch may retain the listener after its registration and
+      // coroutine owner were destroyed. Eligibility can capture that owner.
+      if (!completion)
+        return;
+      if (active && !active()) {
+        if (outcome == WaitOutcome::Timeout) {
+          std::weak_ptr<Request> weak = shared_from_this();
+          scheduler->PushCallbackAfter(
+              [weak] {
+                if (auto request = weak.lock())
+                  request->Notify(WaitOutcome::Timeout);
+              },
+              std::chrono::milliseconds(5));
+        }
+        return;
+      }
       // Resumption may destroy this registration while its callback runs.
       if (auto notify = std::exchange(completion, {}))
         notify(outcome);
@@ -108,6 +133,7 @@ class VmWaitBackend final : public IWaitBackend {
 
   sr::Scheduler& scheduler_;
   EventSystem* events_;
+  std::function<bool()> active_;
 };
 
 // Eager polling has no external task owner. Only the scheduled callback owns
@@ -120,8 +146,10 @@ class PollingWait final : public EventListener,
               std::function<bool()> done,
               std::chrono::milliseconds interval,
               std::function<void()> on_key,
-              std::shared_ptr<sr::Promise> promise)
-      : scheduler_(scheduler),
+              std::shared_ptr<sr::Promise> promise,
+              NativeWaitScope scope)
+      : scope_(std::move(scope)),
+        scheduler_(scheduler),
         events_(events),
         done_(std::move(done)),
         interval_(std::max(interval, std::chrono::milliseconds::zero())),
@@ -145,7 +173,8 @@ class PollingWait final : public EventListener,
   }
 
   void OnEvent(std::shared_ptr<Event> event) override {
-    if (finished_ || !event || !IsAdvanceInput(*event))
+    if (finished_ || (scope_.active && !scope_.active()) ||
+        (scope_.alive && !scope_.alive()) || !event || !IsAdvanceInput(*event))
       return;
     finished_ = true;
     try {
@@ -169,6 +198,15 @@ class PollingWait final : public EventListener,
     if (finished_)
       return;
 
+    if (scope_.alive && !scope_.alive()) {
+      finished_ = true;
+      promise_->Reject("native wait cancelled by runtime reset");
+      return;
+    }
+    if (scope_.active && !scope_.active()) {
+      Schedule();
+      return;
+    }
     bool done = false;
     try {
       done = done_();
@@ -189,6 +227,7 @@ class PollingWait final : public EventListener,
     }
   }
 
+  NativeWaitScope scope_;
   sr::Scheduler& scheduler_;
   EventSystem* events_;
   std::function<bool()> done_;
@@ -203,9 +242,19 @@ class PollingWait final : public EventListener,
 struct FutureBackedCoroutineTask::State {
   State(sr::VM& vm,
         std::unique_ptr<LongOperation> operation,
-        EventSystem* events)
-      : operation(std::move(operation)),
-        backend(vm.scheduler_, events),
+        EventSystem* events,
+        std::function<bool()> active,
+        NativeWaitScope scope)
+      : scope(std::move(scope)),
+        operation(std::move(operation)),
+        backend(vm.scheduler_,
+                events,
+                [this, active = std::move(active)] {
+                  if (this->scope.alive && !this->scope.alive())
+                    return true;
+                  return (!active || active()) &&
+                         (!this->scope.active || this->scope.active());
+                }),
         waits(backend, [this](std::coroutine_handle<> h) { Drive(h); }) {
     if (!this->operation)
       throw std::invalid_argument("native coroutine operation is null");
@@ -222,6 +271,10 @@ struct FutureBackedCoroutineTask::State {
   }
 
   void Drive(std::coroutine_handle<> h) {
+    if (scope.alive && !scope.alive()) {
+      Cancel();
+      return;
+    }
     if (h) {
       h.resume();
     } else {
@@ -265,6 +318,7 @@ struct FutureBackedCoroutineTask::State {
   bool Done() const noexcept { return started && coroutine.Done(); }
 
   // Reverse destruction keeps operation and wait context alive for the frame.
+  NativeWaitScope scope;
   std::unique_ptr<LongOperation> operation;
   VmWaitBackend backend;
   WaitContext waits;
@@ -276,8 +330,14 @@ struct FutureBackedCoroutineTask::State {
 FutureBackedCoroutineTask::FutureBackedCoroutineTask(
     sr::VM& vm,
     std::unique_ptr<LongOperation> operation,
-    EventSystem* event_system)
-    : state_(std::make_unique<State>(vm, std::move(operation), event_system)) {}
+    EventSystem* event_system,
+    std::function<bool()> active,
+    NativeWaitScope scope)
+    : state_(std::make_unique<State>(vm,
+                                     std::move(operation),
+                                     event_system,
+                                     std::move(active),
+                                     std::move(scope))) {}
 
 FutureBackedCoroutineTask::~FutureBackedCoroutineTask() = default;
 
@@ -320,14 +380,20 @@ sr::Value MakePollingWaitFuture(sr::VM& vm,
                                 bool key_skip,
                                 EventSystem* event_system,
                                 std::chrono::milliseconds poll_interval,
-                                std::function<void()> on_key) {
-  if (!done || done())
+                                std::function<void()> on_key,
+                                NativeWaitScope scope) {
+  if (scope.alive && !scope.alive()) {
+    auto* future = vm.gc_->Allocate<sr::Future>();
+    future->promise->Reject("native wait cancelled by runtime reset");
+    return sr::Value(future);
+  }
+  if (!done || ((!scope.active || scope.active()) && done()))
     return MakeResolvedFuture(*vm.gc_);
 
   auto* future = vm.gc_->Allocate<sr::Future>();
   auto polling = std::make_shared<PollingWait>(
       vm.scheduler_, key_skip ? event_system : nullptr, std::move(done),
-      poll_interval, std::move(on_key), future->promise);
+      poll_interval, std::move(on_key), future->promise, std::move(scope));
   // Polling starts at creation. The external timer keeps its state alive;
   // making a future alone does not add new VM pending-work tracking.
   polling->Start();
@@ -337,9 +403,12 @@ sr::Value MakePollingWaitFuture(sr::VM& vm,
 sr::Future* PendingCoroutineTasks::MakeFuture(
     sr::VM& vm,
     std::unique_ptr<LongOperation> operation,
-    EventSystem* event_system) {
-  return MakeFuture(*vm.gc_, FutureBackedCoroutineTask(vm, std::move(operation),
-                                                       event_system));
+    EventSystem* event_system,
+    std::function<bool()> active,
+    NativeWaitScope scope) {
+  return MakeFuture(
+      *vm.gc_, FutureBackedCoroutineTask(vm, std::move(operation), event_system,
+                                         std::move(active), std::move(scope)));
 }
 
 sr::Future* PendingCoroutineTasks::MakeFuture(

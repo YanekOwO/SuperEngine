@@ -179,7 +179,7 @@ class SiglusDatabaseBindingTest : public ::testing::Test {
  protected:
   DatabaseFiles files;
   DatabaseFixture fixture;
-  SiglusMachine runtime;
+  SiglusRuntime runtime;
   Archive archive{std::string(sizeof(Pack_hdr), '\0'), xorkey_t{}};
 
   void SetUp() override {
@@ -188,21 +188,22 @@ class SiglusDatabaseBindingTest : public ::testing::Test {
     runtime.gameexe->SetStringAt("DATABASE.001", "sample");
     files.Write("dat/sample.dbs", fixture.File());
     runtime.databases = DatabaseList::Load(*runtime.gameexe, files.root);
-    runtime.vm = std::make_unique<sr::VM>(m6::VMFactory::Create());
-    runtime.loader =
-        std::make_unique<binding::Loader>(archive, *runtime.vm, true);
+    runtime.GameplayMachine().vm =
+        std::make_unique<sr::VM>(m6::VMFactory::Create());
+    runtime.GameplayMachine().loader = std::make_unique<binding::Loader>(
+        archive, *runtime.GameplayMachine().vm, true);
     for (const auto* name : {"0_memory", "flow", "1_database", "3_script"}) {
       const auto* bind = binding::SiglusBindingRegistry::Find(name);
       ASSERT_NE(bind, nullptr);
-      (*bind)(runtime);
+      (*bind)(runtime.GameplayMachine());
     }
   }
 
   void Run(std::string source) {
-    m6::CompilerPipeline compiler(runtime.vm->gc_);
+    m6::CompilerPipeline compiler(runtime.GameplayMachine().vm->gc_);
     compiler.compile(m6::SourceBuffer::Create(std::move(source), "<database>"));
     ASSERT_TRUE(compiler.Ok()) << compiler.FormatErrors();
-    runtime.vm->Evaluate(compiler.Get());
+    runtime.GameplayMachine().vm->Evaluate(compiler.Get());
   }
 
   // Compile actual Siglus bytecode through the loader, rather than a hand-built
@@ -241,8 +242,9 @@ class SiglusDatabaseBindingTest : public ::testing::Test {
     scene.AppendInt(1);
     scene.AppendInt(static_cast<int>(result));
     scene.AddTo(archive);
-    (*runtime.vm->globals_)[name] =
-        binding::ResolveSceneCommand(*runtime.loader, name, name);
+    (*runtime.GameplayMachine().vm->globals_)[name] =
+        binding::ResolveSceneCommand(*runtime.GameplayMachine().loader, name,
+                                     name);
   }
 };
 
@@ -251,7 +253,8 @@ TEST_F(SiglusDatabaseBindingTest,
   // A serialized title lookup passes through parsing, compilation, and binding.
   InstallRead("title", 1, 42, 8);
   Run("result = title();");
-  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "AbCde");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(),
+            "AbCde");
 }
 
 TEST_F(SiglusDatabaseBindingTest, NumericReadExecutesThroughParserAndRuntime) {
@@ -259,7 +262,8 @@ TEST_F(SiglusDatabaseBindingTest, NumericReadExecutesThroughParserAndRuntime) {
   // pipeline.
   InstallRead("number", 0, 42, 3);
   Run("result = number();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(-17));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(-17));
 }
 
 TEST_F(SiglusDatabaseBindingTest, FailedNumericReadProducesZeroResult) {
@@ -267,7 +271,7 @@ TEST_F(SiglusDatabaseBindingTest, FailedNumericReadProducesZeroResult) {
   InstallRead("present", 0, 42, 3);
   InstallRead("missing", 0, 123, 3);
   Run("previous = present(); result = missing();");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(0));
 }
 
 TEST_F(SiglusDatabaseBindingTest, FailedStringReadProducesEmptyResult) {
@@ -275,14 +279,15 @@ TEST_F(SiglusDatabaseBindingTest, FailedStringReadProducesEmptyResult) {
   InstallRead("present", 1, 42, 8);
   InstallRead("missing", 1, 123, 8);
   Run("previous = present(); result = missing();");
-  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(), "");
 }
 
 TEST_F(SiglusDatabaseBindingTest, ComputedIndexExecutesAtRuntime) {
   // A command argument chooses the database slot dynamically.
   InstallRead("number", 0, 42, 3, true);
   Run("result = number(1);");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(-17));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(-17));
 }
 
 TEST_F(SiglusDatabaseBindingTest, OutOfRangeComputedIndexRaisesEngineError) {
@@ -295,43 +300,45 @@ TEST_F(SiglusDatabaseBindingTest, EmptySlotReadProducesDefaultResult) {
   // Dynamically selecting an unnamed database returns a valid typed default.
   InstallRead("number", 0, 42, 3, true);
   Run("result = number(0);");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(0));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(0));
 }
 
 TEST_F(SiglusDatabaseBindingTest, ListSizeIncludesEmptySlots) {
   // The global fixed-size list counts named and unnamed slots.
   Run(R"(result = database.size();)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(3));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(3));
 }
 
 TEST_F(SiglusDatabaseBindingTest, ItemCheckExecutesThroughBinding) {
   // A database item check reports the stored item ID.
   Run(R"(result = database[1].check_item(42);)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(1));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(1));
 }
 
 TEST_F(SiglusDatabaseBindingTest, ColumnCheckExecutesThroughBinding) {
   // A database column check reports the string type.
   Run(R"(result = database[1].check_column(8);)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(2));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(2));
 }
 
 TEST_F(SiglusDatabaseBindingTest, NumericSearchExecutesThroughBinding) {
   // Numeric search returns the first matching stored item ID.
   Run(R"(result = database[1].find_num(3, 5);)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(7));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"), sr::Value(7));
 }
 
 TEST_F(SiglusDatabaseBindingTest, FoldedStringSearchExecutesThroughBinding) {
   // String search folds ASCII case in the native binding.
   Run(R"(result = database[1].find_str(8, "abcDE");)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
 }
 
 TEST_F(SiglusDatabaseBindingTest, ExactStringSearchExecutesThroughBinding) {
   // Exact string search returns its first matching item ID.
   Run(R"(result = database[1].find_str_real(8, "AbCde");)");
-  EXPECT_EQ(runtime.vm->globals_->at("result"), sr::Value(42));
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result"),
+            sr::Value(42));
 }
 
 TEST_F(SiglusDatabaseBindingTest, SceneChangesKeepDatabaseContents) {
@@ -339,7 +346,8 @@ TEST_F(SiglusDatabaseBindingTest, SceneChangesKeepDatabaseContents) {
   InstallRead("first", 0, 42, 3);
   InstallRead("second", 1, 42, 8);
   Run("before = first(); result = second();");
-  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "AbCde");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(),
+            "AbCde");
 }
 
 TEST_F(SiglusDatabaseBindingTest,
@@ -350,7 +358,8 @@ TEST_F(SiglusDatabaseBindingTest,
   for (auto& reset : runtime.reset_local_memory)
     reset();
   Run("result = title();");
-  EXPECT_EQ(runtime.vm->globals_->at("result").Str(), "AbCde");
+  EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("result").Str(),
+            "AbCde");
 }
 
 TEST_F(SiglusDatabaseBindingTest,
@@ -362,7 +371,7 @@ TEST_F(SiglusDatabaseBindingTest,
   for (int value : {0, 0, 0, static_cast<int>(Type::Int)})
     scene.AppendInt(value);
   const auto id = scene.AddTo(archive);
-  EXPECT_NO_THROW(runtime.loader->Load(id));
+  EXPECT_NO_THROW(runtime.GameplayMachine().loader->Load(id));
 }
 
 TEST_F(SiglusDatabaseBindingTest,
@@ -376,8 +385,9 @@ TEST_F(SiglusDatabaseBindingTest,
   for (int value : {0, 0, 0, static_cast<int>(Type::Int)})
     scene.AppendInt(value);
   scene.AddTo(archive);
-  (*runtime.vm->globals_)["unsupported"] = binding::ResolveSceneCommand(
-      *runtime.loader, "unsupported", "unsupported");
+  (*runtime.GameplayMachine().vm->globals_)["unsupported"] =
+      binding::ResolveSceneCommand(*runtime.GameplayMachine().loader,
+                                   "unsupported", "unsupported");
   try {
     Run("unsupported();");
     FAIL() << "expected checked execution error";

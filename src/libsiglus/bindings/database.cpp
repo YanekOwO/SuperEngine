@@ -31,7 +31,7 @@
 namespace libsiglus::binding {
 
 void BindDatabase(SiglusMachine& runtime) {
-  if (!runtime.databases)
+  if (!runtime.host().databases)
     throw std::runtime_error("database binding requires initialized databases");
   srbind::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   struct Handle {
@@ -65,7 +65,7 @@ void BindDatabase(SiglusMachine& runtime) {
     std::shared_ptr<const DatabaseList> list;
   };
   srbind::class_<ListHandle> list_class(m, "DatabaseList");
-  auto list = list_class.inst("database", runtime.databases);
+  auto list = list_class.inst("database", runtime.host().databases);
   list.def("size", [](const ListHandle* h) { return h->list->size(); });
   list.def("__getitem__", [table](const ListHandle* h, int index) mutable {
     return serilang::Value(table.make_inst(h->list->At(index)));

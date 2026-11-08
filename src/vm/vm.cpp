@@ -50,6 +50,8 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include <utility>
+
 namespace serilang {
 
 using helper::pop;
@@ -205,7 +207,10 @@ class VM::ExecutionScope {
       vm_.execution_warned_ = false;
     }
   }
-  ~ExecutionScope() { --vm_.execution_depth_; }
+  ~ExecutionScope() {
+    if (--vm_.execution_depth_ == 0)
+      vm_.host_yield_requested_ = false;
+  }
 
  private:
   VM& vm_;
@@ -276,6 +281,18 @@ Fiber* VM::ScheduleExecute(Value callable) {
   return fiber;
 }
 
+void VM::ReplaceCurrentCall(Fiber& fiber, Value destination) {
+  if (fiber.frames.empty())
+    throw RuntimeError("Cannot replace an empty call stack");
+  const auto base = fiber.frames.back().bp;
+  const auto mode = fiber.frames.back().result_mode;
+  fiber.frames.pop_back();
+  fiber.op_stack.resize(base);
+  fiber.op_stack.push_back(destination);
+  destination.Call(*this, fiber, 0, 0, mode);
+  fiber.native_control_transfer = true;
+}
+
 void VM::InvokeUntilBlocked(Function& callback, std::vector<Value> arguments) {
   InvokeUntilBlocked(Value(&callback), std::move(arguments));
 }
@@ -287,9 +304,9 @@ void VM::InvokeUntilBlocked(Value callback, std::vector<Value> arguments) {
   try {
     if (fiber->state == FiberState::New)
       fiber->state = FiberState::Running;
-    while (!stop_requested_ && fiber->IsRunning()) {
+    while (!stop_requested_ && !host_yield_requested_ && fiber->IsRunning()) {
       CheckExecutionWatchdog(fiber);
-      if (stop_requested_)
+      if (stop_requested_ || host_yield_requested_)
         break;
       ExecuteFiber(fiber);
     }
@@ -311,6 +328,8 @@ void VM::InvokeUntilBlocked(Value callback, std::vector<Value> arguments) {
 
   if (fiber->state == FiberState::Dead)
     ++dead_fibre_count_;
+  else if (!stop_requested_ && host_yield_requested_ && fiber->IsRunning())
+    scheduler_.PushTask(fiber);
 
   // The caller handles an inline error. The promise's observation count keeps
   // the later dead-fiber sweep from reporting that same failure a second time.
@@ -349,13 +368,14 @@ void VM::CollectGarbage() {
 Value VM::AddTrack(TempValue&& t) { return gc_->TrackValue(std::move(t)); }
 
 Value VM::Run() {
-  while (!stop_requested_ && HasPendingWork()) {
+  ExecutionScope execution(*this);
+  while (!stop_requested_ && !host_yield_requested_ && HasPendingWork()) {
     RunReadyUntilBlocked();
-    if (stop_requested_ || !HasPendingWork())
+    if (stop_requested_ || host_yield_requested_ || !HasPendingWork())
       break;
     if (auto pump = host_event_pump_)
       pump();
-    if (stop_requested_)
+    if (stop_requested_ || host_yield_requested_)
       break;
     scheduler_.WaitForNext(scheduler_.GetTime() +
                            std::chrono::milliseconds(16));
@@ -383,15 +403,15 @@ void VM::SeedNewFibres() {
 Value VM::RunReadyUntilBlocked() {
   ExecutionScope execution(*this);
   SeedNewFibres();
-  while (!stop_requested_) {
+  while (!stop_requested_ && !host_yield_requested_) {
     CheckExecutionWatchdog();
-    if (stop_requested_)
+    if (stop_requested_ || host_yield_requested_)
       break;
 
     // Interleave timer callbacks with fiber quanta so a zero-delay timer chain
     // cannot monopolize execution or prevent watchdog cancellation checks.
     const bool timer_ran = scheduler_.RunOneDueTimer();
-    if (stop_requested_)
+    if (stop_requested_ || host_yield_requested_)
       break;
 
     if (Fiber* next = scheduler_.NextTask()) {
@@ -502,7 +522,9 @@ void VM::Return(Fiber& f) {
 void VM::ExecuteFiber(Fiber* fib) {
   fib->state = FiberState::Running;
 
-  for (int i = 0; i < 256 && !stop_requested_ && !fib->frames.empty(); ++i) {
+  for (int i = 0; i < 256 && !stop_requested_ && !host_yield_requested_ &&
+                  !fib->frames.empty();
+       ++i) {
     auto& frame = fib->frames.back();
     auto* chunk = frame.fn->chunk;
     auto& ip = frame.ip;
@@ -940,10 +962,12 @@ void VM::ExecuteFiber(Fiber* fib) {
           }
 
           fib->state = FiberState::Suspended;
-          auto cb = [lifetime = std::weak_ptr(callback_lifetime_), vm = this,
-                     fib, awaited_fib = awaited.Get_if<Fiber>()](
+          auto cb = [lifetime = std::weak_ptr(callback_lifetime_),
+                     completion = std::weak_ptr(fib->completion_promise),
+                     vm = this, fib, awaited_fib = awaited.Get_if<Fiber>()](
                         const expected<Value, std::string>& result) {
-            if (lifetime.expired())
+            const auto owner = completion.lock();
+            if (lifetime.expired() || !owner || owner->HasResult())
               return;
             if (result.has_value())
               push(fib->op_stack, result.value());
@@ -1108,7 +1132,7 @@ void VM::SetHostEventPump(std::function<void()> pump) {
 }
 
 void VM::CheckExecutionWatchdog(const Fiber* fiber) {
-  if (stop_requested_)
+  if (stop_requested_ || host_yield_requested_)
     return;
   const auto now = scheduler_.GetTime();
   if (!execution_warned_ &&

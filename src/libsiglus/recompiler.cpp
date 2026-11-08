@@ -1085,13 +1085,10 @@ void Recompiler::emit_elm_root(const elm::Arg& r) {
   // (arg_i) or (var_i)
 }
 void Recompiler::emit_elm_root(const elm::Farcall& r) {
-  emit_load_global("__builtin_farcall");
+  emit_load_global(r.extended ? "__builtin_excall" : "__builtin_farcall");
   emit_val(r.scn_name), emit_val(r.zlabel);
-  if (r.extended)
-    emit_const(1);
-  emit(sr::Call{.argcnt = static_cast<uint8_t>(r.extended ? 3 : 2),
-                .kwargcnt = 0});
-  // (farcall, scn, z) -> (fn)
+  if (!r.extended)
+    emit(sr::Call{.argcnt = 2, .kwargcnt = 0});
 
   for (auto const& it : r.intargs)
     emit_val(it);
@@ -1099,7 +1096,9 @@ void Recompiler::emit_elm_root(const elm::Farcall& r) {
   for (auto const& it : r.strargs)
     emit_val(it);
   emit(sr::MakeList{.nelms = static_cast<uint32_t>(r.strargs.size())});
-  emit(sr::Call{.argcnt = 2});
+  emit(sr::Call{.argcnt = static_cast<uint8_t>(r.extended ? 4 : 2)});
+  if (r.extended)
+    emit(sr::Await{});
 }
 
 void Recompiler::emit_elm_node(const elm::Member& nd) {

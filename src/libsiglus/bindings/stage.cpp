@@ -23,6 +23,8 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "srbind/srbind.hpp"
+
 #include "libsiglus/bindings/bootstrap.hpp"
 #include "libsiglus/bindings/util.hpp"
 
@@ -34,10 +36,10 @@ void BindStage(SiglusMachine& runtime) {
   std::string src = std::format(kLazyArrayClass, "LazyArray");
   src += R"(
 class StageLayer {
-  fn __init__(self, layer = 0) {
-    self.object = ObjectArray(layer);
-    self.mwnd = MwndArray(layer);
-    self.objgroup = GroupArray(layer);
+  fn __init__(self, layer = 0, owner = 0) {
+    self.object = ObjectArray(layer, owner);
+    self.mwnd = MwndArray(layer, owner);
+    self.objgroup = GroupArray(layer, owner);
 
     self.btnsel = nil;
     try {
@@ -53,23 +55,24 @@ class StageLayer {
       print("Siglus stage.world binding unavailable:", e);
     }
 
-    self.effect = EffectArray(layer);
-    self.quake = QuakeArray(layer);
+    self.effect = EffectArray(layer, owner);
+    self.quake = QuakeArray(layer, owner);
   }
   fn create_mwnd(self, count) { self.mwnd.resize(count); }
 }
 
 class Stage {
-  fn __init__(self) {
-    self.back = StageLayer(1);
-    self.front = StageLayer(0);
-    self.next = StageLayer(2);
+  fn __init__(self, owner = 0) {
+    self.back = StageLayer(1, owner);
+    self.front = StageLayer(0, owner);
+    self.next = StageLayer(2, owner);
     self.storage = [ self.back, self.front, self.next ];
   }
   fn __getitem__(self, idx) { return self.storage[idx]; }
 }
 
 stage = Stage();
+__excall_stage = Stage(1);
 stage_back = stage.back;
 stage_front = stage.front;
 stage_next = stage.next;

@@ -23,8 +23,10 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "srbind/srbind.hpp"
+
 #include "core/input.hpp"
-#include "libsiglus/siglus_machine.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "systems/event_system.hpp"
 
 #include <memory>
@@ -37,15 +39,19 @@ void BindInput(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;
   sb::module_ m(vm, "input");
 
-  std::shared_ptr<InputListener> listener = std::make_shared<InputListener>();
-  runtime.input_event_listener = listener;
-  runtime.system->event().AddListener(19, listener);
-
-  auto script = std::make_shared<ScriptInput>();
-  runtime.script_input = script;
-  runtime.system->event().AddListener(19, script);
+  auto& host = runtime.host();
+  if (!host.input_event_listener) {
+    host.input_event_listener = std::make_shared<InputListener>();
+    host.system->event().AddListener(19, host.input_event_listener);
+  }
+  if (!host.script_input) {
+    host.script_input = std::make_shared<ScriptInput>();
+    host.system->event().AddListener(19, host.script_input);
+  }
+  auto listener = host.input_event_listener;
+  auto script = host.script_input;
   runtime.reset_local_memory.emplace_back(
-      [listener, script, events = &runtime.system->event()] {
+      [listener, script, events = &runtime.host().system->event()] {
         listener->ReleaseAll();
         script->ReleaseAll();
         events->DiscardDeferredInput();
@@ -67,7 +73,7 @@ void BindInput(SiglusMachine& runtime) {
 
   mouse.def("wheel", [script] { return script->MouseWheel(); });
   mouse.def("set_pos", [&runtime](int x, int y) {
-    runtime.presenter->WarpMouse(Point(x, y));
+    runtime.host().presenter->WarpMouse(Point(x, y));
   });
 
   using Source = ScriptInput::Source;
