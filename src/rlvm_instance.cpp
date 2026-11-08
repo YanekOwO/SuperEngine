@@ -59,10 +59,10 @@ void RLVMInstance::SetPlatformImplementor(
   platform_implementor_ = impl;
 }
 
-int RLVMInstance::Main(const std::filesystem::path& gameroot) {
+int RLVMInstance::Main(const GameLayout& game) {
   std::unique_ptr<libreallive::GameLoader> loader = nullptr;
   try {
-    loader = std::make_unique<libreallive::GameLoader>(gameroot, start_scene_,
+    loader = std::make_unique<libreallive::GameLoader>(game, start_scene_,
                                                        fast_forward_);
     machine_ = loader->machine_;
   } catch (std::exception& e) {

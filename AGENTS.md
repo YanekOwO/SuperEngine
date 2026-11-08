@@ -22,7 +22,7 @@ Debug builds include unit tests. Release builds omit tests:
 ```sh
 cmake --preset release
 cmake --build --preset release -j $(nproc)
-./build/release/rlvm --engine siglus /path/to/game
+./build/release/rlvm /path/to/game
 ```
 
 Build trees live under `build/<preset>/`. Adjust parallelism to available memory.

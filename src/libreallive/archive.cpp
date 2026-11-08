@@ -31,9 +31,12 @@
 //
 // -----------------------------------------------------------------------
 
+#include <algorithm>
 #include <boost/algorithm/string.hpp>
+#include <charconv>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 #include "encodings/codepage.hpp"
@@ -51,8 +54,13 @@ namespace libreallive {
 Archive::Archive(const fs::path& filepath, const std::string& regname)
     : regname_(Codepage::Create(Encoding::cp932)->ConvertTo_utf8(regname)),
       second_level_xor_key_(NULL) {
-  ReadTOC(filepath);
-  ReadOverrides(filepath);
+  if (fs::is_directory(filepath)) {
+    ReadOverrides(filepath);
+  } else {
+    ReadTOC(filepath);
+    ReadOverrides(filepath.parent_path().empty() ? fs::path(".")
+                                                 : filepath.parent_path());
+  }
   FindXorKey();
 }
 
@@ -75,7 +83,11 @@ Scenario* Archive::GetScenario(int index) {
   }
 }
 
-int Archive::GetFirstScenarioID() const { return toc_.cbegin()->first; }
+int Archive::GetFirstScenarioID() const {
+  if (toc_.empty())
+    throw std::runtime_error("No RealLive scenarios found");
+  return toc_.cbegin()->first;
+}
 
 int Archive::GetProbableEncodingType() const {
   // Directly create Header objects instead of Scenarios. We don't want to
@@ -105,22 +117,31 @@ void Archive::ReadTOC(const fs::path& filepath) {
   }
 }
 
-void Archive::ReadOverrides(const fs::path& filepath) {
+void Archive::ReadOverrides(const fs::path& directory) {
   // Iterate over all files in the directory and override the table of contents
-  // if there is a free SEENXXXX.TXT file.
-  const fs::path seen_dir = filepath.parent_path();
+  // if there is a loose numbered SEEN file.
   fs::directory_iterator end;
-  for (fs::directory_iterator it(seen_dir); it != end; ++it) {
+  for (fs::directory_iterator it(directory); it != end; ++it) {
+    if (!it->is_regular_file())
+      continue;
     std::string filename = it->path().filename().string();
-    if (filename.size() == 12 && istarts_with(filename, "seen") &&
-        iends_with(filename, ".txt") && isdigit(filename[4]) &&
-        isdigit(filename[5]) && isdigit(filename[6]) && isdigit(filename[7])) {
+    if (filename.size() > 8 && istarts_with(filename, "seen") &&
+        iends_with(filename, ".txt")) {
+      const auto digits =
+          std::string_view(filename).substr(4, filename.size() - 8);
+      if (!std::all_of(digits.begin(), digits.end(),
+                       [](char c) { return c >= '0' && c <= '9'; }))
+        continue;
+      int index;
+      const auto parsed =
+          std::from_chars(digits.data(), digits.data() + digits.size(), index);
+      if (parsed.ec != std::errc{})
+        continue;
       FilePos filepos;
-      filepos.file_ = std::make_shared<MappedFile>(filename);
+      filepos.file_ = std::make_shared<MappedFile>(it->path());
       filepos.position = 0;
       filepos.length = filepos.file_->Size();
 
-      int index = std::stoi(filename.substr(4, 4));
       toc_[index] = filepos;
     }
   }

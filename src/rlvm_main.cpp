@@ -37,7 +37,7 @@
 #include "platforms/platform_factory.hpp"
 #include "rlvm_instance.hpp"
 #include "sgvm_instance.hpp"
-#include "utilities/file.hpp"
+#include "utilities/game_detection.hpp"
 #include "version.h"
 
 namespace po = boost::program_options;
@@ -105,8 +105,7 @@ int main(int argc, char* argv[]) {
           ->implicit_value(true, "true"),
       "Enable debug instrumentation (true/false)")(
       "hook", po::value<std::string>(),
-      "Run a script before the game payload (Siglus only).")(
-      "engine", po::value<std::string>()->default_value("reallive"));
+      "Run a script before the game payload (Siglus only).");
 
   // Declare the final option to be game-root
   po::options_description hidden("Hidden");
@@ -200,12 +199,6 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  const std::string engine = vm["engine"].as<std::string>();
-  if (vm.count("hook") && engine != "siglus" && engine != "Siglus") {
-    std::cerr << "ERROR: --hook requires --engine siglus." << std::endl;
-    return -1;
-  }
-
   // This is where we need platform implementor to pop up platform-specific
   // dialogue if we need to ask user for providing the path.
   PlatformImpl_t platform_impl = nullptr;
@@ -223,42 +216,54 @@ int main(int argc, char* argv[]) {
   // Select game root directory.
   if (vm.count("game-root")) {
     gamerootPath = vm["game-root"].as<std::string>();
-
-    if (!fs::exists(gamerootPath)) {
-      std::cerr << "ERROR: Path '" << gamerootPath << "' does not exist."
-                << std::endl;
-      return -1;
-    }
-
-    if (!fs::is_directory(gamerootPath)) {
-      std::cerr << "ERROR: Path '" << gamerootPath << "' is not a directory."
-                << std::endl;
-      return -1;
-    }
-
-    // Some games hide data in a lower subdirectory.  A little hack to
-    // make these behave as expected...
-    if (CorrectPath(gamerootPath, "Gameexe.ini").empty()) {
-      if (!CorrectPath(gamerootPath / "KINETICDATA", "Gameexe.ini").empty()) {
-        gamerootPath /= "KINETICDATA/";
-      } else if (!CorrectPath(gamerootPath / "REALLIVEDATA", "Gameexe.ini")
-                      .empty()) {
-        gamerootPath /= "REALLIVEDATA/";
-      } else {
-        std::cerr << "WARNING: Path '" << gamerootPath << "' may not contain a "
-                  << "RealLive game." << std::endl;
-      }
-    }
   } else {
+    if (!platform_impl) {
+      std::cerr << "ERROR: Specify a game directory on the command line."
+                << std::endl;
+      return -1;
+    }
     gamerootPath = platform_impl->SelectGameDirectory();
     if (gamerootPath.empty())
       return -1;
   }
 
+  GameLayout game;
+  try {
+    if (!fs::exists(gamerootPath)) {
+      std::cerr << "ERROR: Path '" << gamerootPath << "' does not exist."
+                << std::endl;
+      return -1;
+    }
+    if (!fs::is_directory(gamerootPath)) {
+      std::cerr << "ERROR: Path '" << gamerootPath << "' is not a directory."
+                << std::endl;
+      return -1;
+    }
+    game = DetectGameRoot(gamerootPath);
+  } catch (const fs::filesystem_error& e) {
+    std::cerr << "ERROR: Could not inspect game directory: " << e.what()
+              << std::endl;
+    return -1;
+  }
+  if (game.engine == EngineKind::Unknown) {
+    std::cerr << "ERROR: Could not detect a RealLive or Siglus game in '"
+              << gamerootPath << "'." << std::endl;
+    for (const auto& reason : game.evidence)
+      std::cerr << "  " << reason << std::endl;
+    std::cerr << "Select a directory containing Scene.pck or Gameexe.dat, or "
+                 "Gameexe.ini with RealLive scenarios."
+              << std::endl;
+    return -1;
+  }
+  if (vm.count("hook") && game.engine != EngineKind::Siglus) {
+    std::cerr << "ERROR: --hook requires a Siglus game." << std::endl;
+    return -1;
+  }
+
   // -----------------------------------------------------------------------
   // Create game instance
 
-  if (engine == "reallive" || engine == "Reallive") {
+  if (game.engine == EngineKind::RealLive) {
     RLVMInstance instance;
     instance.SetPlatformImplementor(platform_impl);
     instance.SetFastForward(vm.count("fast-forward"));
@@ -269,8 +274,8 @@ int main(int argc, char* argv[]) {
     if (vm.count("scene"))
       instance.SetStartScene(vm["scene"].as<int>());
 
-    return instance.Main(gamerootPath);
-  } else if (engine == "siglus" || engine == "Siglus") {
+    return instance.Main(game);
+  } else if (game.engine == EngineKind::Siglus) {
     SgvmInstance instance;
     instance.platform_implementor_ = platform_impl;
     instance.fast_forward_ = vm.count("fast-forward");
@@ -283,10 +288,7 @@ int main(int argc, char* argv[]) {
     instance.debug_ = vm["debug"].as<bool>();
     instance.trace_ = trace_options.Any();
 
-    return instance.Main(gamerootPath);
-  } else {
-    std::cerr << "Couldn't recongnize engine: " << engine;
-    return -1;
+    return instance.Main(game.root);
   }
 
   return 0;

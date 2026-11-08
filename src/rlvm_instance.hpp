@@ -34,6 +34,7 @@
 #include <vector>
 
 class Gameexe;
+struct GameLayout;
 class Platform;
 class RLMachine;
 class System;
@@ -50,7 +51,7 @@ class RLVMInstance {
   RLVMInstance();
   ~RLVMInstance();
 
-  int Main(const std::filesystem::path& gamepath);
+  int Main(const GameLayout& game);
 
   void SetStartScene(int scene_id) { start_scene_ = scene_id; }
   void SetCustomFont(std::string font) { custom_font_ = std::move(font); }

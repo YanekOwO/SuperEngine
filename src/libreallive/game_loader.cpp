@@ -40,6 +40,7 @@
 #include "systems/sdl/graphics_backend.hpp"
 #include "systems/system.hpp"
 #include "utilities/file.hpp"
+#include "utilities/game_detection.hpp"
 #include "utilities/graphics.hpp"
 
 #include <stdexcept>
@@ -66,21 +67,23 @@ void CheckBadEngine(const std::filesystem::path& gamerootPath,
 
 }  // namespace
 
-GameLoader::GameLoader(fs::path gameroot,
+GameLoader::GameLoader(const GameLayout& game,
                        std::optional<int> start_scene,
                        bool fast_forward) {
-  fs::path gameexePath = CorrectPath(gameroot, "Gameexe.ini");
-  fs::path seenPath = CorrectPath(gameroot, "Seen.txt");
+  const auto& gameroot = game.root;
+  const auto& seenPath =
+      game.seen_archive.empty() ? game.seen_directory : game.seen_archive;
 
   // Check for VisualArt's older engines, which we can't emulate:
   CheckBadEngine(gameroot, avg32_exes, "Can't run AVG32 games");
 
   gameexe_ = std::make_shared<Gameexe>();
-  gameexe_->LoadFromFile(gameexePath);
+  if (const auto loaded = gameexe_->LoadFromFile(game.gameexe_ini); !loaded)
+    throw std::runtime_error(loaded.error().GetDebugString());
   (*gameexe_)("__GAMEPATH") = gameroot.string();
 
   archive_ = std::make_shared<libreallive::Archive>(
-      seenPath.string(), (*gameexe_)("REGNAME").Str().value_or(""));
+      seenPath, (*gameexe_)("REGNAME").Str().value_or(""));
 
   auto stage =
       std::make_unique<Stage>((*gameexe_)("OBJECT_MAX").Int().value_or(256));

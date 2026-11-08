@@ -25,7 +25,7 @@
 #include "platforms/sdl/sdl_implementor.hpp"
 
 #include "platforms/platform_factory.hpp"
-#include "utilities/file.hpp"
+#include "utilities/game_detection.hpp"
 #include "utilities/gettext.hpp"
 
 #include <SDL3/SDL.h>
@@ -116,20 +116,20 @@ fs::path SdlImplementor::SelectGameDirectory() {
     if (dir.empty())
       return {};
 
-    auto detectGame = [](const fs::path& dir) -> bool {
-      if (!CorrectPath(dir, "Gameexe.ini").empty())  // likely reallive
-        return true;
-      if (!CorrectPath(dir, "Gameexe.dat").empty())  // likely siglus
-        return true;
-      return false;
-    };
-    if (detectGame(dir))
-      return dir;
+    try {
+      const auto game = DetectGameRoot(dir);
+      if (game.engine != EngineKind::Unknown)
+        return game.root;
+    } catch (const fs::filesystem_error& e) {
+      std::cerr << "Could not inspect game directory: " << e.what()
+                << std::endl;
+    }
 
     if (!AskUserPrompt(
             _("Select Game Directory"),
             dir.string() +
-                _(" doesn't contain a Gameexe.ini or Gameexe.dat. Try again?"),
+                _(" doesn't contain recognizable RealLive or Siglus game "
+                  "files. Try again?"),
             _("Retry"), _("Cancel")))
       return {};
   }

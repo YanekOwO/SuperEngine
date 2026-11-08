@@ -32,13 +32,14 @@ class System;
 class RLMachine;
 
 class Gameexe;
+struct GameLayout;
 namespace libreallive {
 
 class Archive;
 
 class GameLoader {
  public:
-  GameLoader(std::filesystem::path gameroot,
+  GameLoader(const GameLayout& game,
              std::optional<int> start_scene,
              bool fast_forward = false);
 

@@ -70,7 +70,7 @@ For Siglus games, use `--hook` to run a custom script on the game's machine
 before loading the start scene:
 
 ```bash
-rlvm --engine siglus --hook hooks.sr /path/to/GameDirectory/
+rlvm --hook hooks.sr /path/to/GameDirectory/
 ```
 
 The hook's globals, state changes, and debug registrations remain available to

@@ -49,14 +49,14 @@ struct XorKey;
 
 namespace fs = std::filesystem;
 
-// Interface to a loaded SEEN.TXT file.
+// Interface to an archived or loose collection of RealLive scenarios.
 class Archive {
  public:
   Archive() = default;
   virtual ~Archive();
 
-  // Creates an interface to a SEEN.TXT file. Uses |regname| to look up
-  // per-game xor key for newer games.
+  // Accepts a scenario archive file or a directory containing loose scenes.
+  // Uses |regname| to look up per-game xor keys for newer games.
   Archive(const fs::path& filename, const std::string& regname);
 
   // Returns a specific scenario by |index| number or NULL if none exist.
@@ -75,7 +75,7 @@ class Archive {
 
   void ReadTOC(const fs::path& filepath);
 
-  void ReadOverrides(const fs::path& filepath);
+  void ReadOverrides(const fs::path& directory);
 
   void FindXorKey();
 
