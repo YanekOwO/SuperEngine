@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/database.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/database.hpp"
 #include "srbind/module.hpp"
@@ -38,6 +39,24 @@ void BindDatabase(SiglusMachine& runtime) {
 
   srbind::class_<DatabaseHandle> table(m, "Database");
   RegisterBindingClass(runtime, table);
+  table.def_serialization(
+      [&runtime](const DatabaseHandle& h, serilang::ObjectWriter& out) {
+        if (runtime.host().databases)
+          for (int i = 0; i < runtime.host().databases->size(); ++i)
+            if (runtime.host().databases->At(i) == h.table) {
+              out.Put(i);
+              return;
+            }
+        throw std::runtime_error("saved database has no archive identity");
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        if (!host.databases)
+          throw std::runtime_error("saved database unavailable");
+        return std::make_unique<DatabaseHandle>(
+            host.databases->At(in.Get<int>()));
+      });
+
   table.def("get_num", [](const DatabaseHandle* h, int item, int column) {
     return h->table->GetNum(item, column);
   });
@@ -64,6 +83,13 @@ void BindDatabase(SiglusMachine& runtime) {
 
   srbind::class_<DatabaseListHandle> list_class(m, "DatabaseList");
   RegisterBindingClass(runtime, list_class);
+  list_class.def_serialization(
+      [](const DatabaseListHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<DatabaseListHandle>(host.databases);
+      });
+
   auto list = list_class.inst("database", runtime.host().databases);
   list.def("size", [](const DatabaseListHandle* h) { return h->list->size(); });
   list.def("__getitem__",

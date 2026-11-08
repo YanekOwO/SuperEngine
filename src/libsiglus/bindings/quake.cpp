@@ -23,10 +23,12 @@
 
 #include "libsiglus/bindings/quake.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/quake.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
@@ -114,7 +116,10 @@ static sr::Value WaitQuake(QuakeHandle* h,
   return lop::MakePollingWaitFuture(
       vm, std::move(done), key_skip,
       system ? system->event_ptr().get() : nullptr,
-      std::chrono::milliseconds(5), std::move(on_key), std::move(scope));
+      std::chrono::milliseconds(5), std::move(on_key),
+      DescribePollingWait(
+          std::move(scope),
+          {.kind = PollingWaitDescription::Kind::Quake, .quake = h->quake}));
 }
 
 void BindQuake(SiglusMachine& runtime) {
@@ -133,6 +138,17 @@ void BindQuake(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<QuakeHandle> quake(m, "Quake");
   RegisterBindingClass(runtime, quake);
+  quake.def_serialization(
+      [](const QuakeHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.quake);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto quake = in.Get<std::shared_ptr<QuakeState>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<QuakeHandle>(quake, owner);
+      });
+
   quake.def(sb::init([screen_quakes, stage_state](int layer, int index) {
               std::shared_ptr<QuakeState> q;
               if (layer == -1) {
@@ -231,6 +247,17 @@ void BindQuake(SiglusMachine& runtime) {
 
   sb::class_<QuakeListHandle> quake_array(m, "QuakeArray");
   RegisterBindingClass(runtime, quake_array);
+  quake_array.def_serialization(
+      [](const QuakeListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.layer);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto layer = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<QuakeListHandle>(layer, owner);
+      });
+
   quake_array.add_gc_root(quake);
   quake_array.def(
       sb::init([](int layer, int owner) {
@@ -252,6 +279,13 @@ void BindQuake(SiglusMachine& runtime) {
 
   sb::class_<ScreenQuakeListHandle> screen_quake_array(m, "ScreenQuakeArray");
   RegisterBindingClass(runtime, screen_quake_array);
+  screen_quake_array.def_serialization(
+      [](const ScreenQuakeListHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<ScreenQuakeListHandle>(host.screen_quakes);
+      });
+
   screen_quake_array.add_gc_root(quake);
   screen_quake_array.def(sb::init([screen_quakes] {
     return std::make_unique<ScreenQuakeListHandle>(screen_quakes);

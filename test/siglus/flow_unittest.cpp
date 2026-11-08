@@ -1565,7 +1565,7 @@ class SiglusRestartTest : public ::testing::Test {
             ->globals)[GetUsercmdId(callback.entry)] =
           machine.vm->globals_->at("callback_entry");
     };
-    runtime.properties.Initialize(*runtime.archive);
+    runtime.InitializeProperties();
     runtime.GameplayMachine().Initialize();
   }
 

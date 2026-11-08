@@ -34,7 +34,8 @@ using ::testing::IsEmpty;
 
 class SelectionPointTest : public ::testing::Test {
  protected:
-  SelectionPoint state{3};
+  CheckpointRef current;
+  SelectionPoint state{current, 3};
 };
 
 TEST_F(SelectionPointTest, MissingSavepointCannotCreateHistory) {
@@ -47,34 +48,41 @@ TEST_F(SelectionPointTest, MissingSavepointCannotCreateHistory) {
 TEST_F(SelectionPointTest, MarkCopiesReferenceMetadata) {
   // Updating the same checkpoint leaves the marked metadata, including nulls,
   // intact.
-  CheckpointRef snapshot{.id = 1,
-                         .title = "Title",
-                         .message = std::string("a\0b", 3),
-                         .full_message = "Full message",
-                         .append_dir = "directory",
-                         .append_name = "name"};
-  const auto expected = snapshot;
-  state.SetCurrentSnapshot(snapshot);
+  current = {.id = 1,
+             .title = "Title",
+             .message = std::string("a\0b", 3),
+             .full_message = "Full message",
+             .append_dir = "directory",
+             .append_name = "name"};
+  const auto expected = current;
   state.Mark();
-  snapshot.message = "later";
-  state.SetCurrentSnapshot(snapshot);
+  current.message = "later";
   EXPECT_THAT(state.history(), ElementsAre(expected));
+}
+
+TEST_F(SelectionPointTest, MarkReadsUpdatedBorrowedMetadata) {
+  // Updating the owner directly makes the latest metadata visible to a mark.
+  current = {.id = 1, .message = "before"};
+  current.message = "after";
+  state.Mark();
+  EXPECT_THAT(state.history(),
+              ElementsAre(CheckpointRef{.id = 1, .message = "after"}));
 }
 
 TEST_F(SelectionPointTest, InvalidReferenceClearsTheSource) {
   // A zero ID clears the source even when metadata is present, so marking is a
   // no-op.
-  state.SetCurrentSnapshot({.id = 1});
-  state.SetCurrentSnapshot({.title = "Invalid checkpoint"});
+  current = {.id = 1};
+  current = {.title = "Invalid checkpoint"};
   state.Mark();
   EXPECT_FALSE(state.HasPoint());
 }
 
 TEST_F(SelectionPointTest, ClearingTheSourcePreservesHistory) {
   // An existing history entry survives source clearing and a subsequent mark.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Mark();
-  state.SetCurrentSnapshot({});
+  current = {};
   state.Mark();
   EXPECT_THAT(state.history(), ElementsAre(CheckpointRef{.id = 1}));
 }
@@ -82,7 +90,7 @@ TEST_F(SelectionPointTest, ClearingTheSourcePreservesHistory) {
 TEST_F(SelectionPointTest, FullHistoryEvictsTheOldestEntry) {
   // Four marks in a three-entry history retain the newest three in order.
   for (CheckpointId id : {1, 2, 3, 4}) {
-    state.SetCurrentSnapshot({.id = id});
+    current = {.id = id};
     state.Mark();
   }
   EXPECT_THAT(state.history(),
@@ -92,27 +100,27 @@ TEST_F(SelectionPointTest, FullHistoryEvictsTheOldestEntry) {
 
 TEST_F(SelectionPointTest, DefaultCapacityRetainsOneEntry) {
   // The default configuration replaces the oldest point on the second mark.
-  SelectionPoint points;
-  points.SetCurrentSnapshot({.id = 1});
+  SelectionPoint points(current);
+  current = {.id = 1};
   points.Mark();
-  points.SetCurrentSnapshot({.id = 2});
+  current = {.id = 2};
   points.Mark();
   EXPECT_THAT(points.history(), ElementsAre(CheckpointRef{.id = 2}));
 }
 
 TEST_F(SelectionPointTest, CapacityIsClampedToAtLeastOne) {
   // A zero capacity still allows exactly one history entry.
-  SelectionPoint points(0);
-  points.SetCurrentSnapshot({.id = 1});
+  SelectionPoint points(current, 0);
+  current = {.id = 1};
   points.Mark();
-  points.SetCurrentSnapshot({.id = 2});
+  current = {.id = 2};
   points.Mark();
   EXPECT_THAT(points.history(), ElementsAre(CheckpointRef{.id = 2}));
 }
 
 TEST_F(SelectionPointTest, RepeatedMarksRecordTheSameSavepoint) {
   // Marking twice without changing the source appends two history entries.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Mark();
   state.Mark();
   EXPECT_THAT(state.history(),
@@ -121,7 +129,7 @@ TEST_F(SelectionPointTest, RepeatedMarksRecordTheSameSavepoint) {
 
 TEST_F(SelectionPointTest, ClearRemovesHistory) {
   // Clearing a populated history makes the existence check false.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Mark();
   state.Clear();
   EXPECT_FALSE(state.HasPoint());
@@ -130,7 +138,7 @@ TEST_F(SelectionPointTest, ClearRemovesHistory) {
 
 TEST_F(SelectionPointTest, ClearPreservesTheCurrentSavepoint) {
   // A mark after history clearing still copies the existing source.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Mark();
   state.Clear();
   state.Mark();
@@ -139,7 +147,7 @@ TEST_F(SelectionPointTest, ClearPreservesTheCurrentSavepoint) {
 
 TEST_F(SelectionPointTest, StackDoesNotMakeHistoryAvailable) {
   // Stocking a valid source alone must not enable the history query.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Stack();
   EXPECT_FALSE(state.HasPoint());
 }
@@ -147,9 +155,9 @@ TEST_F(SelectionPointTest, StackDoesNotMakeHistoryAvailable) {
 TEST_F(SelectionPointTest, DropCopiesStockedMetadata) {
   // Updating the same checkpoint after stocking leaves the dropped metadata
   // frozen at the stocked value.
-  state.SetCurrentSnapshot({.id = 1, .message = "stocked"});
+  current = {.id = 1, .message = "stocked"};
   state.Stack();
-  state.SetCurrentSnapshot({.id = 1, .message = "current"});
+  current = {.id = 1, .message = "current"};
   state.Drop();
   EXPECT_THAT(state.history(),
               ElementsAre(CheckpointRef{.id = 1, .message = "stocked"}));
@@ -157,9 +165,9 @@ TEST_F(SelectionPointTest, DropCopiesStockedMetadata) {
 
 TEST_F(SelectionPointTest, RepeatedStackOverwritesOneSlot) {
   // Two stock operations followed by a drop append only the latest stock.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Stack();
-  state.SetCurrentSnapshot({.id = 2});
+  current = {.id = 2};
   state.Stack();
   state.Drop();
   EXPECT_THAT(state.history(), ElementsAre(CheckpointRef{.id = 2}));
@@ -167,7 +175,7 @@ TEST_F(SelectionPointTest, RepeatedStackOverwritesOneSlot) {
 
 TEST_F(SelectionPointTest, DropConsumesStock) {
   // Dropping the same stocked point twice records it only once.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Stack();
   state.Drop();
   state.Drop();
@@ -176,9 +184,9 @@ TEST_F(SelectionPointTest, DropConsumesStock) {
 
 TEST_F(SelectionPointTest, EmptySourceOverwritesPreviousStock) {
   // Stocking an absent source discards the previously stocked snapshot.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Stack();
-  state.SetCurrentSnapshot({});
+  current = {};
   state.Stack();
   state.Drop();
   EXPECT_FALSE(state.HasPoint());
@@ -186,7 +194,7 @@ TEST_F(SelectionPointTest, EmptySourceOverwritesPreviousStock) {
 
 TEST_F(SelectionPointTest, DropWithoutStockPreservesHistory) {
   // A current source and history do not substitute for missing stock on drop.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Mark();
   state.Drop();
   EXPECT_THAT(state.history(), ElementsAre(CheckpointRef{.id = 1}));
@@ -194,7 +202,7 @@ TEST_F(SelectionPointTest, DropWithoutStockPreservesHistory) {
 
 TEST_F(SelectionPointTest, ClearPreservesStock) {
   // Clearing history leaves the temporary slot available for a later drop.
-  state.SetCurrentSnapshot({.id = 1});
+  current = {.id = 1};
   state.Stack();
   state.Mark();
   state.Clear();
@@ -204,31 +212,38 @@ TEST_F(SelectionPointTest, ClearPreservesStock) {
 
 TEST_F(SelectionPointTest, DropUsesTheHistoryCapacity) {
   // Appending stocked data to a full history evicts its oldest entry.
-  SelectionPoint points(1);
-  points.SetCurrentSnapshot({.id = 1});
+  SelectionPoint points(current, 1);
+  current = {.id = 1};
   points.Stack();
-  points.SetCurrentSnapshot({.id = 2});
+  current = {.id = 2};
   points.Mark();
   points.Drop();
   EXPECT_THAT(points.history(), ElementsAre(CheckpointRef{.id = 1}));
 }
 
-TEST_F(SelectionPointTest, ResetClearsAllSnapshots) {
-  // A full reset removes history, its current source, and stocked data.
-  state.SetCurrentSnapshot({.id = 1});
+TEST_F(SelectionPointTest, ResetClearsHistoryAndStock) {
+  // Reset clears recorded entries and stock, so a later drop adds nothing.
+  current = {.id = 1};
   state.Mark();
   state.Stack();
   state.Reset();
-  state.Mark();
   state.Drop();
   EXPECT_FALSE(state.HasPoint());
+}
+
+TEST_F(SelectionPointTest, ResetPreservesTheBorrowedCheckpoint) {
+  // Reset leaves the owner's active checkpoint available for subsequent marks.
+  current = {.id = 1};
+  state.Reset();
+  state.Mark();
+  EXPECT_THAT(state.history(), ElementsAre(CheckpointRef{.id = 1}));
 }
 
 TEST_F(SelectionPointTest, ResetRetainsConfiguredCapacity) {
   // Resetting a three-entry history still permits three subsequent marks.
   state.Reset();
   for (CheckpointId id : {1, 2, 3, 4}) {
-    state.SetCurrentSnapshot({.id = id});
+    current = {.id = id};
     state.Mark();
   }
   EXPECT_THAT(state.history(),
@@ -236,10 +251,13 @@ TEST_F(SelectionPointTest, ResetRetainsConfiguredCapacity) {
                           CheckpointRef{.id = 4}));
 }
 
-TEST_F(SelectionPointTest, RestoreClearsInvalidCurrentReference) {
-  // An engaged optional with ID zero is normalized to an absent current point.
-  state.RestoreState({.current = CheckpointRef{.title = "Invalid"}});
-  EXPECT_FALSE(state.GetState().current);
+TEST_F(SelectionPointTest, RestorePreservesTheBorrowedCheckpoint) {
+  // Restoring recorded state leaves the live source available for new marks.
+  current = {.id = 2};
+  state.RestoreState({.history = {{.id = 1}}});
+  state.Mark();
+  EXPECT_THAT(state.history(),
+              ElementsAre(CheckpointRef{.id = 1}, CheckpointRef{.id = 2}));
 }
 
 TEST_F(SelectionPointTest, RestoreClearsInvalidStockReference) {
@@ -261,7 +279,7 @@ TEST_F(SelectionPointTest, RestoreEmptyHistoryRetainsConfiguredCapacity) {
   // Restoring no history still allows the configured three most recent marks.
   state.RestoreState({});
   for (CheckpointId id : {1, 2, 3, 4}) {
-    state.SetCurrentSnapshot({.id = id});
+    current = {.id = id};
     state.Mark();
   }
   EXPECT_THAT(state.history(),
@@ -273,7 +291,7 @@ TEST_F(SelectionPointTest, RestoreShortHistoryRetainsConfiguredCapacity) {
   // One restored entry must not shrink the three-entry history on later marks.
   state.RestoreState({.history = {{.id = 1}}});
   for (CheckpointId id : {2, 3}) {
-    state.SetCurrentSnapshot({.id = id});
+    current = {.id = id};
     state.Mark();
   }
   EXPECT_THAT(state.history(),

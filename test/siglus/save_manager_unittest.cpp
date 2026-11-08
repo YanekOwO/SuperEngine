@@ -31,10 +31,16 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 namespace siglus_test {
 namespace fs = std::filesystem;
 using namespace libsiglus;
+
+static_assert(!std::is_copy_constructible_v<SaveManager>);
+static_assert(!std::is_copy_assignable_v<SaveManager>);
+static_assert(!std::is_move_constructible_v<SaveManager>);
+static_assert(!std::is_move_assignable_v<SaveManager>);
 
 class SiglusSaveManagerTest : public ::testing::Test {
  protected:
@@ -44,12 +50,11 @@ class SiglusSaveManagerTest : public ::testing::Test {
         directory,
         SaveCounts{
             .normal = 3, .quick = 2, .end = 1, .inner = 2, .selection = 3},
-        selection, [this] { return date; });
+        [this] { return date; });
   }
 
   ScopedTemporary scoped_tmp;
   fs::path directory;
-  SelectionPoint selection{3};
   SaveHeader date{.year = 2026, .month = 11, .day = 3, .weekday = 2};
   std::unique_ptr<SaveManager> manager;
 };
@@ -78,6 +83,19 @@ TEST_F(SiglusSaveManagerTest, SlotTranslationUsesCombinedNamespace) {
   EXPECT_FALSE(manager->EndSlot(1));
 }
 
+TEST_F(SiglusSaveManagerTest, SelectionHistoryUsesConfiguredCapacity) {
+  // The manager's three-entry capacity retains only the newest three marks.
+  for (int i = 0; i < 4; ++i) {
+    manager->Capture("state");
+    manager->selection_points().Mark();
+  }
+  const SaveManager& saved = *manager;
+  const auto history = saved.selection_points().history();
+  ASSERT_EQ(history.size(), 3);
+  EXPECT_EQ(history.front().id, 2);
+  EXPECT_EQ(history.back().id, 4);
+}
+
 TEST_F(SiglusSaveManagerTest, CapturePreservesBinaryRuntimeState) {
   // A checkpoint stores opaque bytes without losing embedded nulls.
   const std::string bytes("runtime\0state", 13);
@@ -98,9 +116,9 @@ TEST_F(SiglusSaveManagerTest, SelectionCopiesFreezeMetadata) {
   // Stock metadata freezes before subsequent output updates the live reference.
   manager->Capture("state");
   manager->AppendMessage("first");
-  selection.Stack();
+  manager->selection_points().Stack();
   manager->AppendMessage("second");
-  selection.Drop();
+  manager->selection_points().Drop();
   ASSERT_TRUE(manager->LatestSelection());
   EXPECT_EQ(manager->LatestSelection()->message, "first");
   EXPECT_EQ(manager->active().message, "firstsecond");
@@ -129,11 +147,44 @@ TEST_F(SiglusSaveManagerTest, MessageResetPreservesCopiedSelectionMetadata) {
   // Replay resets live metadata while historical checkpoint copies stay frozen.
   manager->Capture("state");
   manager->AppendMessage("previous");
-  selection.Mark();
+  manager->selection_points().Mark();
   manager->ResetMessages("restored prefix");
   EXPECT_TRUE(manager->active().message.empty());
   EXPECT_EQ(manager->active().full_message, "restored prefix");
   EXPECT_EQ(manager->LatestSelection()->message, "previous");
+}
+
+TEST_F(SiglusSaveManagerTest, SelectionReadsResetMessageMetadata) {
+  // New marks read the reset active metadata without synchronizing another
+  // copy.
+  manager->Capture("state");
+  manager->AppendMessage("previous");
+  manager->ResetMessages("restored prefix");
+  manager->selection_points().Mark();
+  const auto latest = manager->LatestSelection();
+  ASSERT_TRUE(latest);
+  EXPECT_TRUE(latest->message.empty());
+  EXPECT_EQ(latest->full_message, "restored prefix");
+}
+
+TEST_F(SiglusSaveManagerTest, ClearCheckpointPreventsNewSelectionPoints) {
+  // Clearing the owner's active reference makes subsequent marking a no-op.
+  manager->Capture("state");
+  manager->ClearCheckpoint();
+  manager->selection_points().Mark();
+  EXPECT_FALSE(manager->LatestSelection());
+}
+
+TEST_F(SiglusSaveManagerTest, ResetClearsActiveCheckpointAndSelectionState) {
+  // A manager reset removes the source, stock, and history together.
+  manager->Capture("state");
+  manager->selection_points().Mark();
+  manager->selection_points().Stack();
+  manager->Reset();
+  manager->selection_points().Mark();
+  manager->selection_points().Drop();
+  EXPECT_FALSE(manager->HasCheckpoint());
+  EXPECT_FALSE(manager->LatestSelection());
 }
 
 TEST_F(SiglusSaveManagerTest, ClearPreservesInnerCheckpoint) {
@@ -169,8 +220,8 @@ TEST_F(SiglusSaveManagerTest, InvalidInnerIndexDoesNotChangeSlots) {
 TEST_F(SiglusSaveManagerTest, RepeatedReferencesShareOneStateBlob) {
   // Multiple marks and inner copies retain one payload for a captured state.
   manager->Capture("state");
-  selection.Mark();
-  selection.Mark();
+  manager->selection_points().Mark();
+  manager->selection_points().Mark();
   manager->SaveInner(0);
   manager->SaveInner(1);
   EXPECT_EQ(manager->MakePayload().blobs.size(), 1);
@@ -189,10 +240,10 @@ TEST_F(SiglusSaveManagerTest, StrongInnerReferencesRetainOlderState) {
 TEST_F(SiglusSaveManagerTest, WeakHistoryIdsDoNotRetainEvictedState) {
   // An inner snapshot remembering old history does not retain evicted blobs.
   manager->Capture("first");
-  selection.Mark();
+  manager->selection_points().Mark();
   const auto second = manager->Capture("second");
   manager->SaveInner(0);
-  selection.Clear();
+  manager->selection_points().Clear();
   manager->Capture("third");
   const auto payload = manager->MakePayloadFor(manager->GetInner(0));
   EXPECT_EQ(payload.active.id, second);
@@ -202,15 +253,15 @@ TEST_F(SiglusSaveManagerTest, WeakHistoryIdsDoNotRetainEvictedState) {
 TEST_F(SiglusSaveManagerTest, RestoreIntersectsCapturedSelectionHistory) {
   // Restoring the second point keeps only history available before its capture.
   const auto first = manager->Capture("first");
-  selection.Mark();
+  manager->selection_points().Mark();
   manager->Capture("second");
-  selection.Mark();
+  manager->selection_points().Mark();
   const auto selected = *manager->LatestSelection();
   manager->Capture("third");
   const auto payload = manager->MakePayloadFor(selected);
   manager->RestorePayload(payload);
-  ASSERT_EQ(selection.history().size(), 1);
-  EXPECT_EQ(selection.history().front().id, first);
+  ASSERT_EQ(manager->selection_points().history().size(), 1);
+  EXPECT_EQ(manager->selection_points().history().front().id, first);
   EXPECT_EQ(manager->active(), selected);
 }
 
@@ -222,6 +273,20 @@ TEST_F(SiglusSaveManagerTest, InvalidRestorePreservesStorage) {
   payload.blobs.at(payload.active.id).stock.id = 99;
   EXPECT_THROW(manager->RestorePayload(payload), std::runtime_error);
   EXPECT_EQ(manager->Blob(manager->active().id).runtime_state, "valid");
+}
+
+TEST_F(SiglusSaveManagerTest, InvalidRestorePreservesSelectionState) {
+  // A missing checkpoint blob is rejected before replacing selection state.
+  manager->Capture("valid");
+  manager->selection_points().Mark();
+  manager->selection_points().Stack();
+  const auto before = manager->selection_points().GetState();
+  auto payload = manager->MakePayload();
+  payload.blobs.clear();
+  EXPECT_THROW(manager->RestorePayload(payload), std::runtime_error);
+  const auto after = manager->selection_points().GetState();
+  EXPECT_EQ(after.history, before.history);
+  EXPECT_EQ(after.stock, before.stock);
 }
 
 TEST_F(SiglusSaveManagerTest, CyclicCheckpointGraphIsRejected) {
@@ -254,7 +319,8 @@ TEST_F(SiglusSaveManagerTest, DiskRoundTripPreservesReferenceMetadata) {
   ASSERT_TRUE(loaded) << manager->last_error();
   manager->Reset();
   manager->RestorePayload(*loaded);
-  EXPECT_EQ(selection.GetState().current, expected);
+  manager->selection_points().Mark();
+  EXPECT_EQ(manager->LatestSelection(), expected);
 }
 
 TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresSelectionMetadata) {
@@ -262,7 +328,7 @@ TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresSelectionMetadata) {
   // into empty storage.
   manager->Capture("first", "Title");
   manager->AppendMessage("marked", "Full message");
-  selection.Mark();
+  manager->selection_points().Mark();
   const auto expected = manager->active();
   manager->AppendMessage("later");
   manager->Capture("second");
@@ -271,8 +337,8 @@ TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresSelectionMetadata) {
   ASSERT_TRUE(loaded) << manager->last_error();
   manager->Reset();
   manager->RestorePayload(*loaded);
-  ASSERT_EQ(selection.history().size(), 1);
-  EXPECT_EQ(selection.history().front(), expected);
+  ASSERT_EQ(manager->selection_points().history().size(), 1);
+  EXPECT_EQ(manager->selection_points().history().front(), expected);
 }
 
 TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresStockedMetadata) {
@@ -280,7 +346,7 @@ TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresStockedMetadata) {
   // reference available to drop again.
   manager->Capture("first", "Title");
   manager->AppendMessage("stocked", "Full message");
-  selection.Stack();
+  manager->selection_points().Stack();
   const auto expected = manager->active();
   manager->AppendMessage("later");
   manager->Capture("second");
@@ -289,7 +355,7 @@ TEST_F(SiglusSaveManagerTest, DiskRoundTripRestoresStockedMetadata) {
   ASSERT_TRUE(loaded) << manager->last_error();
   manager->Reset();
   manager->RestorePayload(*loaded);
-  selection.Drop();
+  manager->selection_points().Drop();
   EXPECT_EQ(manager->LatestSelection(), expected);
 }
 

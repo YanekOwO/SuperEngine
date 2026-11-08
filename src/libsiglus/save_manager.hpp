@@ -112,11 +112,18 @@ class SaveManager {
   using Clock = std::function<SaveHeader()>;
   SaveManager(std::filesystem::path directory,
               SaveCounts counts,
-              SelectionPoint& selection,
               Clock clock = {});
+
+  // Selection history borrows active_, so the manager must stay at its address.
+  SaveManager(const SaveManager&) = delete;
+  SaveManager& operator=(const SaveManager&) = delete;
+  SaveManager(SaveManager&&) = delete;
+  SaveManager& operator=(SaveManager&&) = delete;
 
   inline const SaveCounts& counts() const { return counts_; }
   inline const std::string& last_error() const { return error_; }
+  SelectionPoint& selection_points() { return selection_; }
+  const SelectionPoint& selection_points() const { return selection_; }
 
   std::filesystem::path SlotPath(int slot) const;
   std::filesystem::path ThumbnailPath(int slot) const;
@@ -185,11 +192,11 @@ class SaveManager {
   };
   const std::filesystem::path directory_;
   SaveCounts counts_;
-  SelectionPoint& selection_;
   Clock clock_;
   std::string thumbnail_extension_;
   CheckpointId next_id_ = 1;
   CheckpointRef active_;
+  SelectionPoint selection_;
   std::map<CheckpointId, LocalStateBlob> blobs_;
   std::vector<CheckpointRef> inner_;
   mutable std::string error_;

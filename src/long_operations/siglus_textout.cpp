@@ -41,23 +41,31 @@ SiglusTextoutOperation::SiglusTextoutOperation(
 Task<int> SiglusTextoutOperation::Run(WaitContext& waits) {
   if (!system_ || !window_)
     co_return 0;
-
-  while (system_->text().IsReadingBacklog())
-    co_await waits.Schedule(false);
-  window_->PrepareMessageText(
-      [this](TextWindow& page) { page.SubmitText(msgcmd::Text{text_, {}}); });
-  while (window_->HasPendingMessageText()) {
+  if (phase_ == Phase::Submit) {
+    while (system_->text().IsReadingBacklog())
+      co_await waits.Schedule(false);
+    window_->PrepareMessageText(
+        [this](TextWindow& page) { page.SubmitText(msgcmd::Text{text_, {}}); });
+    phase_ = Phase::Reveal;
+  }
+  if (phase_ == Phase::Debounce) {
+    co_await waits.WaitFor(std::chrono::milliseconds::zero());
+    phase_ = Phase::Reveal;
+  }
+  while (phase_ == Phase::Reveal && window_->HasPendingMessageText()) {
     if (system_->text().IsReadingBacklog()) {
       co_await waits.Schedule(false);
       continue;
     }
     if ((co_await waits.Schedule()) == WaitOutcome::InterruptedByInput) {
       window_->FlushMessageText();
-      // Finish this input dispatch before a subsequent pause can listen.
+      phase_ = Phase::Debounce;
+      // One input dispatch may reveal text or dismiss its pause, never both.
       co_await waits.WaitFor(std::chrono::milliseconds::zero());
+      phase_ = Phase::Reveal;
     }
   }
-
+  phase_ = Phase::Done;
   co_return 0;
 }
 

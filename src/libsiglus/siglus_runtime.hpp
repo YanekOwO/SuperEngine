@@ -34,21 +34,21 @@
 #include "core/image_resources.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
+#include "core/property_storage.hpp"
 #include "core/quake.hpp"
 #include "core/script_call.hpp"
 #include "core/selection.hpp"
-#include "core/selection_point.hpp"
 #include "core/stage.hpp"
 #include "core/window_title.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/frame_request_manager.hpp"
-#include "libsiglus/property_storage.hpp"
 #include "libsiglus/siglus_machine.hpp"
 #include "systems/frame_presenter.hpp"
 #include "systems/system.hpp"
 #include "vm/value.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -76,10 +76,12 @@ class KidokuTable;
 class IPlatformImplementor;
 class MaskList;
 class ScriptInput;
+class MessageBack;
 
 namespace libsiglus {
 class Archive;
 class SiglusSceneRenderer;
+class SiglusSaveLoad;
 
 using SiglusWipeEndHook = std::function<void()>;
 
@@ -87,6 +89,10 @@ struct SiglusRuntime;
 struct SiglusMachine;
 
 struct SiglusRuntime {
+  friend class SiglusSaveLoad;
+  struct CheckpointState;
+  CheckpointState CaptureCheckpoint() const;
+
   SiglusMachine& GameplayMachine();
   const SiglusMachine& GameplayMachine() const;
   SiglusMachine& ActiveMachine();
@@ -97,7 +103,12 @@ struct SiglusRuntime {
   std::shared_ptr<const DatabaseList> databases;
   std::unique_ptr<Memory> memory;
   PropertyStorage properties;
-  SelectionPoint selection_points;
+  void InitializeProperties();
+  SiglusSaveLoad& Saves();
+  std::shared_ptr<MessageBack> message_back;
+  std::string scene_title;
+  std::string current_full_message;
+  std::int64_t total_play_time = 0;
   LocalConfig local_config;
   GlobalConfig global_config;
   std::shared_ptr<AssetScanner> asset_scanner;
@@ -121,7 +132,7 @@ struct SiglusRuntime {
   void DispatchFrameAction(int owner,
                            const ActionReference& reference,
                            ScriptCall call);
-  void ResetLocalMemory();
+  void ResetLocalMemory(bool preserve_backlog = false);
   void QueueReturnToMenu(std::string scene,
                          int zlabel,
                          bool preserve,
@@ -236,12 +247,16 @@ struct SiglusRuntime {
               std::chrono::milliseconds game_delta);
 
   // Create an inactive caller-owned counter.
-  std::shared_ptr<Counter> CreateCounter(int owner = 0);
+  std::shared_ptr<Counter> CreateCounter(int owner = 0, bool persistent = true);
+  void RegisterCounter(std::shared_ptr<Counter> counter,
+                       int owner = 0,
+                       bool persistent = true);
 
  private:
   struct OwnedCounter {
     std::weak_ptr<Counter> counter;
     int owner;
+    bool persistent = true;
   };
   std::vector<OwnedCounter> counters_;
 
@@ -264,7 +279,9 @@ struct SiglusRuntime {
   std::vector<SiglusMachine*> drive_stack_;
   void DriveMachine(SiglusMachine& machine, std::function<void()> run);
   bool IsDriving(const SiglusMachine& machine) const;
-  void YieldScripts();
+  void YieldScripts(bool include_callbacks = true);
+  bool IsCallbackExecution(const SiglusMachine& machine) const;
+  bool HasPendingCallbacks() const;
   int excall_depth_ = 0;
   // ------------------------------------------------------------------------------
 
@@ -278,6 +295,7 @@ struct SiglusRuntime {
   std::optional<RestartRequest> restart_;
   bool ProcessRestart();
   bool interface_hidden_ = false;
+  std::unique_ptr<SiglusSaveLoad> saves_;
   std::unique_ptr<SiglusMachine> gameplay_;
 };
 

@@ -120,14 +120,11 @@ SaveCounts SaveCounts::Parse(Gameexe& gameexe) {
       .Clamped();
 }
 
-SaveManager::SaveManager(fs::path directory,
-                         SaveCounts counts,
-                         SelectionPoint& selection,
-                         Clock clock)
+SaveManager::SaveManager(fs::path directory, SaveCounts counts, Clock clock)
     : directory_(std::move(directory)),
-      counts_(counts),
-      selection_(selection),
+      counts_(counts.Clamped()),
       clock_(clock ? std::move(clock) : CalendarNow),
+      selection_(active_, counts_.selection),
       inner_(counts_.inner) {}
 
 fs::path SaveManager::SlotPath(int slot) const {
@@ -196,7 +193,6 @@ CheckpointId SaveManager::Capture(std::string runtime_state,
 
   blobs_.emplace(checkpoint.id, std::move(blob));
   active_ = checkpoint;
-  selection_.SetCurrentSnapshot(checkpoint);
   Prune();
   return active_.id;
 }
@@ -212,7 +208,6 @@ void SaveManager::AppendMessage(std::string_view text,
   active_.message = Truncate(active_.message + std::string(text), 256);
   active_.full_message =
       Truncate(active_.full_message + std::string(full_text), 256);
-  selection_.SetCurrentSnapshot(active_);
 }
 
 void SaveManager::ResetMessages(std::string_view full_message) {
@@ -220,12 +215,10 @@ void SaveManager::ResetMessages(std::string_view full_message) {
     return;
   active_.message.clear();
   active_.full_message = Truncate(full_message, 256);
-  selection_.SetCurrentSnapshot(active_);
 }
 
 void SaveManager::ClearCheckpoint() {
   active_ = {};
-  selection_.SetCurrentSnapshot({});
   Prune();
 }
 
@@ -337,7 +330,7 @@ void SaveManager::RestorePayload(const SlotPayload& payload) {
   std::map<CheckpointId, CheckpointRef> available;
   for (const auto& checkpoint : payload.selection)
     available[checkpoint.id] = checkpoint;
-  SelectionPoint::State points{.current = payload.active};
+  SelectionPoint::State points;
   if (state.stock)
     points.stock = state.stock;
   for (const auto id : state.selection_ids) {

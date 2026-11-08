@@ -22,14 +22,15 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/object.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/avdec/gan.hpp"
 #include "core/capture.hpp"
 #include "core/colour.hpp"
 #include "core/frame_action_manager.hpp"
 #include "core/frame_counter.hpp"
-#include "core/memory_internal/facade.hpp"
 #include "core/object.hpp"
 #include "core/object_internal/drawer/colour_filter.hpp"
 #include "core/object_internal/drawer/file.hpp"
@@ -45,6 +46,7 @@
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
@@ -137,7 +139,7 @@ void LoadGan(GraphicsObject& object,
   }
   auto image = images->GetSurfaceNamed(image_name);
   auto data = std::make_unique<GanGraphicsObjectData>(
-      image, std::move(decoder.animation_sets),
+      image_name, image, std::move(decoder.animation_sets),
       event ? event->GetClock() : std::make_shared<Clock>());
   if (data->HasSet(0))
     data->PrimeSet(0);
@@ -273,6 +275,9 @@ sr::Value WaitMovie(std::shared_ptr<GraphicsObject> object,
                     sr::VM& vm,
                     bool key_skip,
                     lop::NativeWaitScope scope) {
+  scope = DescribePollingWait(
+      std::move(scope),
+      {.kind = PollingWaitDescription::Kind::ObjectMovie, .object = object});
   auto done = [object = std::move(object)] {
     const auto* data = object->GetDrawer<ObjectMovieData>();
     return !data || !data->CheckMovie();
@@ -371,7 +376,13 @@ void BindObjectEvents(sb::class_<Handle>& event_class,
       return lop::MakePollingWaitFuture(
           vm, std::move(done), key_skip,
           system ? system->event_ptr().get() : nullptr,
-          std::chrono::milliseconds(5), {}, machine.WaitScope(h->owner));
+          std::chrono::milliseconds(5), {},
+          DescribePollingWait(
+              machine.WaitScope(h->owner),
+              {.kind = PollingWaitDescription::Kind::ObjectEvent,
+               .object = h->object,
+               .index = EventRepno(h),
+               .name = h->name}));
     };
   };
   event_class.def("wait", wait(false), sb::vararg);
@@ -557,6 +568,30 @@ struct DirectObjectPropertyBinder {
   }
 };
 
+using SavedEventAccessors =
+    std::pair<std::function<int(const ObjectParameter&)>,
+              std::function<void(ObjectParameter&, int)>>;
+static std::unordered_map<std::string, SavedEventAccessors> event_accessors;
+static std::unordered_map<
+    std::string,
+    std::pair<ObjectRepnoEventHandle::Getter, ObjectRepnoEventHandle::Setter>>
+    repno_event_accessors;
+
+ObjectEventHandle RestoreObjectEvent(std::shared_ptr<GraphicsObject> object,
+                                     const std::string& name,
+                                     int owner) {
+  const auto& [getter, setter] = event_accessors.at(name);
+  return {std::move(object), name, getter, setter, owner};
+}
+
+ObjectRepnoEventListHandle RestoreObjectRepnoEvent(
+    std::shared_ptr<GraphicsObject> object,
+    const std::string& name,
+    int owner) {
+  const auto& [getter, setter] = repno_event_accessors.at(name);
+  return {std::move(object), name, getter, setter, owner};
+}
+
 struct ObjectEventPropertyBinder {
   sb::class_<ObjectHandle>& object;
   sb::class_<ObjectEventHandle>& event_class;
@@ -572,6 +607,8 @@ struct ObjectEventPropertyBinder {
         std::move(getter);
     std::function<void(ObjectParameter&, int)> property_setter =
         std::move(setter);
+    event_accessors.insert_or_assign(
+        name, SavedEventAccessors{property_getter, property_setter});
     std::string field_name = name;
     object.add_gc_root(event_class);
     object.prop_r(
@@ -701,12 +738,18 @@ void CreateCaptureObject(GraphicsObject& object,
   if (!captures)
     throw sr::RuntimeError("Capture support is unavailable");
   object.Reset();
-  auto surface = thumbnail ? captures->LoadThumbnail(
-                                 RequireInt(args[0], "thumbnail number"), local)
-                           : captures->Snapshot(CaptureKind::Object);
-  if (surface)
-    object.SetDrawer(
-        std::make_unique<GraphicsObjectOfFile>(std::move(surface)));
+  GraphicsObjectOfFile::Source source;
+  if (thumbnail) {
+    source.kind = local ? GraphicsObjectOfFile::SourceKind::LocalThumbnail
+                        : GraphicsObjectOfFile::SourceKind::SaveThumbnail;
+    source.thumbnail_number = RequireInt(args[0], "thumbnail number");
+  }
+  auto surface = thumbnail
+                     ? captures->LoadThumbnail(source.thumbnail_number, local)
+                     : captures->Snapshot(CaptureKind::Object);
+  if (surface || thumbnail)
+    object.SetDrawer(std::make_unique<GraphicsObjectOfFile>(
+        std::move(source), std::move(surface)));
   auto& param = object.Param();
   if (args.size() > required)
     param.SetVisible(RequireInt(args[required], "capture display"));
@@ -729,14 +772,83 @@ void BindObject(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<ObjectHandle> object(m, "Object");
   RegisterBindingClass(runtime, object);
+  object.def_serialization(
+      [](const ObjectHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.object);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<ObjectHandle>(object, owner);
+      });
+
   sb::class_<ObjectChildListHandle> child(m, "ObjectChild", false);
   RegisterBindingClass(runtime, child);
+  child.def_serialization(
+      [](const ObjectChildListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.object);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<ObjectChildListHandle>(object, owner);
+      });
+
   sb::class_<ObjectEventHandle> event(m, "ObjectEvent", false);
   RegisterBindingClass(runtime, event);
+  event.def_serialization(
+      [](const ObjectEventHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.object);
+        out.Put(h.name);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto name = in.Text();
+        auto owner = in.Get<int>();
+        return std::make_unique<ObjectEventHandle>(
+            RestoreObjectEvent(object, name, owner));
+      });
+
   sb::class_<ObjectRepnoEventHandle> repno_event(m, "ObjectRepnoEvent", false);
   RegisterBindingClass(runtime, repno_event);
+  repno_event.def_serialization(
+      [](const ObjectRepnoEventHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.object);
+        out.Put(h.name);
+        out.Put(h.owner);
+        out.Put(h.repno);
+      },
+      [](serilang::ObjectReader& in) {
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto name = in.Text();
+        auto owner = in.Get<int>();
+        auto handle = RestoreObjectRepnoEvent(object, name, owner);
+        auto repno = in.Get<int>();
+        return std::make_unique<ObjectRepnoEventHandle>(
+            handle.object, repno, handle.name, handle.getter, handle.setter,
+            handle.owner);
+      });
+
   sb::class_<ObjectRepnoEventListHandle> repno_event_list(
       m, "ObjectRepnoEventList", false);
+
+  RegisterBindingClass(runtime, repno_event_list);
+  repno_event_list.def_serialization(
+      [](const ObjectRepnoEventListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.object);
+        out.Put(h.name);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto name = in.Text();
+        auto owner = in.Get<int>();
+        auto handle = RestoreObjectRepnoEvent(object, name, owner);
+        return std::make_unique<ObjectRepnoEventListHandle>(std::move(handle));
+      });
   object.def(
       sb::init([&runtime](int layer, int index, int owner) {
         if (index < 0)
@@ -750,6 +862,17 @@ void BindObject(SiglusMachine& runtime) {
 
   sb::class_<ObjectListHandle> object_array(m, "ObjectArray");
   RegisterBindingClass(runtime, object_array);
+  object_array.def_serialization(
+      [](const ObjectListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.layer);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto layer = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<ObjectListHandle>(layer, owner);
+      });
+
   object_array.add_gc_root(object);
   object_array.def(
       sb::init([](int layer, int owner) {
@@ -825,8 +948,7 @@ void BindObject(SiglusMachine& runtime) {
                      member](sr::Fiber&) -> std::vector<int>& {
         return std::invoke(member, object->Param());
       };
-      return sr::Value(
-          registry.MakeInst<SiglusIntListFacade>(std::move(getter)));
+      return sr::Value(registry.MakeInst<IntListRef>(std::move(getter)));
     });
   };
   ilist_param("F", &ObjectParameter::F);
@@ -858,6 +980,7 @@ void BindObject(SiglusMachine& runtime) {
   auto bind_repno_event_list = [&](const char* name,
                                    ObjectRepnoEventHandle::Getter getter,
                                    ObjectRepnoEventHandle::Setter setter) {
+    repno_event_accessors.insert_or_assign(name, std::pair{getter, setter});
     object.add_gc_root(repno_event_list);
     object.prop_r(name, [list = repno_event_list, name = std::string(name),
                          getter = std::move(getter),
@@ -1057,7 +1180,7 @@ void BindObject(SiglusMachine& runtime) {
           throw sr::RuntimeError(
               "Object.create_number requires image resources");
         auto drawer = std::make_unique<NumberDrawer>(
-            images->GetSurfaceNamed(filename->str_));
+            filename->str_, images->GetSurfaceNamed(filename->str_));
         h->object->Reset();
         h->object->SetDrawer(std::move(drawer));
         h->object->SetFilePath(filename->str_);
@@ -1408,7 +1531,10 @@ void BindObject(SiglusMachine& runtime) {
     return lop::MakePollingWaitFuture(
         vm, std::move(done), false,
         system ? system->event_ptr().get() : nullptr,
-        std::chrono::milliseconds(5), {}, runtime.WaitScope(h->owner));
+        std::chrono::milliseconds(5), {},
+        DescribePollingWait(runtime.WaitScope(h->owner),
+                            {.kind = PollingWaitDescription::Kind::ObjectEvents,
+                             .object = h->object}));
   });
   object.def("alleve_check", [](ObjectHandle* h) -> int {
     GraphicsObject& o = *h->object;

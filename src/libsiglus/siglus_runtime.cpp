@@ -24,6 +24,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/siglus_runtime.hpp"
+#include "core/property_storage.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/object.hpp"
 
@@ -31,9 +32,13 @@
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "core/mask.hpp"
+#include "core/message_back.hpp"
+#include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/trace.hpp"
+#include "libsiglus/property.hpp"
+#include "libsiglus/save_load.hpp"
 #include "libsiglus/scene_entry.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "long_operations/siglus_movie.hpp"
@@ -54,6 +59,7 @@
 #include <chrono>
 #include <format>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -62,7 +68,8 @@ namespace libsiglus {
 namespace sr = serilang;
 
 SiglusRuntime::SiglusRuntime()
-    : gameplay_(std::make_unique<SiglusMachine>(*this)) {
+    : message_back(std::make_shared<MessageBack>()),
+      gameplay_(std::make_unique<SiglusMachine>(*this)) {
   *finish_active_wipe = [this] {
     std::erase_if(wipe_hooks,
                   [](const auto& hook) { return hook.lifetime.expired(); });
@@ -75,6 +82,17 @@ SiglusRuntime::SiglusRuntime()
     for (const auto& hook : wipe_hooks)
       hook.update();
   };
+}
+SiglusSaveLoad& SiglusRuntime::Saves() {
+  if (!saves_)
+    saves_ = std::make_unique<SiglusSaveLoad>(*this);
+  return *saves_;
+}
+
+void SiglusRuntime::RegisterCounter(std::shared_ptr<Counter> counter,
+                                    int owner,
+                                    bool persistent) {
+  counters_.push_back({std::move(counter), owner, persistent});
 }
 SiglusMachine& SiglusRuntime::GameplayMachine() { return *gameplay_; }
 const SiglusMachine& SiglusRuntime::GameplayMachine() const {
@@ -159,12 +177,53 @@ void SiglusRuntime::Activate(SiglusMachine& machine) {
     input_event_listener->ClearState();
 }
 
+void SiglusRuntime::InitializeProperties() {
+  auto MakePropertyTable =
+      [](std::span<const Property> properties) -> PropertyStorage::Table {
+    PropertyStorage::Table table;
+    table.reserve(properties.size());
+    for (const auto& property : properties) {
+      auto entry = std::make_shared<PropertyStorage::Entry>();
+      switch (property.form) {
+        case Type::Int:
+          entry->value = 0;
+          break;
+        case Type::String:
+          entry->value = std::string{};
+          break;
+        case Type::IntList:
+        case Type::StrList:
+          if (property.size < 0)
+            throw std::invalid_argument("negative property array size");
+          entry->initial_size = property.size;
+          if (property.form == Type::IntList)
+            entry->value = PropertyStorage::Integers(property.size);
+          else
+            entry->value = PropertyStorage::Strings(property.size);
+          break;
+        default:
+          break;
+      }
+      table.push_back(std::move(entry));
+    }
+    return table;
+  };
+
+  PropertyStorage::Tables tables;
+  tables.emplace(-1, MakePropertyTable(archive->prop_));
+  for (std::size_t i = 0; i < archive->GetScenarioCount(); ++i)
+    tables.emplace(
+        static_cast<int>(i),
+        MakePropertyTable(archive->ParseScene(static_cast<int>(i)).property));
+  properties.Initialize(std::move(tables));
+}
+
 bool SiglusRuntime::ScriptScopeActive(int owner) const {
   return owner == 1 || !IsExcall();
 }
 
 void SiglusRuntime::FreeExcall(bool finish_actions) {
-  if (!excall || excall->releasing)
+  if (!excall || (excall->releasing && finish_actions))
     return;
   if (excall->allocated && finish_active_wipe && *finish_active_wipe)
     (*finish_active_wipe)();
@@ -183,6 +242,27 @@ void SiglusRuntime::FreeExcall(bool finish_actions) {
       value->Stop();
     return true;
   });
+}
+
+bool SiglusRuntime::IsCallbackExecution(const SiglusMachine& machine) const {
+  for (auto* current = &machine; current; current = current->caller) {
+    if (current->callback_owner >= 0)
+      return true;
+    if (current->caller_lifetime.expired())
+      break;
+  }
+  return false;
+}
+
+bool SiglusRuntime::HasPendingCallbacks() const {
+  for (const auto& callback : callbacks_)
+    if (callback && callback->lifetime && callback->vm->HasPendingWork())
+      return true;
+  // A callback may have launched an EX call without awaiting its result.
+  for (const auto& machine : excalls_)
+    if (IsCallbackExecution(*machine))
+      return true;
+  return false;
 }
 
 void SiglusRuntime::DispatchFrameAction(int owner,
@@ -268,12 +348,15 @@ void SiglusRuntime::ResetExcall() {
   syscom_enabled = true;
 }
 
-void SiglusRuntime::ResetLocalMemory() {
-  selection_points.Reset();
+void SiglusRuntime::ResetLocalMemory(bool preserve_backlog) {
+  if (saves_)
+    saves_->Reset(preserve_backlog);
   if (memory) {
+    auto global = memory->GetGlobalMemory();
     memory->PartialReset(LocalMemory{});
     if (gameexe)
       memory->LoadFrom(*gameexe);
+    memory->PartialReset(std::move(global));
   }
   for (auto& cb : gameplay_->reset_local_memory)
     cb();
@@ -410,10 +493,14 @@ bool SiglusRuntime::ProcessRestart() {
     if (machine)
       machine->Cancel();
   gameplay_->Cancel();
+  if (frame_action_manager)
+    frame_action_manager->CancelAll();
+  if (excall && excall->actions)
+    excall->actions->CancelAll();
   if (finish_active_wipe && *finish_active_wipe)
     (*finish_active_wipe)();
   ResetCaptures();
-  ResetLocalMemory();
+  ResetLocalMemory(request.preserve);
   excalls_.clear();
   callbacks_[0].reset();
   callbacks_[1].reset();
@@ -440,14 +527,28 @@ bool SiglusRuntime::ProcessRestart() {
 }
 
 void SiglusRuntime::DriveScripts() {
-  if (ProcessRestart())
-    return;
-  CollectCompletedExcalls();
-  ApplyExcallRequests();
-  auto& machine = ActiveMachine();
-  DriveMachine(machine, [&] { machine.vm->RunReadyUntilBlocked(); });
-  CollectCompletedExcalls();
-  ApplyExcallRequests();
+  for (;;) {
+    CollectCompletedExcalls();
+    ApplyExcallRequests();
+    if (saves_ && saves_->Process())
+      return;
+    if (ProcessRestart())
+      return;
+    CollectCompletedExcalls();
+    ApplyExcallRequests();
+    auto& machine = ActiveMachine();
+    DriveMachine(machine, [&] { machine.vm->RunReadyUntilBlocked(); });
+    const bool checkpoint = saves_ && saves_->CheckpointPending();
+    if (saves_ && saves_->Process())
+      return;
+    CollectCompletedExcalls();
+    ApplyExcallRequests();
+    // Capturing a checkpoint yields to the host without requesting a display
+    // boundary. Resume immediately so a cleared message window is not drawn
+    // before the next text submission. Native/frame waits still end this drive.
+    if (!checkpoint || (saves_ && saves_->CheckpointPending()))
+      return;
+  }
 }
 
 bool SiglusRuntime::OpenExcallScene(const std::string& key) {
@@ -568,13 +669,19 @@ void SiglusRuntime::Start(std::optional<int> start_scene) {
 void SiglusRuntime::Update(std::chrono::milliseconds real_delta,
                            std::chrono::milliseconds game_delta) {
   CancelExpiredCaptures();
+  if (saves_ && saves_->PauseGameTime())
+    return;
+  const bool dispatch = !saves_ || !saves_->CheckpointPending();
   SiglusMachine* callback_frames[] = {callbacks_[0].get(), callbacks_[1].get()};
-  for (auto* callback : callback_frames)
+  for (int owner : {0, 1}) {
+    auto* callback = callback_frames[owner];
     if (callback && callback->lifetime)
       callback->frame_requests->BeginFrameRequests();
+  }
   using ms = std::chrono::milliseconds;
   real_delta = std::max(ms::zero(), real_delta);
   game_delta = std::max(ms::zero(), game_delta);
+  total_play_time += real_delta.count();
   if (selection_state && (IsExcall() || !local_config.time_stop))
     UpdateSelection(game_delta.count());
 
@@ -604,24 +711,24 @@ void SiglusRuntime::Update(std::chrono::milliseconds real_delta,
 
   if (!time_stopped && !local_config.stage_time_stop && stage)
     stage->AdvanceQuakes(game_delta.count());
-  if (frame_action_manager)
-    frame_action_manager->AdvanceAndDispatch(real_delta, game_delta);
+  if (frame_action_manager) {
+    frame_action_manager->Advance(real_delta, game_delta);
+    if (dispatch)
+      frame_action_manager->Dispatch();
+  }
   if (excall && excall->allocated) {
     excall->counters->Advance(game_delta, real_delta);
     excall->stage.AdvanceQuakes(game_delta.count());
-    excall->actions->AdvanceAndDispatch(real_delta, game_delta);
+    excall->actions->Advance(real_delta, game_delta);
+    if (dispatch)
+      excall->actions->Dispatch();
   }
   for (int owner : {0, 1}) {
     auto& callback = callbacks_[owner];
-    if (!callback)
-      continue;
-    if (!callback->lifetime) {
+    if (callback && !callback->lifetime)
       callback.reset();
-      continue;
-    }
-    if (restart_)
-      continue;
-    if (owner == 0 || (owner == 1 && excall && excall->allocated)) {
+    if (callback && !restart_ &&
+        (owner == 0 || (excall && excall->allocated))) {
       if (callback.get() == callback_frames[owner])
         callback->frame_requests->CompleteFrameRequests(nullptr);
       DriveMachine(*callback, [&] { callback->vm->RunReadyUntilBlocked(); });
@@ -658,12 +765,22 @@ bool SiglusRuntime::IsDriving(const SiglusMachine& machine) const {
   return std::ranges::find(drive_stack_, &machine) != drive_stack_.end();
 }
 
-void SiglusRuntime::YieldScripts() {
-  for (auto* machine : drive_stack_)
-    machine->vm->RequestHostYield();
+void SiglusRuntime::YieldScripts(bool include_callbacks) {
+  if (include_callbacks) {
+    for (auto* machine : drive_stack_)
+      machine->vm->RequestHostYield();
+    return;
+  }
+  // Checkpoints leave callbacks running until their current invocation ends.
+  gameplay_->vm->RequestHostYield();
+  for (auto& machine : excalls_)
+    if (!IsCallbackExecution(*machine))
+      machine->vm->RequestHostYield();
 }
 
 bool SiglusRuntime::HasPendingScriptWork() const {
+  if (saves_ && saves_->pending())
+    return true;
   if (ActiveMachine().vm->HasPendingWork() || !pending_excalls_.empty() ||
       !excalls_.empty() || restart_)
     return true;
@@ -778,14 +895,14 @@ void SiglusRuntime::ResetGraphics() {
 }
 
 void SiglusRuntime::RenderFrame() {
-  if (const auto custom = GetFrameRenderer())
-    presenter->RenderFrame({}, custom);
-  else {
-    presenter->RenderFrame({}, [this] {
-      if (renderer)
-        renderer->RenderScene();
-    });
-  }
+  presenter->RenderFrame({}, [this] {
+    if (const auto custom = GetFrameRenderer())
+      custom();
+    else if (renderer)
+      renderer->RenderScene();
+    if (saves_)
+      saves_->RenderOverlay();
+  });
 }
 
 std::shared_ptr<SDLSurface> SiglusRuntime::RenderToSurface() {
@@ -798,9 +915,10 @@ std::function<void()> SiglusRuntime::GetFrameRenderer() const {
   return {};
 }
 
-std::shared_ptr<Counter> SiglusRuntime::CreateCounter(int owner) {
+std::shared_ptr<Counter> SiglusRuntime::CreateCounter(int owner,
+                                                      bool persistent) {
   auto ret = std::make_shared<Counter>();
-  counters_.push_back({ret, owner});
+  counters_.push_back({ret, owner, persistent});
   return ret;
 }
 
@@ -830,6 +948,9 @@ void SiglusRuntime::OnSelectionChosen(const Selection& s) {
   }
   if (kidoku_table && s.request.scene >= 0 && s.request.kidoku >= 0)
     kidoku_table->RecordKidoku(s.request.scene, s.request.kidoku);
+  // Selection history copies the established checkpoint, including cancels.
+  if (saves_ && saves_->manager().HasCheckpoint())
+    saves_->manager().selection_points().Mark();
 }
 
 void SiglusRuntime::StartSelection(std::shared_ptr<Selection> s) {

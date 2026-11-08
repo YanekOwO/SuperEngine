@@ -26,6 +26,7 @@
 
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/save_load.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "siglus/fake_scene.hpp"
 #include "vm/value.hpp"
@@ -45,8 +46,9 @@ class SiglusSelpointTest : public ::testing::Test {
   void SetUp() override {
     runtime.archive = std::make_shared<Archive>(
         std::string(sizeof(Pack_hdr), '\0'), xorkey_t{});
-    runtime.binding_names = {"0_memory", "flow", "selpoint"};
-    runtime.selection_points = SelectionPoint(3);
+    runtime.binding_names = {"0_memory", "0_savepoint", "flow", "selpoint"};
+    runtime.gameexe = std::make_shared<Gameexe>();
+    runtime.gameexe->parseLine("SEL_SAVE.CNT = 3");
     runtime.GameplayMachine().Initialize();
   }
 
@@ -84,16 +86,17 @@ class SiglusSelpointTest : public ::testing::Test {
   }
 };
 
-TEST_F(SiglusSelpointTest, NoSnapshotIsAdvertisedBeforeCaptureExists) {
-  // Stubbed savepoint capture cannot make marking or stocking usable history.
+TEST_F(SiglusSelpointTest, CapturedSavepointCanProduceSelectionHistory) {
+  // Capturing at the host boundary supplies real state to marker and stock.
   Run("savepoint(); selpoint(); stack_selpoint(); drop_selpoint(); "
       "available = check_selpoint();");
-  EXPECT_EQ(Global("available"), sr::Value(0));
+  runtime.DriveScripts();
+  EXPECT_EQ(Global("available"), sr::Value(1));
 }
 
 TEST_F(SiglusSelpointTest, NativeCommandsShareTheHistoryOperations) {
   // Recording a supplied snapshot enables the query; clearing disables it.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("marked = selpoint(); before = check_selpoint(); "
       "cleared = clear_selpoint(); after = check_selpoint();");
   EXPECT_EQ(Global("marked"), sr::nil);
@@ -104,62 +107,62 @@ TEST_F(SiglusSelpointTest, NativeCommandsShareTheHistoryOperations) {
 
 TEST_F(SiglusSelpointTest, NativeStockIsConsumedByDrop) {
   // Stock commands are void, and two drops append only the stocked source.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("stocked = stack_selpoint();");
-  runtime.selection_points.SetCurrentSnapshot({.id = 2});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("dropped = drop_selpoint(); drop_selpoint();");
   EXPECT_EQ(Global("stocked"), sr::nil);
   EXPECT_EQ(Global("dropped"), sr::nil);
-  EXPECT_THAT(runtime.selection_points.history(),
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, RecompiledSelpointRecordsTheCurrentSnapshot) {
   // Element one must reach the native marker through a compiled scene.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   EXPECT_EQ(RunElement(1), sr::nil);
-  EXPECT_THAT(runtime.selection_points.history(),
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, RecompiledCheckSelpointReturnsAnInteger) {
   // A compiled existence query returns the integer one for populated history.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
-  runtime.selection_points.Mark();
+  runtime.Saves().manager().Capture("opaque checkpoint");
+  runtime.Saves().manager().selection_points().Mark();
   EXPECT_EQ(RunElement(110), sr::Value(1));
 }
 
 TEST_F(SiglusSelpointTest, RecompiledClearSelpointRemovesHistory) {
   // Element 111 clears an existing point without requiring script arguments.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
-  runtime.selection_points.Mark();
+  runtime.Saves().manager().Capture("opaque checkpoint");
+  runtime.Saves().manager().selection_points().Mark();
   EXPECT_EQ(RunElement(111), sr::nil);
-  EXPECT_FALSE(runtime.selection_points.HasPoint());
+  EXPECT_FALSE(runtime.Saves().manager().selection_points().HasPoint());
 }
 
 TEST_F(SiglusSelpointTest, RecompiledStackSelpointCopiesTheCurrentSnapshot) {
   // The compiled stock command saves data that survives a source replacement.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   EXPECT_EQ(RunElement(149), sr::nil);
-  runtime.selection_points.SetCurrentSnapshot({.id = 2});
-  runtime.selection_points.Drop();
-  EXPECT_THAT(runtime.selection_points.history(),
+  runtime.Saves().manager().Capture("opaque checkpoint");
+  runtime.Saves().manager().selection_points().Drop();
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, RecompiledDropSelpointConsumesStock) {
   // Element 150 appends the stock exactly once through the compiled path.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
-  runtime.selection_points.Stack();
+  runtime.Saves().manager().Capture("opaque checkpoint");
+  runtime.Saves().manager().selection_points().Stack();
   EXPECT_EQ(RunElement(150), sr::nil);
-  runtime.selection_points.Drop();
-  EXPECT_THAT(runtime.selection_points.history(),
+  runtime.Saves().manager().selection_points().Drop();
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, NewMachineBindingsRetainSharedHistory) {
   // Initializing a second VM preserves existing points and shares mutations.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("selpoint();");
   SiglusMachine other(runtime);
   other.Initialize();
@@ -171,7 +174,7 @@ TEST_F(SiglusSelpointTest, NewMachineBindingsRetainSharedHistory) {
 
 TEST_F(SiglusSelpointTest, CallbackBindingsUseTheSameHistory) {
   // Both callback scopes see existing history and write to that shared state.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("selpoint();");
   for (int owner : {0, 1}) {
     SiglusMachine callback(runtime, owner);
@@ -179,22 +182,22 @@ TEST_F(SiglusSelpointTest, CallbackBindingsUseTheSameHistory) {
     binding::Execute(*callback.vm, "observed = check_selpoint(); selpoint();");
     EXPECT_EQ(callback.vm->globals_->at("observed"), sr::Value(1));
   }
-  EXPECT_THAT(runtime.selection_points.history(),
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}, CheckpointRef{.id = 1},
                           CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, ExcallEntryAndReturnPreserveSnapshots) {
   // An EX scene records into existing history while source and stock survive.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("selpoint(); stack_selpoint();");
-  runtime.selection_points.SetCurrentSnapshot({.id = 2});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   const int scene = AddElementScene(1);
   ASSERT_TRUE(runtime.OpenExcall(ScriptCall{.target = SceneTarget{scene, 0}}));
   runtime.DriveScripts();
   EXPECT_FALSE(runtime.IsExcall());
   Run("drop_selpoint();");
-  EXPECT_THAT(runtime.selection_points.history(),
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}, CheckpointRef{.id = 2},
                           CheckpointRef{.id = 1}));
 }
@@ -203,18 +206,18 @@ TEST_F(SiglusSelpointTest, ReleasingExcallResourcesPreservesSnapshots) {
   // Freeing allocated EX resources must not clear shared history or stock.
   runtime.InitializeExcall();
   runtime.excall->Alloc({});
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("selpoint(); stack_selpoint();");
   runtime.FreeExcall();
   Run("drop_selpoint(); selpoint();");
-  EXPECT_THAT(runtime.selection_points.history(),
+  EXPECT_THAT(runtime.Saves().manager().selection_points().history(),
               ElementsAre(CheckpointRef{.id = 1}, CheckpointRef{.id = 1},
                           CheckpointRef{.id = 1}));
 }
 
 TEST_F(SiglusSelpointTest, LocalResetClearsAllSnapshots) {
   // A full local reset clears history, the source, and the temporary stock.
-  runtime.selection_points.SetCurrentSnapshot({.id = 1});
+  runtime.Saves().manager().Capture("opaque checkpoint");
   Run("selpoint(); stack_selpoint();");
   runtime.ResetLocalMemory();
   Run("selpoint(); drop_selpoint(); available = check_selpoint();");

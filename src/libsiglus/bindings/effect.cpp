@@ -23,10 +23,12 @@
 
 #include "libsiglus/bindings/effect.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/effect.hpp"
 #include "core/stage.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
@@ -51,6 +53,19 @@ void BindEffect(SiglusMachine& runtime) {
 
   sb::class_<EffectEventHandle> event(m, "EffectEvent", false);
   RegisterBindingClass(runtime, event);
+  event.def_serialization(
+      [](const EffectEventHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.effect);
+        out.Put(h.property);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto effect = in.Get<std::shared_ptr<Effect>>();
+        auto property = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<EffectEventHandle>(effect, property, owner);
+      });
+
   for (const bool real_time : {false, true}) {
     auto make_counter = [&runtime, real_time](int owner) {
       auto counter = runtime.host().CreateCounter(owner);
@@ -119,7 +134,11 @@ void BindEffect(SiglusMachine& runtime) {
           vm, std::move(done), key_skip,
           system ? system->event_ptr().get() : nullptr,
           std::chrono::milliseconds(5), std::move(on_key),
-          runtime.WaitScope(h->owner));
+          DescribePollingWait(
+              runtime.WaitScope(h->owner),
+              {.kind = PollingWaitDescription::Kind::EffectEvent,
+               .effect = h->effect,
+               .parameter = h->property}));
     };
   };
   event.def("wait", wait(false), sb::vararg);
@@ -127,6 +146,17 @@ void BindEffect(SiglusMachine& runtime) {
 
   sb::class_<EffectHandle> effect(m, "Effect");
   RegisterBindingClass(runtime, effect);
+  effect.def_serialization(
+      [](const EffectHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.effect);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto effect = in.Get<std::shared_ptr<Effect>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<EffectHandle>(effect, owner);
+      });
+
   effect.add_gc_root(event);
   effect.def(sb::init([stage](int layer, int index) {
                if (index < 0)
@@ -159,6 +189,17 @@ void BindEffect(SiglusMachine& runtime) {
 
   sb::class_<EffectListHandle> effect_array(m, "EffectArray");
   RegisterBindingClass(runtime, effect_array);
+  effect_array.def_serialization(
+      [](const EffectListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.layer);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto layer = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<EffectListHandle>(layer, owner);
+      });
+
   effect_array.add_gc_root(effect);
   effect_array.def(
       sb::init([](int layer, int owner) {
@@ -190,6 +231,12 @@ void BindEffect(SiglusMachine& runtime) {
   sb::class_<ScreenEffectListHandle> screen_effect_array(m,
                                                          "ScreenEffectArray");
   RegisterBindingClass(runtime, screen_effect_array);
+  screen_effect_array.def_serialization(
+      [](const ScreenEffectListHandle& h, serilang::ObjectWriter& out) {},
+      [](serilang::ObjectReader& in) {
+        return std::make_unique<ScreenEffectListHandle>();
+      });
+
   screen_effect_array.add_gc_root(effect);
   screen_effect_array.def(
       sb::init([] { return std::make_unique<ScreenEffectListHandle>(); }));

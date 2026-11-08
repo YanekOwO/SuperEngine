@@ -22,7 +22,9 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/group.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/group.hpp"
 #include "core/stage.hpp"
@@ -71,6 +73,13 @@ void BindGroup(SiglusMachine& runtime) {
 
   sb::class_<GroupHandle> group(m, "Group");
   RegisterBindingClass(runtime, group);
+  group.def_serialization([](const GroupHandle& h,
+                             serilang::ObjectWriter& out) { out.Put(h.group); },
+                          [](serilang::ObjectReader& in) {
+                            auto group = in.Get<std::shared_ptr<Group>>();
+                            return std::make_unique<GroupHandle>(group);
+                          });
+
   group.def(sb::init([stage_state](int layer, int index) {
               std::shared_ptr<Group> g = GetGroup(stage_state, layer, index);
               return std::make_unique<GroupHandle>(g);
@@ -150,6 +159,17 @@ void BindGroup(SiglusMachine& runtime) {
 
   sb::class_<GroupListHandle> group_array(m, "GroupArray");
   RegisterBindingClass(runtime, group_array);
+  group_array.def_serialization(
+      [](const GroupListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.layer);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto layer = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<GroupListHandle>(layer, owner);
+      });
+
   group_array.add_gc_root(group);
   group_array.def(
       sb::init([](int layer, int owner) {

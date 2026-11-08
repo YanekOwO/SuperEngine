@@ -60,23 +60,32 @@ SiglusWipeOperation::SiglusWipeOperation(System* system,
                                          bool wait_flag,
                                          std::weak_ptr<SiglusWipeState> active,
                                          FrameCounter progress_counter,
+                                         int duration,
+                                         InterpolationMode interpolation,
                                          const GlobalConfig& global_config)
     : system_(system),
       stage_(stage),
       wait_flag_(wait_flag),
       active_(std::move(active)),
       progress_counter_(std::move(progress_counter)),
+      duration_(std::max(0, duration)),
+      interpolation_(interpolation),
       global_config_(global_config) {}
 
 Task<int> SiglusWipeOperation::Run(WaitContext& waits) {
+  if (on_start_)
+    std::exchange(on_start_, {})();
   // Polling starts after the priming interval. Start handles
   // already-terminal wipes separately so their exact two regular
   // frame-action boundaries do not depend on timer phase.
-  const WaitOutcome primed =
-      co_await waits.WaitFor(kPollInterval, ShouldInterruptOnInput());
-  if (primed == WaitOutcome::InterruptedByInput) {
-    FinishStage(1);
-    co_return 1;
+  if (!primed_) {
+    const WaitOutcome primed =
+        co_await waits.WaitFor(kPollInterval, ShouldInterruptOnInput());
+    primed_ = true;
+    if (primed == WaitOutcome::InterruptedByInput) {
+      FinishStage(1);
+      co_return 1;
+    }
   }
 
   while (true) {

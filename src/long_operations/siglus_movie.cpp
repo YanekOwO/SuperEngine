@@ -62,6 +62,8 @@ SiglusMovieOperation::~SiglusMovieOperation() { Stop(); }
 
 Task<int> SiglusMovieOperation::Run(WaitContext& waits) {
   playing_ = true;
+  if (on_start_)
+    on_start_();
 
   std::shared_ptr<SDLSurface> surface_;
   Frame current_frame;
@@ -112,6 +114,7 @@ Task<int> SiglusMovieOperation::Run(WaitContext& waits) {
     queue->Stop();
   });
 
+  owns_audio_ = true;
   try {
     sound_.PlayMovieAudio(path_, volume_);
   } catch (const std::exception&) {
@@ -200,7 +203,8 @@ void SiglusMovieOperation::Stop() {
   stopped_ = true;
   playing_ = false;
   frame_->draw = {};
-  sound_.StopMovieAudio();
+  if (owns_audio_)
+    sound_.StopMovieAudio();
   if (frame_queue_)
     frame_queue_->Stop();
   if (decoder_.joinable()) {

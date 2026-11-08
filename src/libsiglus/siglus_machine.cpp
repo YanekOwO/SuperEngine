@@ -27,6 +27,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/execution_serialization.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "m6/vm_factory.hpp"
 #include "srbind/srbind.hpp"
@@ -78,11 +79,10 @@ void SiglusMachine::Initialize() {
     auto* b = rhs.Get_if<sr::String>();
     return a && b ? boost::iequals(a->str_, b->str_) : lhs.Hash() == rhs.Hash();
   });
-  m.def("savepoint", [] { return 0; });
-  m.def("check_savepoint", [] { return 0; });
   (*vm->globals_)["__debug"] = host().debug;
   if (host().configure_machine)
     host().configure_machine(*this);
+  RememberBindingSymbols(*this);
 }
 
 lop::NativeWaitScope SiglusMachine::WaitScope(int owner) const {
@@ -105,7 +105,15 @@ lop::NativeWaitScope SiglusMachine::WaitScope(int owner) const {
   std::function<bool()> alive = [life, resources, resource_bound] {
     return !life.expired() && (!resource_bound || !resources.expired());
   };
-  return {std::move(active), std::move(alive)};
+  auto register_wait = [this,
+                        life](std::shared_ptr<lop::NativeWaitProducer> wait) {
+    if (!life.expired())
+      native_waits.emplace_back(std::move(wait));
+  };
+  return {.active = std::move(active),
+          .alive = std::move(alive),
+          .register_producer = std::move(register_wait),
+          .owner = owner};
 }
 
 sr::Value SiglusMachine::RequestFrame() {

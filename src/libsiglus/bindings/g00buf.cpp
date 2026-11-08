@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/g00buf.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/image_resources.hpp"
 #include "srbind/srbind.hpp"
@@ -45,6 +46,15 @@ void BindG00buf(SiglusMachine& runtime) {
 
   srbind::class_<G00bufHandle> buffer(m, "G00buf");
   RegisterBindingClass(runtime, buffer);
+  buffer.def_serialization(
+      [](const G00bufHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.index);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<G00bufHandle>(host.images, in.Get<int>());
+      });
+
   buffer.def("load", [](G00bufHandle* h, std::string filename) {
     h->images->PreloadImage(h->index, filename);
   });
@@ -53,6 +63,16 @@ void BindG00buf(SiglusMachine& runtime) {
 
   srbind::class_<G00bufListHandle> list_class(m, "G00bufList");
   RegisterBindingClass(runtime, list_class);
+  list_class.def_serialization(
+      [](const G00bufListHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<G00bufListHandle>(
+            host.images, host.gameexe
+                             ? (*host.gameexe)("G00BUF.CNT").Int().value_or(16)
+                             : 16);
+      });
+
   auto list = list_class.inst("g00buf", images, count);
   list.def("size", [](const G00bufListHandle* h) { return h->count; });
   list.def("free_all",

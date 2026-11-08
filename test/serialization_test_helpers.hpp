@@ -25,6 +25,8 @@
 
 #include "core/object_internal/objdrawer.hpp"
 #include "core/serialization_context.hpp"
+#include "libsiglus/runtime_checkpoint.hpp"
+#include "libsiglus/siglus_runtime.hpp"
 #include "utilities/serialization.hpp"
 
 #include <gtest/gtest.h>
@@ -111,6 +113,29 @@ void RoundTrip(const T& source,
                SerializationContext loading = {}) {
   Load(Save(source, format, std::move(saving)), target, format,
        std::move(loading));
+}
+
+// Use one archive so resources shared by roots, VM handles and producers retain
+// one identity. Preparation uses the target's services without installing
+// state.
+template <class T>
+T RoundTripSnapshot(const T& saved,
+                    libsiglus::SiglusRuntime& source,
+                    libsiglus::SiglusRuntime& target) {
+  std::ostringstream output(std::ios::binary);
+  {
+    boost::archive::binary_oarchive archive(output);
+    SerializationContext::Init(archive,
+                               libsiglus::MakeSerializationContext(source));
+    archive << saved;
+  }
+  T loaded;
+  std::istringstream input(output.str(), std::ios::binary);
+  boost::archive::binary_iarchive archive(input);
+  SerializationContext::Init(archive,
+                             libsiglus::MakeSerializationContext(target));
+  archive >> loaded;
+  return loaded;
 }
 
 }  // namespace serialization_test

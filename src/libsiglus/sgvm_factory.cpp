@@ -41,7 +41,9 @@
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/execution_serialization.hpp"
 #include "libsiglus/gexedat.hpp"
+#include "libsiglus/save_load.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "libsiglus/siglus_scene_renderer.hpp"
 #include "log/domain_logger.hpp"
@@ -183,7 +185,7 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
   fs::path seen_path = CorrectPath(base_path_, "scene.pck");
   MappedFile archive_mf(seen_path);
   rt.archive = std::make_shared<Archive>(Archive::Create(archive_mf.Read()));
-  rt.properties.Initialize(*rt.archive);
+  rt.InitializeProperties();
   rt.GameplayMachine().loader =
       std::make_unique<binding::Loader>(*rt.archive, vm, debug_, trace_);
 
@@ -194,8 +196,6 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
 
   rt.gameexe = std::make_shared<Gameexe>(LoadGameexe(rt.asset_scanner));
   Gameexe& gexe = *rt.gameexe;
-  const int sel_save_cnt = gexe("SEL_SAVE.CNT").ReadInt(1);
-  rt.selection_points = SelectionPoint(std::clamp(sel_save_cnt, 1, 100));
   rt.databases = DatabaseList::Load(gexe, rt.base_pth);
   gexe.SetStringAt("CAPTION", "SiglusTest");
   gexe.SetStringAt("REGNAME", "sjis: SIGLUS\\TEST");
@@ -315,11 +315,12 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
           case Action::Save:
           case Action::Load:
           case Action::Config:
-            if (execute)
-              rt.OpenExcallScene(button.action == Action::Save ? "SAVE_SCENE"
-                                 : button.action == Action::Load
-                                     ? "LOAD_SCENE"
-                                     : "CONFIG_SCENE");
+            if (execute) {
+              if (button.action == Action::Config)
+                rt.OpenExcallScene("CONFIG_SCENE");
+              else
+                rt.Saves().OpenMenu(button.action == Action::Save);
+            }
             return true;
           case Action::LocalSwitch:
             if (static_cast<std::size_t>(id) >=
@@ -555,14 +556,12 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
     }
     return lhs.Hash() == rhs.Hash();
   });
-  m.def("savepoint", [] {
-    // TODO: implement save/load and serialization support
-    return 0;
-  });
-  m.def("check_savepoint", [] {
-    // Snapshot storage does not yet provide a resumable selection savepoint.
-    return 0;
-  });
+  rt.system->text().SetBacklogLoadHandler(
+      [&rt](std::uint64_t id) { rt.Saves().OpenBacklogLoad(id); });
+  RememberBindingSymbols(rt.GameplayMachine());
+  if (rt.memory)
+    rt.memory->LoadFrom(gexe);
+  rt.Saves().LoadGlobal();
 
   return ret;
 }

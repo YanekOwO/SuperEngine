@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/save_load.hpp"
 
 #include "core/game_config.hpp"
 #include "core/gameexe.hpp"
@@ -280,10 +281,6 @@ void BindSyscom(SiglusMachine& runtime) {
              "is_localmode_enable");
 
   m.def("menu", [&runtime] { runtime.host().OpenExcallScene("CANCEL_SCENE"); });
-  m.def("open_save",
-        [&runtime] { runtime.host().OpenExcallScene("SAVE_SCENE"); });
-  m.def("open_load",
-        [&runtime] { runtime.host().OpenExcallScene("LOAD_SCENE"); });
   m.def("open_config_menu",
         [&runtime] { runtime.host().OpenExcallScene("CONFIG_SCENE"); });
   m.def(
@@ -303,6 +300,9 @@ void BindSyscom(SiglusMachine& runtime) {
             return;
         }
 
+        if (!runtime.host().Saves().FlushGlobal())
+          throw RuntimeError(
+              "Could not persist global state before returning to menu");
         auto [scene_name, zlabel] = ReadMenuScene(*gameexe);
         if (params.se_play)
           sys->sound().PlaySe(6);
@@ -320,37 +320,6 @@ void BindSyscom(SiglusMachine& runtime) {
       },
       sb::vararg);
 
-  m.def("get_new_qsave_no", [] {
-    // TODO: implement save/load
-    return 0;
-  });
-  m.def("qsave", [](int, int, int) {
-    // TODO: implement save/load
-    return 0;
-  });
-  m.def("save", [](int, int, int) {
-    // TODO: implement save/load
-    return 0;
-  });
-  m.def("get_new_save_no", []() -> int { return 1; });
-  m.def("is_save_exist", [](int slot) -> int {
-    // TODO: implement save/load
-    return false;
-  });
-
-  m.def("load", [](int, int, int, int) {});
-  m.def("qload", [](int, int, int, int) {});
-  m.def("delete_save", [](int) { return 0; });
-  m.def("change_save", [](int, int) { return 0; });
-  m.def("copy_save", [](int, int) { return 0; });
-  for (const auto* name :
-       {"get_save_year", "get_save_month", "get_save_day", "get_save_hour",
-        "get_save_minute", "get_save_second", "get_save_millisecond"})
-    m.def(name, [](int) { return 0; });
-  m.def("get_save_title", [](int) { return std::string(); });
-  m.def("get_save_message", [](int) { return std::string(); });
-  m.def("get_save_value", [](int, Value, int, int) {});
-  m.def("set_save_value", [](int, Value, int, int) {});
   // The twitter account and posting dialog is intentionally unavailable.
   m.def("twitter", [] {});
 
@@ -372,20 +341,29 @@ void BindSyscom(SiglusMachine& runtime) {
   bind_menu_flag("set_exist_save", &SyscomMenuConfig::save,
                  &MenuEntryConfig::exist);
 
-  m.def("end_game", [sys, &runtime, gameexe](int warning) {
-    if (warning && runtime.host().platform_implementor) {
-      const std::string prompt =
-          gameexe ? (*gameexe)("WARNINGINFO.GAMEEND_WARNING_STR")
-                        .Str()
-                        .value_or("Quit the game?")
-                  : "Quit the game?";
-      if (!runtime.host().platform_implementor->AskUserPrompt(prompt, "", "Yes",
-                                                              "No"))
-        return;
-    }
-    sys->RequestQuit();
-    runtime.vm->RequestStop();
-  });
+  m.def(
+      "end_game",
+      [&runtime, gameexe](std::vector<Value> raw) {
+        const auto args = CallPacket::DecodeFrom(std::move(raw)).args;
+        if (args.size() != 1 && args.size() != 3)
+          throw RuntimeError("end_game expects one or three arguments");
+        const bool warning = RequireInt(args[0], "end_game warning") != 0;
+        const bool fade =
+            args.size() == 3 && RequireInt(args[2], "end_game fade") != 0;
+        if (warning && runtime.host().platform_implementor) {
+          const std::string prompt =
+              gameexe ? (*gameexe)("WARNINGINFO.GAMEEND_WARNING_STR")
+                            .Str()
+                            .value_or("Quit the game?")
+                      : "Quit the game?";
+          if (!runtime.host().platform_implementor->AskUserPrompt(prompt, "",
+                                                                  "Yes", "No"))
+            return;
+        }
+        runtime.host().Saves().RequestQuit(fade);
+        runtime.vm->RequestHostYield();
+      },
+      sb::vararg);
 
   m.def("set_enable_hidemwnd", [local_config](bool value) {
     local_config->syscommenu.hide_mwnd.enable = value;

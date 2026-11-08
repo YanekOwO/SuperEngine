@@ -25,7 +25,8 @@
 
 #pragma once
 
-#include <boost/serialization/split_member.hpp>
+#include <boost/serialization/map.hpp>
+#include <boost/serialization/set.hpp>
 
 #include <map>
 #include <set>
@@ -47,35 +48,8 @@ class KidokuTable {
   // boost serialization support
   friend class boost::serialization::access;
 
-  // serialization format:
-  // n <scenario count>
-  // following n lines
-  // s <scenario id> m <kidoku count> k1 k2 ... km
-  void save(auto& ar, const unsigned int version) const {
-    ar & kidoku_data_.size();
-    for (const auto& [scenario, table] : kidoku_data_) {
-      ar & scenario & table.size();
-      for (auto it : table)
-        ar& static_cast<int>(it);
-    }
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & kidoku_data_;
   }
-
-  void load(auto& ar, const unsigned int version) {
-    kidoku_data_.clear();
-
-    int scenario_count, kidoku_count, scenario_id;
-
-    ar & scenario_count;
-    while (scenario_count--) {
-      ar & scenario_id & kidoku_count;
-      auto& table = kidoku_data_[scenario_id];
-      while (kidoku_count--) {
-        int x;
-        ar & x;
-        table.insert(x);
-      }
-    }
-  }
-
-  BOOST_SERIALIZATION_SPLIT_MEMBER();
 };

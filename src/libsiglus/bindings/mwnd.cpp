@@ -23,7 +23,9 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/mwnd.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/game_config.hpp"
 #include "core/object.hpp"
@@ -31,6 +33,8 @@
 #include "libsiglus/bindings/object.hpp"
 #include "libsiglus/bindings/selection.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
+#include "libsiglus/save_load.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
 #include "long_operations/siglus_textout.hpp"
 #include "long_operations/siglus_wait.hpp"
@@ -184,6 +188,17 @@ void BindMwnd(SiglusMachine& runtime) {
 
   sb::class_<MwndHandle> mwnd(m, "Mwnd");
   RegisterBindingClass(runtime, mwnd);
+  mwnd.def_serialization(
+      [](const MwndHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.mwnd);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto mwnd = in.Get<std::shared_ptr<TextWindow>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<MwndHandle>(mwnd, owner);
+      });
+
   mwnd.def(sb::init([sys](int index) {
              if (index < 0 || !sys->text().mwnd_config().HasWindow(index))
                throw sr::RuntimeError("Invalid message-window number: " +
@@ -233,6 +248,17 @@ void BindMwnd(SiglusMachine& runtime) {
 
   sb::class_<MwndArrayHandle> array(m, "MwndArray");
   RegisterBindingClass(runtime, array);
+  array.def_serialization(
+      [](const MwndArrayHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.layer);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto layer = in.Get<int>();
+        auto owner = in.Get<int>();
+        return std::make_unique<MwndArrayHandle>(layer, owner);
+      });
+
   array.def(sb::init([](int layer, int owner) {
               if (layer < 0 || layer > 2 || owner < 0 || owner > 1)
                 throw sr::RuntimeError("Invalid message-window stage");
@@ -303,6 +329,30 @@ void BindMwnd(SiglusMachine& runtime) {
 
   sb::class_<MwndObjectList> object_list(m, "MwndObjectList", false);
   RegisterBindingClass(runtime, object_list);
+  object_list.def_serialization(
+      [&runtime](const MwndObjectList& h, serilang::ObjectWriter& out) {
+        out.Put(h.window);
+        out.Put(h.kind);
+        int owner = 0;
+        if (runtime.host().excall)
+          for (const auto& layer : runtime.host().excall->stage.mwnd.storage)
+            if (std::find(layer.begin(), layer.end(), h.window) != layer.end())
+              owner = 1;
+        out.Put(owner);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto window = in.Get<std::shared_ptr<TextWindow>>();
+        auto kind = in.Get<MwndObjectList::Kind>();
+        auto owner = in.Get<int>();
+        auto factory = [&runtime,
+                        owner](std::shared_ptr<GraphicsObject> object) {
+          return serilang::Value(runtime.class_registry.MakeInst<ObjectHandle>(
+              std::move(object), owner));
+        };
+        return std::make_unique<MwndObjectList>(window, std::move(factory),
+                                                kind);
+      });
+
   object_list.def("__getitem__", &MwndObjectList::Get, sb::arg("index"));
   object_list.def("size", [](const MwndObjectList* list) {
     return static_cast<int>(list->Size());
@@ -403,21 +453,23 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("get_filter_file",
            [state](MwndHandle* h) { return state(h)->filter_file; });
 
-  mwnd.def("msg_block", [get, sys, state](MwndHandle* h) {
-    auto message = state(h);
-    if (message->block_started)
-      return;
-    auto window = get(h);
-    if (message->clear_ready || !window->CanFitMessage(false)) {
-      sys->text().Snapshot();
-      window->ClearWin();
-      sys->text().NewPageOnWindow(std::move(window));
-      message->clear_ready = false;
-    }
-    // Savepoints and read flags are not implemented in the Siglus runtime.
-    message->block_started = true;
-    message->auto_mode_base_chars = get(h)->GetCharacterCount();
-  });
+  mwnd.def("msg_block",
+           [get, sys, state, &runtime](MwndHandle* h, sr::Fiber& fiber) {
+             auto message = state(h);
+             if (message->block_started)
+               return;
+             auto window = get(h);
+             if (message->clear_ready || !window->CanFitMessage(false)) {
+               sys->text().Snapshot();
+               window->ClearWin();
+               runtime.host().current_full_message.clear();
+               sys->text().NewPageOnWindow(std::move(window));
+               message->clear_ready = false;
+             }
+             message->block_started = true;
+             message->auto_mode_base_chars = get(h)->GetCharacterCount();
+             runtime.host().Saves().BeginMessageBlock(runtime, fiber);
+           });
   mwnd.def("msg_pp_block", [state, get](MwndHandle* h) {
     state(h)->auto_mode_base_chars = get(h)->GetCharacterCount();
   });
@@ -508,6 +560,8 @@ void BindMwnd(SiglusMachine& runtime) {
         if (text.empty())
           return lop::MakeResolvedFuture(*vm.gc_);
 
+        runtime.host().Saves().AppendMessage(text);
+
         std::shared_ptr<TextWindow> window = get(h);
         const bool multi_message = sys->local_config().multi_msg_mode;
         if (multi_message)
@@ -580,7 +634,8 @@ void BindMwnd(SiglusMachine& runtime) {
     return lop::MakePollingWaitFuture(
         vm, [sys] { return !sys->sound().KoePlaying(); }, key_skip,
         sys->event_ptr().get(), std::chrono::milliseconds(5), {},
-        runtime.WaitScope());
+        DescribePollingWait(runtime.WaitScope(),
+                            {.kind = PollingWaitDescription::Kind::Voice}));
   };
   mwnd.def(
       "koe_play_wait",

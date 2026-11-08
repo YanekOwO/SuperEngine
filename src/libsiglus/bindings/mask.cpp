@@ -24,9 +24,11 @@
 #include "libsiglus/bindings/mask.hpp"
 #include "core/interpolation.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/mask.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
@@ -61,6 +63,23 @@ void BindMask(SiglusMachine& runtime) {
   // MaskEvent
   sb::class_<MaskEventHandle> event_class(m, "MaskEvent", false);
   RegisterBindingClass(runtime, event_class);
+  event_class.def_serialization(
+      [](const MaskEventHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.mask_.index_);
+        out.Put(h.parameter_ == &Mask::Parameters::x ? 0 : 1);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        auto index = in.Get<int>();
+        auto parameter = in.Get<int>();
+        if (parameter < 0 || parameter > 1)
+          throw std::runtime_error("invalid saved mask parameter");
+        return std::make_unique<MaskEventHandle>(
+            MaskHandle{host.mask_list, index},
+            parameter == 0 ? &Mask::Parameters::x : &Mask::Parameters::y,
+            host.system ? &host.system->event() : nullptr);
+      });
+
   for (const bool real_time : {false, true}) {
     auto make_counter = [&runtime, real_time] {
       auto counter = runtime.host().CreateCounter();
@@ -119,9 +138,13 @@ void BindMask(SiglusMachine& runtime) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return lop::MakePollingWaitFuture(vm, check, false, h->event_,
-                                          std::chrono::milliseconds(5), {},
-                                          runtime.WaitScope(0));
+        return lop::MakePollingWaitFuture(
+            vm, check, false, h->event_, std::chrono::milliseconds(5), {},
+            DescribePollingWait(
+                runtime.WaitScope(0),
+                {.kind = PollingWaitDescription::Kind::MaskEvent,
+                 .index = h->mask_.index_,
+                 .parameter = h->parameter_ == &Mask::Parameters::x ? 0 : 1}));
       },
       sb::vararg);
   event_class.def(
@@ -130,9 +153,13 @@ void BindMask(SiglusMachine& runtime) {
         auto check = [mask = h->mask_, param = h->parameter_] {
           return !mask.Get().IsMutatorRunning(param);
         };
-        return lop::MakePollingWaitFuture(vm, check, true, h->event_,
-                                          std::chrono::milliseconds(5), {},
-                                          runtime.WaitScope(0));
+        return lop::MakePollingWaitFuture(
+            vm, check, true, h->event_, std::chrono::milliseconds(5), {},
+            DescribePollingWait(
+                runtime.WaitScope(0),
+                {.kind = PollingWaitDescription::Kind::MaskEvent,
+                 .index = h->mask_.index_,
+                 .parameter = h->parameter_ == &Mask::Parameters::x ? 0 : 1}));
       },
       sb::vararg);
 
@@ -140,6 +167,15 @@ void BindMask(SiglusMachine& runtime) {
   // Mask
   sb::class_<MaskHandle> mask_class(m, "Mask");
   RegisterBindingClass(runtime, mask_class);
+  mask_class.def_serialization(
+      [](const MaskHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.index_);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<MaskHandle>(host.mask_list, in.Get<int>());
+      });
+
   mask_class.def("init", [](MaskHandle* mask) { mask->Get().Reset(); });
   mask_class.def(
       "create",
@@ -170,6 +206,13 @@ void BindMask(SiglusMachine& runtime) {
 
   sb::class_<MaskListHandle> list_class(m, "MaskList");
   RegisterBindingClass(runtime, list_class);
+  list_class.def_serialization(
+      [](const MaskListHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<MaskListHandle>(host.mask_list);
+      });
+
   auto mask_list = list_class.inst("mask", list);  // top level |mask| element
   mask_list.def(
       "__getitem__",

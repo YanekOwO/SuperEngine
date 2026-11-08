@@ -22,6 +22,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/native_operation_serialization.hpp"
 
 #include "core/asset_scanner.hpp"
 #include "core/avdec/ffmpeg.hpp"
@@ -96,6 +97,7 @@ class SiglusMovie {
     pending_ = lop::FutureBackedCoroutineTask(*vm_, std::move(player),
                                               system_->event_ptr().get(), {},
                                               runtime_.WaitScope());
+    player_->SetCompletionPromise(pending_->MakeFuture(*vm_->gc_)->promise);
     pending_->Start();
   }
 
@@ -106,10 +108,16 @@ class SiglusMovie {
   }
 
   sr::Value Wait(sr::VM& vm, bool key_skip) {
-    if (!player_ || !pending_)
+    if (!player_ || (!pending_ && !restored_completion_))
       return lop::MakeResolvedFuture(*vm.gc_);
     player_->SetWaitKey(key_skip);
-    sr::Future* fut = pending_->MakeFuture(*vm.gc_);
+    sr::Future* fut;
+    if (pending_)
+      fut = pending_->MakeFuture(*vm.gc_);
+    else {
+      fut = vm.gc_->Allocate<sr::Future>();
+      fut->promise = restored_completion_;
+    }
     return sr::Value(fut);
   }
 
@@ -119,6 +127,7 @@ class SiglusMovie {
     player_->Stop();
     player_ = nullptr;
     pending_.reset();
+    restored_completion_.reset();
   }
 
   std::filesystem::path FindMovie(const std::string& file_name) const {
@@ -142,9 +151,21 @@ class SiglusMovie {
   std::shared_ptr<AssetScanner> asset_scanner_;
   lop::SiglusMovieOperation* player_ = nullptr;
   std::optional<lop::FutureBackedCoroutineTask> pending_;
+  std::shared_ptr<sr::Promise> restored_completion_;
 };
 
 }  // namespace
+
+void RestoreMovieOperation(SiglusMachine& machine,
+                           lop::SiglusMovieOperation* operation,
+                           std::shared_ptr<sr::Promise> completion) {
+  auto* instance = machine.vm->globals_->at("mov").Get_if<sr::NativeInstance>();
+  auto* movie = instance ? instance->GetForeign<SiglusMovie>() : nullptr;
+  if (!movie)
+    throw std::runtime_error("Movie binding is unavailable during restore");
+  movie->player_ = operation;
+  movie->restored_completion_ = std::move(completion);
+}
 
 static std::pair<std::string, std::optional<lop::MovieRect>> ParsePlayArgs(
     std::vector<sr::Value> args) {

@@ -31,6 +31,7 @@
 #include "core/mwnd_config.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/save_load.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
@@ -43,6 +44,7 @@
 #include "systems/text_window.hpp"
 #include "vm/function.hpp"
 #include "vm/promise.hpp"
+#include "vm/serialization.hpp"
 
 #include <chrono>
 #include <memory>
@@ -132,6 +134,7 @@ class SiglusMwndMessageTest : public ::testing::Test {
       ASSERT_NE(binding, nullptr);
       (*binding)(runtime.GameplayMachine());
     }
+    sr::RememberBindingSymbols(*runtime.GameplayMachine().vm);
     Run(R"(
       class MessageStageLayer {
         fn __init__(self, layer) { self.mwnd = MwndArray(layer); }
@@ -155,6 +158,9 @@ class SiglusMwndMessageTest : public ::testing::Test {
     auto* function = runtime.GameplayMachine().vm->gc_->Allocate<sr::Function>(
         compiler.Get());
     runtime.GameplayMachine().vm->InvokeUntilBlocked(*function, {});
+    while (runtime.Saves().pending() ||
+           !runtime.GameplayMachine().vm->scheduler_.IsIdle())
+      runtime.DriveScripts();
   }
 
   void Advance(std::chrono::milliseconds delta) {

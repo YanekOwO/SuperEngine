@@ -849,6 +849,38 @@ void Recompiler::emit_val(const Value& v) {
 }
 
 void Recompiler::emit_tok(const token::ElmAlias& tk) {
+  if (tk.dst.type == Type::IntRef || tk.dst.type == Type::StrRef) {
+    // Reference arguments retain their destination instead of reading it.
+    // The small descriptor is an ordinary VM value and survives checkpoints.
+    if (const auto* property = std::get_if<elm::Usrprop>(&tk.chain.root.var);
+        property && tk.chain.nodes.empty()) {
+      emit_const(2);
+      emit_const(property->scene);
+      emit_const(property->idx);
+    } else if (!tk.chain.nodes.empty()) {
+      auto prefix = tk.chain;
+      const auto last = prefix.nodes.back();
+      prefix.nodes.pop_back();
+      if (const auto* subscript = std::get_if<elm::Subscript>(&last.var)) {
+        emit_const(0);
+        emit_elm(prefix);
+        emit_val(subscript->idx);
+      } else if (const auto* member = std::get_if<elm::Member>(&last.var)) {
+        emit_const(1);
+        emit_elm(prefix);
+        emit_const(std::string(member->name));
+      } else {
+        throw std::runtime_error(
+            "reference argument has no writable destination");
+      }
+    } else {
+      throw std::runtime_error(
+          "reference argument has no writable destination");
+    }
+    emit(sr::MakeList{.nelms = 3});
+    emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
+    return;
+  }
   emit_elm(tk.chain);
   emit(sr::StoreFast{.slot = variable_fast_slot(tk.dst.id)});
 }

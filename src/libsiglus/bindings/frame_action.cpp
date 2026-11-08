@@ -23,13 +23,16 @@
 
 #include "core/counter.hpp"
 #include "core/frame_action_manager.hpp"
+#include "vm/serialization.hpp"
 
+#include "core/object_internal/objdrawer.hpp"
 #include "libsiglus/bindings/counter.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/trace.hpp"
 #include "libsiglus/siglus_runtime.hpp"
+#include "long_operations/siglus_wait.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/object.hpp"
@@ -54,8 +57,57 @@ void BindFrameActions(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<FrameActionHandle> action_class(m, "FrameAction", false);
   RegisterBindingClass(runtime, action_class);
+  action_class.def_serialization(
+      [&runtime](const FrameActionHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.reference.action);
+        out.Put(h.reference.owner);
+        out.Put(runtime.host().excall &&
+                        h.manager == runtime.host().excall->actions.get()
+                    ? 1
+                    : 0);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        auto action = in.Get<std::shared_ptr<FrameAction>>();
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto owner = in.Get<int>();
+        if (owner < 0 || owner > 1)
+          throw std::runtime_error("invalid saved action owner");
+        if (owner == 1)
+          host.InitializeExcall();
+        auto* manager = owner == 1 ? host.excall->actions.get()
+                                   : host.frame_action_manager.get();
+        if (!manager)
+          throw std::runtime_error("saved action manager unavailable");
+        return std::make_unique<FrameActionHandle>(
+            ActionReference{action, object}, manager);
+      });
+
   sb::class_<FrameActionListHandle> list_class(m, "FrameActionList", false);
   RegisterBindingClass(runtime, list_class);
+  list_class.def_serialization(
+      [&runtime](const FrameActionListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.owner);
+        out.Put(runtime.host().excall &&
+                        h.manager == runtime.host().excall->actions.get()
+                    ? 1
+                    : 0);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        auto object = in.Get<std::shared_ptr<GraphicsObject>>();
+        auto owner = in.Get<int>();
+        if (owner < 0 || owner > 1)
+          throw std::runtime_error("invalid saved action owner");
+        if (owner == 1)
+          host.InitializeExcall();
+        auto* manager = owner == 1 ? host.excall->actions.get()
+                                   : host.frame_action_manager.get();
+        if (!manager)
+          throw std::runtime_error("saved action manager unavailable");
+        return std::make_unique<FrameActionListHandle>(object, manager);
+      });
+
   runtime.host().InitializeExcall();
   auto* manager = runtime.host().frame_action_manager.get();
 
@@ -70,7 +122,7 @@ void BindFrameActions(SiglusMachine& runtime) {
                          : handle->manager->global_channels();
   };
 
-  auto start = [loader = runtime.loader.get(), resolve_action](
+  auto start = [&runtime, loader = runtime.loader.get(), resolve_action](
                    FrameActionHandle* action, sr::Fiber& fiber,
                    std::vector<sr::Value> args, bool real_time) {
     if (!loader)
@@ -114,27 +166,34 @@ void BindFrameActions(SiglusMachine& runtime) {
       }
     }
 
-    action->manager->Start(action->reference, *duration, real_time,
-                           std::move(call));
+    const int owner =
+        action->manager == runtime.host().frame_action_manager.get() ? 0 : 1;
+    runtime.host().GetFrameActions(owner).Start(action->reference, *duration,
+                                                real_time, std::move(call));
+    return lop::MakeResolvedFuture(*runtime.vm->gc_);
   };
 
   action_class.def(
       "start",
       [start](FrameActionHandle* action, sr::Fiber& fiber,
               std::vector<sr::Value> args) {
-        start(action, fiber, std::move(args), false);
+        return start(action, fiber, std::move(args), false);
       },
       sb::vararg);
   action_class.def(
       "start_real",
       [start](FrameActionHandle* action, sr::Fiber& fiber,
               std::vector<sr::Value> args) {
-        start(action, fiber, std::move(args), true);
+        return start(action, fiber, std::move(args), true);
       },
       sb::vararg);
-  action_class.def("end", [resolve_action](FrameActionHandle* action) {
+  action_class.def("end", [&runtime,
+                           resolve_action](FrameActionHandle* action) {
     (void)resolve_action(action);
-    action->manager->End(action->reference);
+    const int owner =
+        action->manager == runtime.host().frame_action_manager.get() ? 0 : 1;
+    runtime.host().GetFrameActions(owner).End(action->reference);
+    return lop::MakeResolvedFuture(*runtime.vm->gc_);
   });
   action_class.def("is_end_action",
                    [resolve_action](FrameActionHandle* action) {

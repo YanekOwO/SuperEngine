@@ -33,15 +33,13 @@
 #include "vm/string.hpp"
 #include "vm/vm.hpp"
 
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <cstring>
 #include <sstream>
 #include <utility>
 
-namespace siglus_test {
+namespace {
 using namespace libsiglus;
 namespace sr = serilang;
 
@@ -60,7 +58,7 @@ class SiglusPropertyStorageTest : public ::testing::Test {
         {.form = Type::StrList, .size = 2, .name = "strings"}};
     AddScene("properties");
     AddScene("other_properties");
-    runtime.properties.Initialize(*runtime.archive);
+    runtime.InitializeProperties();
     Initialize(runtime.GameplayMachine());
     other = std::make_unique<SiglusMachine>(runtime);
     Initialize(*other);
@@ -138,43 +136,6 @@ class SiglusPropertyStorageTest : public ::testing::Test {
     EXPECT_EQ(Global(runtime.GameplayMachine(), "result"), sr::Value(137));
     EXPECT_EQ(std::get<int>(runtime.properties.Get(scene, 0).value), 137);
   }
-
-  template <class Output, class Input>
-  void CheckRoundTrip() {
-    auto& storage = runtime.properties;
-    const std::vector<PropertyStorage::Value> values = {
-        std::monostate{},
-        true,
-        47,
-        2.5,
-        std::string("saved"),
-        PropertyStorage::Integers{3, 5, 7, 9},
-        PropertyStorage::Strings{"first", "second", "third"}};
-    // Populate separate entries so the archive exercises every alternative.
-    for (std::size_t i = 0; i < values.size(); ++i)
-      storage.Get(static_cast<int>(i / 4) - 1, i % 4).value = values[i];
-    storage.Get(1, 2).value = PropertyStorage::Integers{};
-    storage.Get(1, 3).value = PropertyStorage::Strings{};
-    std::stringstream stream;
-    {
-      Output archive(stream);
-      archive << storage;
-    }
-    PropertyStorage restored;
-    {
-      Input archive(stream);
-      archive >> restored;
-    }
-    for (std::size_t i = 0; i < values.size(); ++i)
-      EXPECT_EQ(restored.Get(static_cast<int>(i / 4) - 1, i % 4).value,
-                values[i]);
-    EXPECT_TRUE(
-        std::get<PropertyStorage::Integers>(restored.Get(1, 2).value).empty());
-    EXPECT_TRUE(
-        std::get<PropertyStorage::Strings>(restored.Get(1, 3).value).empty());
-    EXPECT_EQ(restored.Get(-1, 2).initial_size, 3);
-    EXPECT_EQ(restored.Get(1, 3).initial_size, 2);
-  }
 };
 
 TEST_F(SiglusPropertyStorageTest, AllocatesSceneArraysBeforeModuleLoading) {
@@ -185,6 +146,42 @@ TEST_F(SiglusPropertyStorageTest, AllocatesSceneArraysBeforeModuleLoading) {
             (PropertyStorage::Integers{0, 0, 0}));
   EXPECT_EQ(std::get<PropertyStorage::Strings>(storage.Get(1, 3).value),
             (PropertyStorage::Strings{"", ""}));
+}
+
+TEST_F(SiglusPropertyStorageTest, InitializesIntegerPropertiesToZero) {
+  // Initialize archive declarations; global and scene integers start at zero.
+  for (int scene : {-1, 0, 1})
+    EXPECT_EQ(runtime.properties.Get(scene, 0).value,
+              PropertyStorage::Value(0));
+}
+
+TEST_F(SiglusPropertyStorageTest, InitializesStringPropertiesToEmpty) {
+  // Initialize archive declarations; global and scene strings start empty.
+  for (int scene : {-1, 0, 1})
+    EXPECT_EQ(runtime.properties.Get(scene, 1).value,
+              PropertyStorage::Value(std::string{}));
+}
+
+TEST_F(SiglusPropertyStorageTest, InitializesUnsupportedPropertiesToMonostate) {
+  // Add an unsupported archive type; initialization gives it an empty value.
+  runtime.archive->prop_.push_back(
+      {.form = Type::Object, .size = 0, .name = "object"});
+  runtime.InitializeProperties();
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      runtime.properties.Get(-1, 4).value));
+}
+
+TEST_F(SiglusPropertyStorageTest, InitializesZeroSizedArraysToEmpty) {
+  // Declare zero-length arrays; initialization allocates empty backing vectors.
+  runtime.archive->prop_[2].size = 0;
+  runtime.archive->prop_[3].size = 0;
+  runtime.InitializeProperties();
+  EXPECT_TRUE(
+      std::get<PropertyStorage::Integers>(runtime.properties.Get(-1, 2).value)
+          .empty());
+  EXPECT_TRUE(
+      std::get<PropertyStorage::Strings>(runtime.properties.Get(-1, 3).value)
+          .empty());
 }
 
 TEST_F(SiglusPropertyStorageTest, ScalarsAreSharedAcrossIndependentHeaps) {
@@ -334,7 +331,7 @@ TEST_F(SiglusPropertyStorageTest, InitRestoresDeclaredStringArraySize) {
   EXPECT_EQ(Global(game, "item").Get<sr::String*>()->str_, "");
 }
 
-TEST_F(SiglusPropertyStorageTest, StoredBitViewSurvivesFacadeCollection) {
+TEST_F(SiglusPropertyStorageTest, StoredBitViewSurvivesWrapperCollection) {
   // Keep a bit view after its temporary wrapper is collected; writes persist.
   auto& game = runtime.GameplayMachine();
   Run(game, "bits = __builtin_load_prop(-1, 2).b1;");
@@ -389,16 +386,6 @@ TEST_F(SiglusPropertyStorageTest, DoesNotPublishPropertyTableGlobals) {
   auto& game = runtime.GameplayMachine();
   EXPECT_FALSE(game.vm->globals_->contains("__globalprop"));
   EXPECT_FALSE(game.vm->globals_->contains("__SiglusPropertyTable"));
-}
-
-TEST_F(SiglusPropertyStorageTest, InvalidPropertyAccessDoesNotCreateState) {
-  // Invalid scene and property indices fail without inserting a table or slot.
-  auto& storage = runtime.properties;
-  EXPECT_THROW(storage.Get(99, 0), std::out_of_range);
-  EXPECT_THROW(storage.Get(-2, 0), std::out_of_range);
-  EXPECT_THROW(storage.Get(-1, -1), std::out_of_range);
-  EXPECT_THROW(storage.Get(-1, 4), std::out_of_range);
-  EXPECT_THROW(storage.Get(99, 0), std::out_of_range);
 }
 
 TEST_F(SiglusPropertyStorageTest, InvalidNativeAccessRaisesScriptError) {
@@ -478,59 +465,11 @@ TEST_F(SiglusPropertyStorageTest, RecompiledWholeArrayAssignmentCopiesValues) {
       (PropertyStorage::Integers{163}));
 }
 
-TEST_F(SiglusPropertyStorageTest, TextSerializationRoundTrip) {
-  // Archive all value types and sizes; restore them without an Archive or VM.
-  CheckRoundTrip<boost::archive::text_oarchive,
-                 boost::archive::text_iarchive>();
-}
-
-TEST_F(SiglusPropertyStorageTest, BinarySerializationRoundTrip) {
-  // Binary archives preserve the same independent property state.
-  CheckRoundTrip<boost::archive::binary_oarchive,
-                 boost::archive::binary_iarchive>();
-}
-
-TEST_F(SiglusPropertyStorageTest, DeserializationReplacesExistingState) {
-  // Restore an empty storage over initialized state; stale tables disappear.
-  PropertyStorage empty;
-  std::stringstream stream;
-  {
-    boost::archive::text_oarchive archive(stream);
-    archive << empty;
-  }
-  {
-    boost::archive::text_iarchive archive(stream);
-    archive >> runtime.properties;
-  }
-  EXPECT_THROW(runtime.properties.Get(-1, 0), std::out_of_range);
-  EXPECT_THROW(runtime.properties.Get(0, 0), std::out_of_range);
-}
-
-TEST_F(SiglusPropertyStorageTest, FailedDeserializationPreservesExistingState) {
-  // Truncate a saved archive; failed loading leaves the destination unchanged.
-  std::stringstream saved;
-  {
-    boost::archive::text_oarchive archive(saved);
-    archive << runtime.properties;
-  }
-  runtime.properties.Get(-1, 0).value = 151;
-  const auto bytes = saved.str();
-  std::stringstream truncated(bytes.substr(0, bytes.size() / 2));
-  EXPECT_THROW(
-      {
-        boost::archive::text_iarchive archive(truncated);
-        archive >> runtime.properties;
-      },
-      boost::archive::archive_exception);
-  EXPECT_EQ(std::get<int>(runtime.properties.Get(-1, 0).value), 151);
-}
-
 TEST_F(SiglusPropertyStorageTest, InitializationRejectsNegativeArraySize) {
   // Invalid array metadata cannot replace the previously initialized values.
   runtime.properties.Get(-1, 0).value = 157;
   runtime.archive->prop_[2].size = -1;
-  EXPECT_THROW(runtime.properties.Initialize(*runtime.archive),
-               std::invalid_argument);
+  EXPECT_THROW(runtime.InitializeProperties(), std::invalid_argument);
   EXPECT_EQ(std::get<int>(runtime.properties.Get(-1, 0).value), 157);
 }
 
@@ -561,4 +500,4 @@ TEST_F(SiglusPropertyStorageTest, RestoredPropertiesWorkInFreshMachine) {
   EXPECT_EQ(Global(*other, "initial"), sr::Value(3));
 }
 
-}  // namespace siglus_test
+}  // namespace

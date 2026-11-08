@@ -303,11 +303,29 @@ TEST_F(SiglusExcallTest, NormalFlagsAliasTheExistingBank) {
 }
 
 TEST_F(SiglusExcallTest, RetainedFlagBitViewSurvivesGarbageCollection) {
-  // A stored bit view keeps its EX flag facade alive across collection.
+  // A stored bit view keeps its EX flag accessor alive across collection.
   Run("excall.alloc(); bits = excall.F.b1;");
   runtime.GameplayMachine().vm->CollectGarbage();
   Run("bits[1] = 1; value = excall.F[0];");
   EXPECT_EQ(Global("value"), sr::Value(2));
+}
+
+TEST_F(SiglusExcallTest, RetainedFlagViewFollowsReallocation) {
+  // A retained EX view rejects freed storage and follows the next allocation.
+  Run("excall.alloc(); flags = excall.F; excall.free(); caught = 0; "
+      "try { flags[0]; } catch (error) { caught = 1; } "
+      "excall.alloc(); flags[0] = 31; value = excall.F[0];");
+  EXPECT_EQ(Global("caught"), sr::Value(1));
+  EXPECT_EQ(Global("value"), sr::Value(31));
+}
+
+TEST_F(SiglusExcallTest, ObjectBitViewKeepsItsDetachedObjectAlive) {
+  // A borrowed view owns the object even after its stage and wrapper disappear.
+  Run("excall.alloc(); object = excall.front.object[0]; "
+      "bits = object.F.b1; object = nil; excall.free();");
+  runtime.GameplayMachine().vm->CollectGarbage();
+  Run("bits[2] = 1; value = bits[2];");
+  EXPECT_EQ(Global("value"), sr::Value(1));
 }
 
 TEST_F(SiglusExcallTest, RepeatedAllocationPreservesResources) {

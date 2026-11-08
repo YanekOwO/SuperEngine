@@ -24,6 +24,7 @@
 
 #include "sgvm_instance.hpp"
 
+#include "libsiglus/save_load.hpp"
 #include "libsiglus/sgvm_factory.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
@@ -71,12 +72,15 @@ int SgvmInstance::Main(const std::filesystem::path& game_root) {
             std::format("Hook '{}': {}", path.string(), e.what()));
       }
 
-      if (rt.GameplayMachine().vm->IsStopRequested())
+      if (rt.GameplayMachine().vm->IsStopRequested()) {
+        machine->Saves().Shutdown();
         return 0;
+      }
     }
 
     machine->Start(start_scene_);
     machine->Run();
+    machine->Saves().Shutdown();
 
     return 0;
 

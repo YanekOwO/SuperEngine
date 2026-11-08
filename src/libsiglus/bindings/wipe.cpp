@@ -23,6 +23,7 @@
 // -----------------------------------------------------------------------
 
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/native_operation_serialization.hpp"
 #include "long_operations/siglus_wipe.hpp"
 
 #include "core/frame_action.hpp"
@@ -185,7 +186,8 @@ struct SiglusWipe {
   FrameCounter MakeWipeFrameCounter(const WipeParams& params) {
     auto source = runtime_.host().CreateCounter(
         runtime_.host().excall && stage_ == &runtime_.host().excall->stage ? 1
-                                                                           : 0);
+                                                                           : 0,
+        false);
     source->StartGame();
     FrameCounter counter(std::move(source),
                          Interpolation(Range(0, 1), InterpolationType::OneShot,
@@ -306,6 +308,7 @@ struct SiglusWipe {
 
     auto task = std::make_unique<lop::SiglusWipeOperation>(
         system_, stage_, params.wait_flag, active, std::move(progress_counter),
+        params.wipe_time, GetInterpolationMode(params.speed_mode),
         global_config_);
     lop::FutureBackedCoroutineTask pending(
         vm, std::move(task), system_->event_ptr().get(), {},
@@ -357,6 +360,19 @@ struct SiglusWipe {
   std::shared_ptr<lop::SiglusWipeState> active_;
   lop::PendingCoroutineTasks pending_;
 };
+
+void RestoreWipeOperation(SiglusMachine& machine,
+                          int owner,
+                          std::shared_ptr<lop::SiglusWipeState> state) {
+  auto* instance =
+      machine.vm->globals_->at("wipe").Get_if<sr::NativeInstance>();
+  auto* wipe = instance ? instance->GetForeign<SiglusWipe>() : nullptr;
+  if (!wipe)
+    throw std::runtime_error("Wipe binding is unavailable during restore");
+  wipe->active_ = std::move(state);
+  wipe->stage_ =
+      owner == 0 ? machine.host().stage.get() : &machine.host().excall->stage;
+}
 
 void BindWipe(SiglusMachine& runtime) {
   sr::VM& vm = *runtime.vm;

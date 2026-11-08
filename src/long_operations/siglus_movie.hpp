@@ -23,6 +23,17 @@
 
 #pragma once
 
+namespace serilang {
+class Promise;
+}
+
+namespace libsiglus {
+struct MovieOperationState;
+struct SiglusMachine;
+class ExecutionWriter;
+class ExecutionReader;
+}  // namespace libsiglus
+
 #include "long_operations/long_operation.hpp"
 #include "utilities/clock.hpp"
 
@@ -66,10 +77,19 @@ class SiglusMovieOperation final : public LongOperation {
                        bool wait_key);
   ~SiglusMovieOperation() override;
   Task<int> Run(WaitContext& waits) override;
+  libsiglus::MovieOperationState CaptureCheckpoint(
+      libsiglus::ExecutionWriter& execution) const;
+  static std::unique_ptr<LongOperation> RestoreCheckpoint(
+      libsiglus::SiglusMachine& machine,
+      libsiglus::ExecutionReader& execution,
+      const libsiglus::MovieOperationState& state);
   std::weak_ptr<MovieFrame> frame() const { return frame_; }
   bool IsPlaying() const;
   void Stop();
   void SetWaitKey(bool wait_key) { wait_key_ = wait_key; }
+  void SetCompletionPromise(std::shared_ptr<serilang::Promise> promise) {
+    completion_ = std::move(promise);
+  }
 
  private:
   struct Frame {
@@ -89,6 +109,9 @@ class SiglusMovieOperation final : public LongOperation {
   int volume_ = 255;
   bool playing_ = false;
   bool stopped_ = false;
+  bool owns_audio_ = false;
+  std::function<void()> on_start_;
+  std::shared_ptr<serilang::Promise> completion_;
   std::shared_ptr<Clock> clock_;
   SoundSystem& sound_;
   std::shared_ptr<IGraphicsBackend> backend_;

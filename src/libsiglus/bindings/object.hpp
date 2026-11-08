@@ -75,4 +75,13 @@ struct ObjectRepnoEventListHandle {
   int owner = 0;
 };
 
+// Rebuild native property accessors from their script-visible identity.
+ObjectEventHandle RestoreObjectEvent(std::shared_ptr<GraphicsObject> object,
+                                     const std::string& name,
+                                     int owner);
+ObjectRepnoEventListHandle RestoreObjectRepnoEvent(
+    std::shared_ptr<GraphicsObject> object,
+    const std::string& name,
+    int owner);
+
 }  // namespace libsiglus::binding

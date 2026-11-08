@@ -26,8 +26,9 @@
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "long_operations/siglus_wait.hpp"
+#include "vm/serialization.hpp"
 
-#include "core/memory_internal/facade.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/object.hpp"
@@ -56,6 +57,13 @@ void BindExcall(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<ExcallScriptHandle> script(m, "ExcallScript", false);
   RegisterBindingClass(runtime, script);
+  script.def_serialization(
+      [](const ExcallScriptHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<ExcallScriptHandle>(host.excall.get());
+      });
+
   script.def("set_font_name", [](ExcallScriptHandle* h, std::string name) {
     h->state->config.font_name = std::move(name);
   });
@@ -82,6 +90,13 @@ void BindExcall(SiglusMachine& runtime) {
 
   sb::class_<ExcallHandle> root(m, "Excall", false);
   RegisterBindingClass(runtime, root);
+  root.def_serialization([](const ExcallHandle& h,
+                            serilang::ObjectWriter& out) { out.Put(h.owner); },
+                         [&runtime](serilang::ObjectReader& in) {
+                           return std::make_unique<ExcallHandle>(&runtime,
+                                                                 in.Get<int>());
+                         });
+
   root.add_gc_root(script);
   root.inst("excall", &runtime, 1);
   root.def("__getitem__", [root](ExcallHandle* h, int owner) mutable {
@@ -113,6 +128,7 @@ void BindExcall(SiglusMachine& runtime) {
   root.def("free", [](ExcallHandle* h) {
     h->RequireExcall();
     h->runtime->host().FreeExcall();
+    return lop::MakeResolvedFuture(*h->runtime->vm->gc_);
   });
   root.def("check_alloc", [](ExcallHandle* h) {
     h->RequireExcall();
@@ -126,10 +142,9 @@ void BindExcall(SiglusMachine& runtime) {
     state->RequireAllocated();
     return state->flags;
   };
-  // Keep one per-VM flag facade available across EX resource allocations.
+  // Keep one symbol-bound flag view available across EX resource allocations.
   (*vm.builtins_)["%%excall_flags"] =
-      sr::Value(runtime.class_registry.MakeInst<SiglusIntListFacade>(
-          std::move(flags), 0));
+      sr::Value(runtime.class_registry.MakeInst<IntListRef>(std::move(flags)));
   root.prop_r("F", [](ExcallHandle* h) -> sr::Value {
     h->RequireAllocated();
     if (h->owner == 0)

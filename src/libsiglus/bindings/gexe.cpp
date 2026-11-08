@@ -26,6 +26,7 @@
 #include "libsiglus/bindings/registry.hpp"
 #include "srbind/srbind.hpp"
 #include "utilities/string_utilities.hpp"
+#include "vm/serialization.hpp"
 #include "vm/vm.hpp"
 
 #include <filesystem>
@@ -47,6 +48,12 @@ void BindGexe(SiglusMachine& runtime) {
   sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   sb::class_<GameexeHandle> gh(m, "gexe");
   RegisterBindingClass(runtime, gh);
+  gh.def_serialization(
+      [](const GameexeHandle& h, serilang::ObjectWriter& out) {},
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        return std::make_unique<GameexeHandle>(host.gameexe);
+      });
 
   gh.def(sb::init(
       [gexe = runtime.host().gameexe]() { return new GameexeHandle(gexe); }));

@@ -25,6 +25,9 @@
 #include "long_operations/siglus_wait.hpp"
 
 #include "core/event_listener.hpp"
+#include "libsiglus/execution_serialization.hpp"
+#include "libsiglus/native_operation_serialization.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "systems/event_system.hpp"
 #include "utilities/overload.hpp"
 #include "vm/exception.hpp"
@@ -139,6 +142,7 @@ class VmWaitBackend final : public IWaitBackend {
 // Eager polling has no external task owner. Only the scheduled callback owns
 // the producer; the event system observes it through a weak listener.
 class PollingWait final : public EventListener,
+                          public NativeWaitProducer,
                           public std::enable_shared_from_this<PollingWait> {
  public:
   PollingWait(sr::Scheduler& scheduler,
@@ -166,7 +170,29 @@ class PollingWait final : public EventListener,
     }
   }
 
-  void Start() {
+  std::shared_ptr<sr::Promise> Completion() const override { return promise_; }
+  int Owner() const override { return scope_.owner; }
+  void Activate(NativeWaitScope scope) override {
+    scope.polling = scope_.polling;
+    scope_ = std::move(scope);
+    Start();
+  }
+
+  libsiglus::NativeWaitState Capture(
+      libsiglus::ExecutionWriter& execution) const override {
+    if (!scope_.polling)
+      throw std::runtime_error(
+          "Native polling wait has no persistence description");
+    return {.promise = execution.PromiseId(promise_),
+            .owner = scope_.owner,
+            .key_skip = events_ != nullptr,
+            .interval = static_cast<int>(interval_.count()),
+            .value = *scope_.polling};
+  }
+
+  void Start() override {
+    if (std::exchange(started_, true))
+      return;
     if (events_)
       events_->AddListener(shared_from_this());
     Schedule();
@@ -235,11 +261,12 @@ class PollingWait final : public EventListener,
   std::function<void()> on_key_;
   std::shared_ptr<sr::Promise> promise_;
   bool finished_ = false;
+  bool started_ = false;
 };
 
 }  // namespace
 
-struct FutureBackedCoroutineTask::State {
+struct FutureBackedCoroutineTask::State : NativeWaitProducer {
   State(sr::VM& vm,
         std::unique_ptr<LongOperation> operation,
         EventSystem* events,
@@ -265,7 +292,29 @@ struct FutureBackedCoroutineTask::State {
 
   ~State() { Cancel(); }
 
-  void Start() {
+  std::shared_ptr<sr::Promise> Completion() const override { return promise; }
+
+  libsiglus::NativeWaitState Capture(
+      libsiglus::ExecutionWriter& execution) const override {
+    return {.promise = execution.PromiseId(promise),
+            .owner = scope.owner,
+            .started = started,
+            .value = libsiglus::CaptureNativeOperation(*operation, execution)};
+  }
+
+  int Owner() const override { return scope.owner; }
+  void Activate(NativeWaitScope new_scope) override {
+    scope = std::move(new_scope);
+    activated = true;
+    if (resume_on_activation)
+      Start();
+  }
+
+  void Start() override {
+    if (!activated) {
+      resume_on_activation = true;
+      return;
+    }
     if (!std::exchange(started, true))
       Drive({});
   }
@@ -325,6 +374,8 @@ struct FutureBackedCoroutineTask::State {
   std::shared_ptr<sr::Promise> promise = std::make_shared<sr::Promise>();
   Task<int> coroutine;
   bool started = false;
+  bool activated = true;
+  bool resume_on_activation = false;
 };
 
 FutureBackedCoroutineTask::FutureBackedCoroutineTask(
@@ -333,11 +384,14 @@ FutureBackedCoroutineTask::FutureBackedCoroutineTask(
     EventSystem* event_system,
     std::function<bool()> active,
     NativeWaitScope scope)
-    : state_(std::make_unique<State>(vm,
+    : state_(std::make_shared<State>(vm,
                                      std::move(operation),
                                      event_system,
                                      std::move(active),
-                                     std::move(scope))) {}
+                                     std::move(scope))) {
+  if (state_->scope.register_producer)
+    state_->scope.register_producer(state_);
+}
 
 FutureBackedCoroutineTask::~FutureBackedCoroutineTask() = default;
 
@@ -346,6 +400,29 @@ FutureBackedCoroutineTask::FutureBackedCoroutineTask(
 
 FutureBackedCoroutineTask& FutureBackedCoroutineTask::operator=(
     FutureBackedCoroutineTask&&) noexcept = default;
+
+std::shared_ptr<NativeWaitProducer> FutureBackedCoroutineTask::Restore(
+    sr::VM& vm,
+    std::shared_ptr<sr::Promise> promise,
+    std::unique_ptr<LongOperation> operation,
+    EventSystem* event_system,
+    NativeWaitScope scope,
+    bool started) {
+  auto state =
+      std::make_shared<State>(vm, std::move(operation), event_system,
+                              std::function<bool()>{}, std::move(scope));
+  state->promise = std::move(promise);
+  state->promise->initial_await = [weak = std::weak_ptr<State>(state)](
+                                      sr::VM&, sr::Value&, sr::Value&) {
+    if (auto state = weak.lock())
+      state->Start();
+  };
+  state->activated = false;
+  state->resume_on_activation = started;
+  if (state->scope.register_producer)
+    state->scope.register_producer(state);
+  return state;
+}
 
 void FutureBackedCoroutineTask::Start() {
   if (state_)
@@ -391,13 +468,34 @@ sr::Value MakePollingWaitFuture(sr::VM& vm,
     return MakeResolvedFuture(*vm.gc_);
 
   auto* future = vm.gc_->Allocate<sr::Future>();
+  auto register_producer = scope.register_producer;
   auto polling = std::make_shared<PollingWait>(
       vm.scheduler_, key_skip ? event_system : nullptr, std::move(done),
       poll_interval, std::move(on_key), future->promise, std::move(scope));
+  if (register_producer)
+    register_producer(polling);
   // Polling starts at creation. The external timer keeps its state alive;
   // making a future alone does not add new VM pending-work tracking.
   polling->Start();
   return sr::Value(future);
+}
+
+std::shared_ptr<NativeWaitProducer> RestorePollingWait(
+    sr::VM& vm,
+    std::shared_ptr<sr::Promise> promise,
+    std::function<bool()> done,
+    bool key_skip,
+    EventSystem* events,
+    std::chrono::milliseconds interval,
+    std::function<void()> on_key,
+    NativeWaitScope scope) {
+  auto register_producer = scope.register_producer;
+  auto polling = std::make_shared<PollingWait>(
+      vm.scheduler_, key_skip ? events : nullptr, std::move(done), interval,
+      std::move(on_key), std::move(promise), std::move(scope));
+  if (register_producer)
+    register_producer(polling);
+  return polling;
 }
 
 sr::Future* PendingCoroutineTasks::MakeFuture(

@@ -29,7 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -53,18 +53,16 @@ struct CheckpointRef {
 class SelectionPoint {
  public:
   struct State {
-    std::optional<CheckpointRef> current;
     std::optional<CheckpointRef> stock;
     std::vector<CheckpointRef> history;
   };
 
-  explicit SelectionPoint(std::size_t capacity = 1);
+  // The owner must keep current alive. ID zero means no savepoint is available.
+  explicit SelectionPoint(const CheckpointRef& current,
+                          std::size_t capacity = 1);
   State GetState() const;
   // Restores copied state while retaining this instance's configured capacity.
   void RestoreState(State state);
-
-  // A zero checkpoint ID means no savepoint is available.
-  void SetCurrentSnapshot(CheckpointRef snapshot);
 
   void Mark();
   void Clear();
@@ -73,18 +71,17 @@ class SelectionPoint {
   void Stack();
   // Append the stocked snapshot and consume it, even when no data is present.
   void Drop();
-  // Clear all snapshots while retaining the configured history capacity.
+  // Clear stock and history without changing the borrowed current checkpoint.
   void Reset();
 
-  inline std::span<const CheckpointRef> history() {
-    return std::span<const CheckpointRef>(history_.linearize(),
-                                          history_.size());
+  auto history() const {
+    return std::ranges::subrange(history_.cbegin(), history_.cend());
   }
 
  private:
-  void Append(const std::optional<CheckpointRef>& snapshot);
+  void Append(const CheckpointRef& snapshot);
 
-  std::optional<CheckpointRef> current_;
+  const CheckpointRef& current_;
   std::optional<CheckpointRef> stock_;
   boost::circular_buffer<CheckpointRef> history_;
 };

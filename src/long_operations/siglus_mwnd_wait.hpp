@@ -23,9 +23,21 @@
 
 #pragma once
 
+namespace libsiglus {
+struct MessageWaitOperationState;
+struct SiglusMachine;
+class ExecutionWriter;
+class ExecutionReader;
+}  // namespace libsiglus
+
 #include "long_operations/long_operation.hpp"
 
+#include <chrono>
 #include <memory>
+
+namespace serilang {
+class Promise;
+}
 
 class System;
 class TextWindow;
@@ -47,6 +59,12 @@ class SiglusMwndWaitOperation final : public LongOperation {
                           std::shared_ptr<MwndMessageState> message_state,
                           AfterWait after_wait);
   Task<int> Run(WaitContext& waits) override;
+  libsiglus::MessageWaitOperationState CaptureCheckpoint(
+      libsiglus::ExecutionWriter& execution) const;
+  static std::unique_ptr<LongOperation> RestoreCheckpoint(
+      libsiglus::SiglusMachine& machine,
+      libsiglus::ExecutionReader& execution,
+      const libsiglus::MessageWaitOperationState& state);
 
  private:
   class PauseGuard;
@@ -59,6 +77,12 @@ class SiglusMwndWaitOperation final : public LongOperation {
   std::shared_ptr<TextWindow> window_;
   std::shared_ptr<MwndMessageState> message_state_;
   AfterWait after_wait_;
+  enum class Phase { Reveal, Debounce, Advance, Pause, Pace, Finish, Done };
+  Phase phase_ = Phase::Reveal;
+  std::chrono::milliseconds auto_start_{};
+  int auto_wait_ms_ = 0;
+  int result_ = 0;
+  std::shared_ptr<serilang::Promise> pace_frame_;
 };
 
 }  // namespace lop

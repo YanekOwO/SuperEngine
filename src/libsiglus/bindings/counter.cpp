@@ -23,8 +23,10 @@
 
 #include "libsiglus/bindings/counter.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "core/counter.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
 #include "srbind/srbind.hpp"
@@ -64,6 +66,17 @@ void BindCounter(SiglusMachine& runtime) {
   // Counter
   sb::class_<CounterHandle> counter_class(m, "Counter");
   RegisterBindingClass(runtime, counter_class);
+  counter_class.def_serialization(
+      [](const CounterHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.counter_);
+        out.Put(h.owner);
+      },
+      [](serilang::ObjectReader& in) {
+        auto counter_ = in.Get<std::shared_ptr<Counter>>();
+        auto owner = in.Get<int>();
+        return std::make_unique<CounterHandle>(counter_, owner);
+      });
+
   counter_class.def("set",
                     [](CounterHandle* h, int value) { h->Get()->Set(value); });
   counter_class.def("get",
@@ -95,18 +108,24 @@ void BindCounter(SiglusMachine& runtime) {
         auto check = [counter = *h, value] {
           return counter.Get()->Get() >= value;
         };
-        return lop::MakePollingWaitFuture(vm, check, false, event,
-                                          std::chrono::milliseconds(5), {},
-                                          runtime.WaitScope(h->owner));
+        return lop::MakePollingWaitFuture(
+            vm, check, false, event, std::chrono::milliseconds(5), {},
+            DescribePollingWait(runtime.WaitScope(h->owner),
+                                {.kind = PollingWaitDescription::Kind::Counter,
+                                 .counter = h->Get(),
+                                 .value = value}));
       });
   counter_class.def(
       "wait_key", [event, &runtime](CounterHandle* h, sr::VM& vm, int value) {
         auto check = [counter = *h, value] {
           return counter.Get()->Get() >= value;
         };
-        return lop::MakePollingWaitFuture(vm, check, true, event,
-                                          std::chrono::milliseconds(5), {},
-                                          runtime.WaitScope(h->owner));
+        return lop::MakePollingWaitFuture(
+            vm, check, true, event, std::chrono::milliseconds(5), {},
+            DescribePollingWait(runtime.WaitScope(h->owner),
+                                {.kind = PollingWaitDescription::Kind::Counter,
+                                 .counter = h->Get(),
+                                 .value = value}));
       });
   counter_class.def("check_value", [](const CounterHandle* h, int value) {
     return h->Get()->Get() >= value ? 1 : 0;
@@ -120,6 +139,21 @@ void BindCounter(SiglusMachine& runtime) {
 
   sb::class_<CounterListHandle> list_class(m, "CounterList");
   RegisterBindingClass(runtime, list_class);
+  list_class.def_serialization(
+      [](const CounterListHandle& h, serilang::ObjectWriter& out) {
+        out.Put(h.owner);
+      },
+      [&runtime](serilang::ObjectReader& in) {
+        auto& host = runtime.host();
+        auto owner = in.Get<int>();
+        if (owner < 0 || owner > 1)
+          throw std::runtime_error("invalid saved counter owner");
+        if (owner == 1)
+          host.InitializeExcall();
+        return std::make_unique<CounterListHandle>(
+            owner == 1 ? host.excall->counters : host.counter_list, owner);
+      });
+
   auto counter_list =
       list_class.inst("counter", list);  // top level |counter| element
   counter_list.def(

@@ -379,7 +379,7 @@ TEST_F(SiglusDatabaseBindingTest,
   // a result.
   binding::FakeScene scene{.scene_name = "unsupported",
                            .command_name = "unsupported"};
-  scene.AppendElement({3});
+  scene.AppendElement({9999});
   scene.AppendByte(ByteCode::Cmd);
   for (int value : {0, 0, 0, static_cast<int>(Type::Int)})
     scene.AppendInt(value);
@@ -392,7 +392,7 @@ TEST_F(SiglusDatabaseBindingTest,
     FAIL() << "expected checked execution error";
   } catch (const std::exception& e) {
     EXPECT_THAT(e.what(), HasSubstr("unsupported Siglus command"));
-    EXPECT_THAT(e.what(), HasSubstr("int:3"));
+    EXPECT_THAT(e.what(), HasSubstr("int:9999"));
   }
 }
 

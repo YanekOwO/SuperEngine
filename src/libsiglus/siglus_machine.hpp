@@ -33,7 +33,8 @@
 
 namespace lop {
 struct NativeWaitScope;
-}
+class NativeWaitProducer;
+}  // namespace lop
 namespace serilang {
 class VM;
 class Promise;
@@ -63,6 +64,8 @@ struct SiglusMachine {
   std::shared_ptr<SelState> selection_state;
   std::shared_ptr<EventListener> selection_event_listener;
   std::vector<std::function<void()>> reset_local_memory;
+  mutable std::vector<std::weak_ptr<lop::NativeWaitProducer>> native_waits;
+  std::vector<std::shared_ptr<lop::NativeWaitProducer>> restored_native_waits;
   std::shared_ptr<char> lifetime = std::make_shared<char>();
   std::shared_ptr<serilang::Promise> entry_completion;
   std::shared_ptr<serilang::Promise> caller_completion;

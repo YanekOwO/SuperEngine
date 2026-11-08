@@ -24,7 +24,6 @@
 #include "libsiglus/bindings/properties.hpp"
 #include "libsiglus/bindings/memory.hpp"
 
-#include "core/memory_internal/facade.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
@@ -38,25 +37,6 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
 
-template <class Values>
-static Values& GetList(PropertyStorage& storage, int scene, int index) {
-  auto* values = std::get_if<Values>(&storage.Get(scene, index).value);
-  if (!values)
-    throw sr::RuntimeError(
-        "property no longer contains the expected list type");
-  return *values;
-}
-
-template <class Values, class Facade>
-static Values CopyList(Facade& source, sr::Fiber& fiber) {
-  const int size = source.size(fiber);
-  Values values;
-  values.reserve(size);
-  for (int i = 0; i < size; ++i)
-    values.push_back(source.get(fiber, i));
-  return values;
-}
-
 void BindProperties(SiglusMachine& machine) {
   auto& vm = *machine.vm;
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
@@ -65,7 +45,7 @@ void BindProperties(SiglusMachine& machine) {
       "__builtin_load_prop",
       [&storage, &registry = machine.class_registry](sr::VM& vm, int scene,
                                                      int index) -> sr::Value {
-        const auto& entry = storage.Get(scene, index);
+        auto cell = storage.GetCell(scene, index);
         return std::visit(
             [&](const auto& value) -> sr::Value {
               using T = std::decay_t<decltype(value)>;
@@ -74,54 +54,36 @@ void BindProperties(SiglusMachine& machine) {
               } else if constexpr (std::same_as<T, std::string>) {
                 return vm.gc_->Allocate<sr::String>(value);
               } else if constexpr (std::same_as<T, PropertyStorage::Integers>) {
-                auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
-                  return GetList<T>(storage, scene, index);
-                };
-                return registry.MakeInst<SiglusIntListFacade>(
-                    std::move(getter), entry.initial_size,
-                    ListInitialization::Ready);
+                return registry.MakeInst<IntListHandle>(cell);
               } else if constexpr (std::same_as<T, PropertyStorage::Strings>) {
-                auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
-                  return GetList<T>(storage, scene, index);
-                };
-                return registry.MakeInst<SiglusStrListFacade>(
-                    std::move(getter), entry.initial_size,
-                    ListInitialization::Ready);
+                return registry.MakeInst<StrListHandle>(cell);
               } else {
                 return value;
               }
             },
-            entry.value);
+            cell->value);
       });
-  m.def("__builtin_store_prop", [&storage, &registry = machine.class_registry](
-                                    sr::Fiber& fiber, int scene, int index,
-                                    sr::Value value) {
-    auto& destination = storage.Get(scene, index).value;
-    if (const auto* boolean = value.Get_if<bool>())
-      destination = *boolean;
-    else if (const auto* real = value.Get_if<double>())
-      destination = *real;
-    else if (const auto* integer = value.Get_if<int>())
-      destination = *integer;
-    else if (const auto* string = value.Get_if<sr::String>())
-      destination = string->str_;
-    else if (value.Get_if<std::monostate>())
-      destination = std::monostate{};
-    else if (const auto* native = value.Get_if<sr::NativeInstance>();
-             native && native->foreign &&
-             native->klass ==
-                 registry.GetClass<SiglusIntListFacade>().native_class())
-      destination = CopyList<PropertyStorage::Integers>(
-          *native->GetForeign<SiglusIntListFacade>(), fiber);
-    else if (const auto* native = value.Get_if<sr::NativeInstance>();
-             native && native->foreign &&
-             native->klass ==
-                 registry.GetClass<SiglusStrListFacade>().native_class())
-      destination = CopyList<PropertyStorage::Strings>(
-          *native->GetForeign<SiglusStrListFacade>(), fiber);
-    else
-      throw sr::RuntimeError("unsupported property value: " + value.Desc());
-  });
+  m.def(
+      "__builtin_store_prop", [&machine, &storage](sr::Fiber& fiber, int scene,
+                                                   int index, sr::Value value) {
+        auto& destination = storage.Get(scene, index).value;
+        if (const auto* boolean = value.Get_if<bool>())
+          destination = *boolean;
+        else if (const auto* real = value.Get_if<double>())
+          destination = *real;
+        else if (const auto* integer = value.Get_if<int>())
+          destination = *integer;
+        else if (const auto* string = value.Get_if<sr::String>())
+          destination = string->str_;
+        else if (value.Get_if<std::monostate>())
+          destination = std::monostate{};
+        else if (const auto* integers = IntListData(machine, fiber, value))
+          destination = *integers;
+        else if (const auto* strings = StrListData(machine, fiber, value))
+          destination = *strings;
+        else
+          throw sr::RuntimeError("unsupported property value: " + value.Desc());
+      });
 }
 
 }  // namespace libsiglus::binding

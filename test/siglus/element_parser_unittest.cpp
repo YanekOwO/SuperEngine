@@ -209,12 +209,11 @@ TEST_F(ElementParserTest, MissingAllEventOperationPreservesTheObjectPrefix) {
   EXPECT_THAT(warnings, ElementsAre("[AllEvent] expected operation"));
 }
 
-TEST_F(ElementParserTest, SyscomSilentSoundDefaultKeepsTheEffectiveMapping) {
-  // Syscom ID 247 selects the default silent-sound setter without making a
-  // call.
+TEST_F(ElementParserTest, SyscomEndGameExistFlagReturnsItsStoredValue) {
+  // The exit-menu visibility query is a call returning an integer flag.
   auto parsed = chain(63, 247);
-  EXPECT_EQ(parsed, "syscom.set_play_silent_sound_onoff_default");
-  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed, "syscom.get_exist_endgame()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
 }
 
 TEST_F(ElementParserTest, MemoryBank) {
@@ -461,20 +460,22 @@ TEST_F(ElementParserTest, Title) {
 }
 
 TEST_F(ElementParserTest, FrameAction) {
+  // Frame action mutations may suspend while their serialized host job runs;
+  // every start/end form must retain the implicit await marker.
   {
     ElementCode elm{53, -1, 8, 1};
     elm.ForceBind({0, {v(-1), v("$$command_name")}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed,
               "frame_action_ch[int:8].start(int:-1,str:$$command_name)");
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{79, 3};
     elm.ForceBind({0, {v(-1), v("$$command_name")}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.start_real(int:-1,str:$$command_name)");
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{79, 1};
@@ -483,14 +484,14 @@ TEST_F(ElementParserTest, FrameAction) {
                     Value(Variable(Type::String, 123))}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.start(t456,t123)");
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
   {
     ElementCode elm{79, 2};
     elm.ForceBind({0, {}});
     ChainCtx parsed = chain(elm);
     EXPECT_EQ(parsed, "frame_action.end()");
-    EXPECT_EQ(parsed.CallFlags(), "[]s");
+    EXPECT_EQ(parsed.CallFlags(), "[]as");
   }
 }
 
@@ -1441,11 +1442,12 @@ TEST_F(ElementParserTest, ExcallAllocIsAnImplicitCall) {
 }
 
 TEST_F(ElementParserTest, ExcallFreeIsAnImplicitCall) {
-  // An unbound EX-call member executes and returns its declared result type.
+  // Releasing EX resources may suspend for its host action jobs; the implicit
+  // command must await completion and preserve its void result type.
   auto parsed = chain(65, 5);
   EXPECT_EQ(parsed, "excall.free()");
   EXPECT_EQ(parsed.chain.GetType(), Type::None);
-  EXPECT_EQ(parsed.CallFlags(), "[]s");
+  EXPECT_EQ(parsed.CallFlags(), "[]as");
 }
 
 TEST_F(ElementParserTest, ExcallCheckAllocIsAnImplicitCall) {

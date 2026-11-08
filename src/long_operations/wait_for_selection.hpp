@@ -23,6 +23,13 @@
 
 #pragma once
 
+namespace libsiglus {
+struct SelectionWaitOperationState;
+struct SiglusMachine;
+class ExecutionWriter;
+class ExecutionReader;
+}  // namespace libsiglus
+
 #include "core/selection.hpp"
 #include "long_operations/long_operation.hpp"
 
@@ -42,6 +49,12 @@ class WaitForSelection final : public LongOperation {
   ~WaitForSelection() override;
 
   Task<int> Run(WaitContext& waits) override;
+  libsiglus::SelectionWaitOperationState CaptureCheckpoint(
+      libsiglus::ExecutionWriter& execution) const;
+  static std::unique_ptr<LongOperation> RestoreCheckpoint(
+      libsiglus::SiglusMachine& machine,
+      libsiglus::ExecutionReader& execution,
+      const libsiglus::SelectionWaitOperationState& state);
   void OnEvent(std::shared_ptr<Event> event) override;
 
  private:

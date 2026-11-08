@@ -23,18 +23,25 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
+#include "libsiglus/save_load.hpp"
 #include "srbind/srbind.hpp"
 
 namespace libsiglus::binding {
 
 void BindSelpoint(SiglusMachine& machine) {
-  auto& state = machine.host().selection_points;
+  auto& host = machine.host();
   srbind::module_ m(machine.vm->gc_.get(), machine.vm->globals_.get());
-  m.def("selpoint", [&state] { state.Mark(); });
-  m.def("clear_selpoint", [&state] { state.Clear(); });
-  m.def("check_selpoint", [&state] { return state.HasPoint() ? 1 : 0; });
-  m.def("stack_selpoint", [&state] { state.Stack(); });
-  m.def("drop_selpoint", [&state] { state.Drop(); });
+  m.def("selpoint",
+        [&host] { host.Saves().manager().selection_points().Mark(); });
+  m.def("clear_selpoint",
+        [&host] { host.Saves().manager().selection_points().Clear(); });
+  m.def("check_selpoint", [&host] {
+    return host.Saves().manager().selection_points().HasPoint() ? 1 : 0;
+  });
+  m.def("stack_selpoint",
+        [&host] { host.Saves().manager().selection_points().Stack(); });
+  m.def("drop_selpoint",
+        [&host] { host.Saves().manager().selection_points().Drop(); });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "selpoint", BindSelpoint)

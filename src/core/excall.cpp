@@ -52,7 +52,7 @@ void Excall::Alloc(const AllocationSizes& sizes) {
 }
 
 void Excall::Free(bool finish_actions) {
-  if (!allocated || releasing)
+  if (!allocated || (releasing && finish_actions))
     return;
   releasing = true;
   try {

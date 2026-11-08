@@ -54,7 +54,15 @@ void BindMsgbk(SiglusMachine& runtime) {
   sb::module_ m(vm.gc_.get(), vm.globals_.get());
   sb::class_<MessageBack> msgbk_cls(m, "Msgbk", false);
   RegisterBindingClass(runtime, msgbk_cls);
-  auto msgbk = msgbk_cls.inst("msgbk");
+  // The runtime owns the backlog across EX and callback binding instances.
+  // The native wrapper borrows it and must not delete that shared state.
+  msgbk_cls.native_class()->finalize = nullptr;
+  auto* instance =
+      vm.gc_->Allocate<sr::NativeInstance>(msgbk_cls.native_class());
+  instance->SetForeign(runtime.host().message_back.get());
+  (*vm.globals_)["msgbk"] = instance;
+  sb::instance_<MessageBack> msgbk(vm.gc_.get(), msgbk_cls.native_class(),
+                                   instance);
 
   msgbk.def(
       "insert_msg",

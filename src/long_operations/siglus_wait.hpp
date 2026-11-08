@@ -27,23 +27,46 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 class EventSystem;
+namespace libsiglus {
+class ExecutionWriter;
+struct NativeWaitState;
+struct PollingWaitDescription;
+}  // namespace libsiglus
 
 namespace serilang {
 class GarbageCollector;
 struct Future;
 class VM;
+class Promise;
 }  // namespace serilang
 
 namespace lop {
+
+struct NativeWaitScope;
+
+class NativeWaitProducer {
+ public:
+  virtual ~NativeWaitProducer() = default;
+  virtual std::shared_ptr<serilang::Promise> Completion() const = 0;
+  virtual libsiglus::NativeWaitState Capture(
+      libsiglus::ExecutionWriter& execution) const = 0;
+  virtual void Start() = 0;
+  virtual int Owner() const = 0;
+  virtual void Activate(NativeWaitScope scope) = 0;
+};
 
 // Native producers may outlive the script invocation that created them. Their
 // owner supplies input/progress eligibility and resource lifetime explicitly.
 struct NativeWaitScope {
   std::function<bool()> active;
   std::function<bool()> alive;
+  std::function<void(std::shared_ptr<NativeWaitProducer>)> register_producer;
+  std::shared_ptr<libsiglus::PollingWaitDescription> polling;
+  int owner = -1;
 };
 
 serilang::Value MakeResolvedFuture(serilang::GarbageCollector& gc,
@@ -56,6 +79,16 @@ serilang::Value MakePollingWaitFuture(
     std::chrono::milliseconds poll_interval = std::chrono::milliseconds(5),
     std::function<void()> on_key = {},
     NativeWaitScope scope = {});
+
+std::shared_ptr<NativeWaitProducer> RestorePollingWait(
+    serilang::VM& vm,
+    std::shared_ptr<serilang::Promise> promise,
+    std::function<bool()> done,
+    bool key_skip,
+    EventSystem* events,
+    std::chrono::milliseconds interval,
+    std::function<void()> on_key,
+    NativeWaitScope scope);
 
 // Owns a native operation and exposes its result through a VM promise. Lazy
 // until first VM await unless Start() is called. All operation suspensions must
@@ -82,10 +115,17 @@ class FutureBackedCoroutineTask {
   void Cancel() noexcept;
   serilang::Future* MakeFuture(serilang::GarbageCollector& gc);
   bool Done() const noexcept;
+  static std::shared_ptr<NativeWaitProducer> Restore(
+      serilang::VM& vm,
+      std::shared_ptr<serilang::Promise> promise,
+      std::unique_ptr<LongOperation> operation,
+      EventSystem* event_system,
+      NativeWaitScope scope,
+      bool started);
 
  private:
   struct State;
-  std::unique_ptr<State> state_;
+  std::shared_ptr<State> state_;
 };
 
 class PendingCoroutineTasks {

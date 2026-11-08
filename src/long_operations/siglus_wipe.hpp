@@ -24,6 +24,13 @@
 
 #pragma once
 
+namespace libsiglus {
+struct WipeOperationState;
+struct SiglusMachine;
+class ExecutionWriter;
+class ExecutionReader;
+}  // namespace libsiglus
+
 #include "core/frame_counter.hpp"
 #include "long_operations/long_operation.hpp"
 
@@ -64,8 +71,16 @@ class SiglusWipeOperation final : public LongOperation {
                       bool wait_flag,
                       std::weak_ptr<SiglusWipeState> active,
                       FrameCounter progress_counter,
+                      int duration,
+                      InterpolationMode interpolation,
                       const GlobalConfig& global_config);
   Task<int> Run(WaitContext& waits) override;
+  libsiglus::WipeOperationState CaptureCheckpoint(
+      libsiglus::ExecutionWriter& execution) const;
+  static std::unique_ptr<LongOperation> RestoreCheckpoint(
+      libsiglus::SiglusMachine& machine,
+      libsiglus::ExecutionReader& execution,
+      const libsiglus::WipeOperationState& state);
 
  private:
   static constexpr std::chrono::milliseconds kPollInterval =
@@ -80,7 +95,11 @@ class SiglusWipeOperation final : public LongOperation {
   bool wait_flag_;
   std::weak_ptr<SiglusWipeState> active_;
   FrameCounter progress_counter_;
+  int duration_;
+  InterpolationMode interpolation_;
+  std::function<void()> on_start_;
   const GlobalConfig& global_config_;
+  bool primed_ = false;
 };
 
 }  // namespace lop

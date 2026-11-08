@@ -23,7 +23,6 @@
 
 #include "libsiglus/bindings/capture.hpp"
 
-#include "core/memory_internal/facade.hpp"
 #include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -40,6 +39,7 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -138,15 +138,6 @@ CaptureFileOptions DecodeCaptureFileOptions(std::vector<sr::Value> args,
 
 namespace {
 
-template <typename T>
-T* Bank(sr::Value value, const char* name) {
-  auto* instance = value.Get_if<sr::NativeInstance>();
-  if (!instance || !instance->klass || instance->klass->name != name ||
-      !instance->foreign)
-    throw sr::RuntimeError(std::string("Capture flags require ") + name);
-  return instance->GetForeign<T>();
-}
-
 fs::path CaptureFilePath(const CaptureFileOptions& options,
                          CaptureManager& captures,
                          IPlatformImplementor* platform,
@@ -167,57 +158,69 @@ fs::path CaptureFilePath(const CaptureFileOptions& options,
                      path.relative_path().string());
 }
 
-std::pair<int, int> Range(int begin, int count, int size) {
+std::pair<int, int> Range(int begin, int count, std::size_t size) {
+  if (size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    throw sr::RuntimeError("Capture list size exceeds script integer range");
   const auto end = std::clamp<std::int64_t>(
       static_cast<std::int64_t>(begin) + std::max(count, 0), 0, size);
-  begin = std::clamp(begin, 0, size);
+  begin = std::clamp(begin, 0, static_cast<int>(size));
   return {begin, static_cast<int>(std::max<std::int64_t>(begin, end))};
 }
 
-CaptureFlags ReadFlags(const CaptureFileOptions& options, sr::Fiber& fiber) {
+template <typename T>
+std::vector<T>& RequireFlagList(std::vector<T>* list) {
+  if (!list)
+    throw sr::RuntimeError("Capture flags require a native list or bank");
+  return *list;
+}
+
+CaptureFlags ReadFlags(SiglusMachine& machine,
+                       const CaptureFileOptions& options,
+                       sr::Fiber& fiber) {
   CaptureFlags flags;
   if (options.int_count > 0) {
-    auto* bank = Bank<SiglusIntListFacade>(options.integers, "__SiglusIntList");
+    const auto& data =
+        RequireFlagList(IntListData(machine, fiber, options.integers));
     const auto [begin, end] =
-        Range(options.int_start, options.int_count, bank->size(fiber));
-    for (int i = begin; i < end; ++i)
-      flags.integers.push_back(bank->get(fiber, i));
+        Range(options.int_start, options.int_count, data.size());
+    flags.integers.assign(data.begin() + begin, data.begin() + end);
   }
   if (options.str_count > 0) {
-    auto* bank = Bank<SiglusStrListFacade>(options.strings, "__SiglusStrList");
+    const auto& data =
+        RequireFlagList(StrListData(machine, fiber, options.strings));
     const auto [begin, end] =
-        Range(options.str_start, options.str_count, bank->size(fiber));
-    for (int i = begin; i < end; ++i)
-      flags.strings.push_back(bank->get(fiber, i));
+        Range(options.str_start, options.str_count, data.size());
+    flags.strings.assign(data.begin() + begin, data.begin() + end);
   }
   return flags;
 }
 
-void WriteFlags(const CaptureFileOptions& options,
+void WriteFlags(SiglusMachine& machine,
+                const CaptureFileOptions& options,
                 sr::Fiber& fiber,
                 const CaptureFlags& flags) {
   // Validate both destinations before writing either bank.
-  auto* ints = options.int_count > 0 ? Bank<SiglusIntListFacade>(
-                                           options.integers, "__SiglusIntList")
-                                     : nullptr;
-  auto* strs = options.str_count > 0 ? Bank<SiglusStrListFacade>(
-                                           options.strings, "__SiglusStrList")
-                                     : nullptr;
+  auto* ints =
+      options.int_count > 0
+          ? &RequireFlagList(IntListData(machine, fiber, options.integers))
+          : nullptr;
+  auto* strs =
+      options.str_count > 0
+          ? &RequireFlagList(StrListData(machine, fiber, options.strings))
+          : nullptr;
   if (ints) {
     const auto [begin, end] =
         Range(options.int_start,
               std::min<std::size_t>(options.int_count, flags.integers.size()),
-              ints->size(fiber));
-    for (int i = begin; i < end; ++i)
-      ints->set(fiber, i, flags.integers[i - begin]);
+              ints->size());
+    std::copy_n(flags.integers.begin(), end - begin, ints->begin() + begin);
   }
   if (strs) {
     const auto [begin, end] =
         Range(options.str_start,
               std::min<std::size_t>(options.str_count, flags.strings.size()),
-              strs->size(fiber));
-    for (int i = begin; i < end; ++i)
-      strs->set(fiber, i, flags.strings[i - begin]);
+              strs->size());
+    std::copy_n(flags.strings.begin(), end - begin, strs->begin() + begin);
   }
 }
 
@@ -263,8 +266,8 @@ void BindCapture(SiglusMachine& runtime) {
 void BindCaptureFiles(SiglusMachine& runtime) {
   auto& vm = *runtime.vm;
   const auto captures = runtime.host().captures;
-  auto* module = vm.builtins_->at("syscom").Get_if<sr::Module>();
-  sb::module_ syscom(vm.gc_.get(), module->globals.get());
+  auto* m = vm.builtins_->at("syscom").Get_if<sr::Module>();
+  sb::module_ syscom(vm.gc_.get(), m->globals.get());
   syscom.def("create_capture_buffer", [captures](int width, int height) {
     captures->CreateBuffer(Size(width, height));
   });
@@ -281,12 +284,12 @@ void BindCaptureFiles(SiglusMachine& runtime) {
   });
   syscom.def(
       "save_capture_buffer_to_file",
-      [captures, platform = runtime.host().platform_implementor](
+      [&runtime, captures, platform = runtime.host().platform_implementor](
           sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
         const auto options = DecodeCaptureFileOptions(std::move(args), true);
         if (!captures->Snapshot(CaptureKind::Buffer))
           throw sr::RuntimeError("Capture buffer has not been created");
-        auto flags = ReadFlags(options, fiber);
+        auto flags = ReadFlags(runtime, options, fiber);
         const auto path =
             CaptureFilePath(options, *captures, platform.get(), true);
         if (path.empty())
@@ -297,7 +300,7 @@ void BindCaptureFiles(SiglusMachine& runtime) {
       sb::vararg);
   syscom.def(
       "load_flag_from_capture_file",
-      [captures, platform = runtime.host().platform_implementor](
+      [&runtime, captures, platform = runtime.host().platform_implementor](
           sr::VM& vm, sr::Fiber& fiber, std::vector<sr::Value> args) {
         const auto options = DecodeCaptureFileOptions(std::move(args), false);
         const auto path =
@@ -311,7 +314,7 @@ void BindCaptureFiles(SiglusMachine& runtime) {
           DomainLogger("SiglusCapture")(Severity::Warn) << e.what();
           return lop::MakeResolvedFuture(*vm.gc_, 0);
         }
-        WriteFlags(options, fiber, flags);
+        WriteFlags(runtime, options, fiber, flags);
         return lop::MakeResolvedFuture(*vm.gc_, 1);
       },
       sb::vararg);

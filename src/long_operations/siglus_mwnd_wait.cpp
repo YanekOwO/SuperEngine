@@ -90,86 +90,89 @@ SiglusMwndWaitOperation::SiglusMwndWaitOperation(
       after_wait_(after_wait) {}
 
 Task<int> SiglusMwndWaitOperation::Run(WaitContext& waits) {
-  while (system_ && system_->text().IsReadingBacklog())
-    co_await waits.Schedule(false);
-  while (system_ && window_->HasPendingMessageText()) {
-    if (system_->text().IsReadingBacklog()) {
+  if (phase_ == Phase::Reveal) {
+    while (system_ && system_->text().IsReadingBacklog())
       co_await waits.Schedule(false);
-      continue;
+    while (system_ && window_->HasPendingMessageText()) {
+      if (system_->text().IsReadingBacklog()) {
+        co_await waits.Schedule(false);
+        continue;
+      }
+      if (MessageNowait(system_)) {
+        window_->FlushMessageText();
+        break;
+      }
+      if ((co_await waits.WaitFor(std::chrono::milliseconds(5), true)) ==
+          WaitOutcome::InterruptedByInput) {
+        window_->FlushMessageText();
+        phase_ = Phase::Debounce;
+        co_await waits.WaitFor(std::chrono::milliseconds::zero());
+        phase_ = Phase::Reveal;
+      }
     }
-    if (MessageNowait(system_)) {
-      window_->FlushMessageText();
-      break;
+    phase_ = Phase::Advance;
+  }
+  if (phase_ == Phase::Debounce) {
+    co_await waits.WaitFor(std::chrono::milliseconds::zero());
+    phase_ = Phase::Advance;
+  }
+  if (phase_ == Phase::Advance) {
+    if (after_wait_ == AfterWait::MessageOnly) {
+      phase_ = Phase::Done;
+      co_return 0;
     }
-    if ((co_await waits.WaitFor(std::chrono::milliseconds(5), true)) ==
-        WaitOutcome::InterruptedByInput) {
-      window_->FlushMessageText();
-      // Finish the current input dispatch before listening for the pause's
-      // advance input; one click must not both reveal and dismiss the text.
-      co_await waits.WaitFor(std::chrono::milliseconds::zero());
+    if (!system_ || MessageNowait(system_))
+      phase_ = Phase::Pace;
+    else {
+      auto_start_ = system_->text().MessageTime();
+      auto_wait_ms_ =
+          EffectiveAutoTime(system_->local_config(), system_->global_config(),
+                            AutoModeCharCount());
+      phase_ = Phase::Pause;
     }
   }
-  if (after_wait_ == AfterWait::MessageOnly)
-    co_return 0;
-
-  if (!system_ || MessageNowait(system_)) {
-    co_await PaceMessage(waits);
-    FinishWait();
-    co_return 0;
-  }
-
-  PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
-
-  try {
-    const auto start = system_->text().MessageTime();
-    const int auto_time = EffectiveAutoTime(
-        system_->local_config(), system_->global_config(), AutoModeCharCount());
-
-    while (true) {
+  if (phase_ == Phase::Pause) {
+    PauseGuard pause(system_->text(), window_, after_wait_ == AfterWait::Clear);
+    while (phase_ == Phase::Pause) {
       const auto outcome =
           co_await waits.WaitFor(std::chrono::milliseconds(5), true);
       if (system_->text().IsReadingBacklog())
         continue;
       if (outcome == WaitOutcome::InterruptedByInput) {
-        pause.Reset();
-        co_await PaceMessage(waits);
-        FinishWait();
-        co_return 1;
-      }
-
-      if (MessageNowait(system_)) {
-        pause.Reset();
-        co_await PaceMessage(waits);
-        FinishWait();
-        co_return 0;
-      }
-
-      if (AutoModeEnabled(system_)) {
-        if ((system_->text().MessageTime() - start).count() >=
-            std::max(auto_time, 0)) {
-          pause.Reset();
-          FinishWait();
-          co_return 0;
-        }
+        result_ = 1;
+        phase_ = Phase::Pace;
+      } else if (MessageNowait(system_)) {
+        phase_ = Phase::Pace;
+      } else if (AutoModeEnabled(system_) &&
+                 (system_->text().MessageTime() - auto_start_).count() >=
+                     std::max(auto_wait_ms_, 0)) {
+        phase_ = Phase::Finish;
       }
     }
-  } catch (...) {
-    pause.Reset();
-    throw;
   }
+  if (phase_ == Phase::Pace) {
+    co_await PaceMessage(waits);
+    phase_ = Phase::Finish;
+  }
+  if (phase_ == Phase::Finish) {
+    FinishWait();
+    phase_ = Phase::Done;
+  }
+  co_return result_;
 }
 
 Task<void> SiglusMwndWaitOperation::PaceMessage(WaitContext& waits) {
   if (!system_ || !system_->ShouldFastForward())
     co_return;
 
-  auto frame = frame_requests_.RequestMessageFrame();
+  if (!pace_frame_)
+    pace_frame_ = frame_requests_.RequestMessageFrame();
   // Input may initiate skipping, but repeated key events cannot substitute
   // for the engine frame that makes the skipped message visible.
-  while (!frame->HasResult())
+  while (!pace_frame_->HasResult())
     co_await waits.Schedule(false);
-  if (frame->status == serilang::Promise::Status::Rejected)
-    throw serilang::RuntimeError(frame->result->error());
+  if (pace_frame_->status == serilang::Promise::Status::Rejected)
+    throw serilang::RuntimeError(pace_frame_->result->error());
 }
 
 void SiglusMwndWaitOperation::FinishWait() {

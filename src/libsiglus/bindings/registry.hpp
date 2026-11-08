@@ -36,8 +36,8 @@ namespace libsiglus::binding {
 // Keep their classes alive independently of script-visible global names.
 template <typename T>
 void RegisterBindingClass(SiglusMachine& machine, srbind::class_<T> klass) {
-  (*machine.vm->builtins_)[std::string("%%siglus_class:") + typeid(T).name()] =
-      klass.native_class();
+  (*machine.vm->builtins_)[std::string("%%siglus_class:") +
+                           klass.native_class()->name] = klass.native_class();
   machine.class_registry.Register(std::move(klass));
 }
 

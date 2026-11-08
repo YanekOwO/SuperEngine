@@ -24,6 +24,7 @@
 #include "core/game_config.hpp"
 #include "core/kidoku_table.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "libsiglus/save_load.hpp"
 #include "long_operations/siglus_textout.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
@@ -59,7 +60,7 @@ class SiglusTextout {
 void BindTextout(SiglusMachine& runtime) {
   sb::module_ m(runtime.vm->gc_.get(), runtime.vm->globals_.get());
   m.def("__builtin_name",
-        [sys = runtime.host().system.get()](std::string name) {
+        [sys = runtime.host().system.get(), &runtime](std::string name) {
           if (!sys || name.empty())
             return;
 
@@ -70,8 +71,11 @@ void BindTextout(SiglusMachine& runtime) {
 
           if (sys->local_config().multi_msg_mode)
             window->BeginMultiMessage();
-          if (!name.empty())
+          if (!name.empty()) {
             text.GetCurrentMwnd()->Submit(msgcmd::Name{name, ""});
+            if (window->Layout().GetNameMode() != TextLayout::NameMode::Disable)
+              runtime.host().Saves().AppendName(name);
+          }
         });
   m.def("__builtin_textout",
         [kt = runtime.host().kidoku_table,
@@ -85,6 +89,7 @@ void BindTextout(SiglusMachine& runtime) {
           to->sys_->text().SetKidokuRead(already_read);
 
           auto window = to->sys_->text().GetCurrentMwnd();
+          to->machine_.host().Saves().AppendMessage(text);
           if (to->localcfg_.multi_msg_mode)
             window->BeginMultiMessage();
           if (to->localcfg_.multi_msg_mode || to->localcfg_.async_msg_mode) {

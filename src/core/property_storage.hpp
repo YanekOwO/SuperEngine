@@ -24,11 +24,13 @@
 #pragma once
 
 #include <boost/serialization/access.hpp>
+#include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/split_member.hpp>
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <boost/serialization/vector.hpp>
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -36,15 +38,11 @@
 #include <variant>
 #include <vector>
 
-namespace libsiglus {
-class Archive;
-
 // Property values and list backing belong to the game, independently of any VM.
 class PropertyStorage {
  public:
   using Integers = std::vector<int>;
   using Strings = std::vector<std::string>;
-  // Archive tags follow this order; append new alternatives to preserve tags.
   using Value = std::variant<std::monostate,
                              bool,
                              int,
@@ -95,27 +93,30 @@ class PropertyStorage {
     }
     BOOST_SERIALIZATION_SPLIT_MEMBER()
   };
-  using Table = std::vector<Entry>;
+  using Cell = std::shared_ptr<Entry>;
+  using Table = std::vector<Cell>;
+  using Tables = std::unordered_map<int, Table>;
 
-  void Initialize(const Archive& archive);
-  Entry& Get(int scene, int index);
-  const Entry& Get(int scene, int index) const;
+  // Replaces all tables after validating their cells, retaining cell identity.
+  void Initialize(Tables tables);
+  Cell GetCell(int table, int index) const;
+  Entry& Get(int table, int index);
+  const Entry& Get(int table, int index) const;
 
  private:
-  std::unordered_map<int, Table> tables_;
+  Tables tables_;
 
+ private:
   friend class boost::serialization::access;
-  template <class Archive>
-  void save(Archive& ar, unsigned int) const {
-    ar & tables_;
-  }
-  template <class Archive>
-  void load(Archive& ar, unsigned int) {
+  void save(auto& ar, unsigned int) const { ar & tables_; }
+  void load(auto& ar, unsigned int) {
     decltype(tables_) tables;
     ar & tables;
+    for (const auto& [id, table] : tables)
+      for (const auto& cell : table)
+        if (!cell)
+          throw std::runtime_error("null property cell");
     tables_.swap(tables);
   }
   BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
-
-}  // namespace libsiglus

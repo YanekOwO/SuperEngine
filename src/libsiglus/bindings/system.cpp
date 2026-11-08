@@ -24,6 +24,7 @@
 #include "systems/system.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/native_wait_serialization.hpp"
 #include "log/domain_logger.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/args.hpp"
@@ -89,15 +90,20 @@ void BindSystem(SiglusMachine& runtime) {
             runtime.callback_owner >= 0 ? runtime.callback_owner
                                         : (runtime.host().IsExcall() ? 1 : 0));
         counter->StartGame();
-        auto done = [sys, counter = std::move(counter), msecs] {
+        auto done = [sys, counter = counter, msecs] {
           if (sys->ShouldFastForward())
             return true;
 
           return counter->Get() >= msecs;
         };
-        return lop::MakePollingWaitFuture(vm, std::move(done), false, nullptr,
-                                          std::chrono::milliseconds(5), {},
-                                          runtime.WaitScope());
+        return lop::MakePollingWaitFuture(
+            vm, std::move(done), false, nullptr, std::chrono::milliseconds(5),
+            {},
+            DescribePollingWait(runtime.WaitScope(),
+                                {.kind = PollingWaitDescription::Kind::Counter,
+                                 .counter = counter,
+                                 .value = msecs,
+                                 .fast_forward = true}));
       },
       sb::arg("msecs") = 0);
   gm.def(
@@ -115,7 +121,7 @@ void BindSystem(SiglusMachine& runtime) {
                            : nullptr;
         if (counter)
           counter->StartGame();
-        auto done = [sys, counter = std::move(counter), msecs] {
+        auto done = [sys, counter = counter, msecs] {
           if (sys->ShouldFastForward())
             return true;
 
@@ -123,16 +129,22 @@ void BindSystem(SiglusMachine& runtime) {
         };
         return lop::MakePollingWaitFuture(
             vm, std::move(done), true, sys->event_ptr().get(),
-            std::chrono::milliseconds(5), {}, runtime.WaitScope());
+            std::chrono::milliseconds(5), {},
+            DescribePollingWait(runtime.WaitScope(),
+                                {.kind = PollingWaitDescription::Kind::Counter,
+                                 .counter = counter,
+                                 .value = msecs,
+                                 .fast_forward = true}));
       },
       sb::arg("msecs") = 0);
-  gm.def("set_title",
-         [window_title = runtime.host().window_title](std::string title) {
-           window_title->base_title_ = std::move(title);
-           window_title->subtitle_.clear();
-           window_title->subtitle_visible_ = false;
-           window_title->Apply();
-         });
+  gm.def("set_title", [&runtime](std::string title) {
+    runtime.host().scene_title = std::move(title);
+    if (auto window_title = runtime.host().window_title) {
+      window_title->subtitle_ = runtime.host().scene_title;
+      window_title->subtitle_visible_ = true;
+      window_title->Apply();
+    }
+  });
 }
 
 RLVM_REGISTER(SiglusBindingRegistry, "system", BindSystem)

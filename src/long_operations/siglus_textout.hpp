@@ -23,6 +23,13 @@
 
 #pragma once
 
+namespace libsiglus {
+struct TextoutOperationState;
+struct SiglusMachine;
+class ExecutionWriter;
+class ExecutionReader;
+}  // namespace libsiglus
+
 #include "long_operations/long_operation.hpp"
 
 #include <memory>
@@ -39,11 +46,19 @@ class SiglusTextoutOperation final : public LongOperation {
                          std::shared_ptr<TextWindow> window,
                          std::string text);
   Task<int> Run(WaitContext& waits) override;
+  libsiglus::TextoutOperationState CaptureCheckpoint(
+      libsiglus::ExecutionWriter& execution) const;
+  static std::unique_ptr<LongOperation> RestoreCheckpoint(
+      libsiglus::SiglusMachine& machine,
+      libsiglus::ExecutionReader& execution,
+      const libsiglus::TextoutOperationState& state);
 
  private:
   System* system_;
   std::shared_ptr<TextWindow> window_;
   std::string text_;
+  enum class Phase { Submit, Reveal, Debounce, Done };
+  Phase phase_ = Phase::Submit;
 };
 
 }  // namespace lop

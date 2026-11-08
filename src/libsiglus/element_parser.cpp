@@ -494,6 +494,17 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
                                    std::move(call)}};
     }
 
+    case 2:    // OWARI
+    case 3: {  // RETURNMENU
+      elm.bind_ctx.return_type = Type::None;
+      auto call = Node::BuildCall(std::move(elm.bind_ctx));
+      elm.force_bind = false;
+      return AccessChain{
+          .root = std::monostate(),
+          .nodes = {
+              Node(Type::Callable, Member(root == 2 ? "owari" : "returnmenu")),
+              std::move(call)}};
+    }
     case 4: {  // JUMP
       const auto& bind = elm.bind_ctx;
       if (bind.arg.empty() || bind.arg.size() > 2 || !bind.named_arg.empty())
@@ -1119,7 +1130,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("check_file_exist");
             continue;
           case 12:
-            append_callable("check_save_file_exist");
+            append_callable("check_save_file_exist", Type::Int);
             continue;
           case 2:
             append_callable("check_dummy");
@@ -1485,13 +1496,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
       case Type::FrameAction:
         switch (key) {
           case 1:
-            append_callable("start");
+            append_callable("start", Type::None, AWAIT);
             continue;
           case 3:
-            append_callable("start_real");
+            append_callable("start_real", Type::None, AWAIT);
             continue;
           case 2:
-            append_callable("end", Type::None);
+            append_callable("end", Type::None, AWAIT);
             continue;
           case 0:
             parse_property("counter", Type::Counter);
@@ -1618,7 +1629,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("touch_disable"));
             continue;
           case 5:
-            append_node(Type::None, Member("init_flags"));
+            append_callable("init_flags", Type::None);
             continue;
           case 200:
             append_node(Type::Callable, Member("set_readskip"));
@@ -1771,7 +1782,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("is_msgback_open", Type::Int);
             continue;
           case 228:
-            append_node(Type::Callable, Member("return_to_sel"));
+            append_callable("return_to_sel", Type::None);
             continue;
           case 230:
             append_node(Type::Callable, Member("set_enable_retsel"));
@@ -1819,8 +1830,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::Callable, Member("set_exist_endgame"));
             continue;
           case 247:
-            append_node(Type::None,
-                        Member("set_play_silent_sound_onoff_default"));
+            append_callable("get_exist_endgame", Type::Int);
             continue;
           case 248:
             append_callable("is_endgame_enable", Type::Int);
@@ -1841,16 +1851,16 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("clear_koe_chr"));
             continue;
           case 294:
-            append_callable("get_scene_title", Type::String);
+            append_callable("get_current_save_title", Type::String);
             continue;
           case 295:
-            append_callable("get_save_message", Type::String);
+            append_callable("get_current_save_message", Type::String);
             continue;
           case 199:
-            append_node(Type::None, Member("get_total_playtime(fixme)"));
+            append_callable("get_total_playtime", Type::None);
             continue;
           case 229:
-            append_node(Type::Callable, Member("set_total_playtime"));
+            append_callable("set_total_playtime", Type::None);
             continue;
           case 1:
             append_callable("open_save");
@@ -1889,37 +1899,40 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("is_load_enable", Type::Int);
             continue;
           case 249:
-            append_node(Type::Callable, Member("save"));
+            append_callable("save", Type::Int);
             continue;
           case 256:
             append_callable("load");
             continue;
           case 18:
-            append_node(Type::Callable, Member("qsave"));
+            append_callable("qsave", Type::Int);
             continue;
           case 20:
             append_callable("qload");
             continue;
           case 271:
-            append_node(Type::Callable, Member("endsave"));
+            append_callable("endsave", Type::Int);
             continue;
           case 269:
-            append_node(Type::Callable, Member("endload"));
+            append_callable("endload", Type::None);
             continue;
           case 272:
-            append_node(Type::Callable, Member("inner_save"));
+            append_callable("inner_save", Type::Int);
             continue;
           case 273:
-            append_node(Type::Callable, Member("inner_load"));
+            append_callable("inner_load", Type::Int);
             continue;
           case 276:
-            append_node(Type::Callable, Member("clear_inner_save"));
+            append_callable("clear_inner_save", Type::Int);
             continue;
           case 274:
-            append_node(Type::Callable, Member("check_inner_save"));
+            append_callable("copy_inner_save", Type::Int);
+            continue;
+          case 275:
+            append_callable("check_inner_save", Type::Int);
             continue;
           case 310:
-            append_node(Type::Callable, Member("msgbk_load"));
+            append_callable("msgbk_load", Type::None);
             continue;
           case 68:
             append_callable("get_save_count", Type::Int);
@@ -1928,13 +1941,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("get_qsave_count", Type::Int);
             continue;
           case 79:
-            append_node(Type::Callable, Member("get_new_save_no"));
+            append_callable("get_new_save_no", Type::Int);
             continue;
           case 170:
-            append_node(Type::Callable, Member("get_new_qsave_no"));
+            append_callable("get_new_qsave_no", Type::Int);
             continue;
           case 69:
-            append_node(Type::Callable, Member("is_save_exist"));
+            append_callable("is_save_exist", Type::Int);
             continue;
           case 70:
             append_callable("get_save_year", Type::Int);
@@ -1946,7 +1959,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("get_save_day", Type::Int);
             continue;
           case 73:
-            append_node(Type::Callable, Member("get_save_weekday"));
+            append_callable("get_save_weekday", Type::Int);
             continue;
           case 74:
             append_callable("get_save_hour", Type::Int);
@@ -1967,13 +1980,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("get_save_message", Type::String);
             continue;
           case 324:
-            append_node(Type::Callable, Member("get_save_full_message"));
+            append_callable("get_save_full_message", Type::String);
             continue;
           case 131:
-            append_node(Type::Callable, Member("get_save_comment"));
+            append_callable("get_save_comment", Type::String);
             continue;
           case 180:
-            append_node(Type::Callable, Member("set_save_comment"));
+            append_callable("set_save_comment", Type::None);
             continue;
           case 183:
             append_callable("get_save_value");
@@ -1982,67 +1995,67 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("set_save_value");
             continue;
           case 320:
-            append_node(Type::Callable, Member("get_save_append_dir"));
+            append_callable("get_save_append_dir", Type::String);
             continue;
           case 321:
-            append_node(Type::Callable, Member("get_save_append_name"));
+            append_callable("get_save_append_name", Type::String);
             continue;
           case 169:
-            append_node(Type::Callable, Member("is_qsave_exist"));
+            append_callable("is_qsave_exist", Type::Int);
             continue;
           case 171:
-            append_node(Type::Callable, Member("get_qsave_year"));
+            append_callable("get_qsave_year", Type::Int);
             continue;
           case 172:
-            append_node(Type::Callable, Member("get_qsave_month"));
+            append_callable("get_qsave_month", Type::Int);
             continue;
           case 173:
-            append_node(Type::Callable, Member("get_qsave_day"));
+            append_callable("get_qsave_day", Type::Int);
             continue;
           case 174:
-            append_node(Type::Callable, Member("get_qsave_weekday"));
+            append_callable("get_qsave_weekday", Type::Int);
             continue;
           case 175:
-            append_node(Type::Callable, Member("get_qsave_hour"));
+            append_callable("get_qsave_hour", Type::Int);
             continue;
           case 176:
-            append_node(Type::Callable, Member("get_qsave_minute"));
+            append_callable("get_qsave_minute", Type::Int);
             continue;
           case 177:
-            append_node(Type::Callable, Member("get_qsave_second"));
+            append_callable("get_qsave_second", Type::Int);
             continue;
           case 178:
-            append_node(Type::Callable, Member("get_qsave_millisecond"));
+            append_callable("get_qsave_millisecond", Type::Int);
             continue;
           case 179:
-            append_node(Type::Callable, Member("get_qsave_title"));
+            append_callable("get_qsave_title", Type::String);
             continue;
           case 130:
-            append_node(Type::Callable, Member("get_qsave_message"));
+            append_callable("get_qsave_message", Type::String);
             continue;
           case 325:
-            append_node(Type::Callable, Member("get_qsave_full_message"));
+            append_callable("get_qsave_full_message", Type::String);
             continue;
           case 132:
-            append_node(Type::Callable, Member("get_qsave_comment"));
+            append_callable("get_qsave_comment", Type::String);
             continue;
           case 181:
-            append_node(Type::Callable, Member("set_qsave_comment"));
+            append_callable("set_qsave_comment", Type::None);
             continue;
           case 184:
-            append_callable("get_qsave_value", Type::Int);
+            append_callable("get_qsave_value", Type::None);
             continue;
           case 185:
             append_callable("set_qsave_value");
             continue;
           case 322:
-            append_node(Type::Callable, Member("get_qsave_append_dir"));
+            append_callable("get_qsave_append_dir", Type::String);
             continue;
           case 323:
-            append_node(Type::Callable, Member("get_qsave_append_name"));
+            append_callable("get_qsave_append_name", Type::String);
             continue;
           case 270:
-            append_node(Type::Callable, Member("is_endsave_exist"));
+            append_callable("is_endsave_exist", Type::Int);
             continue;
           case 67:
             append_callable("copy_save", Type::Int);
@@ -2054,13 +2067,13 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("delete_save", Type::Int);
             continue;
           case 128:
-            append_node(Type::Callable, Member("copy_qsave"));
+            append_callable("copy_qsave", Type::Int);
             continue;
           case 66:
-            append_node(Type::Callable, Member("change_qsave"));
+            append_callable("change_qsave", Type::Int);
             continue;
           case 65:
-            append_node(Type::Callable, Member("delete_qsave"));
+            append_callable("delete_qsave", Type::Int);
             continue;
           case 3:
             append_callable("open_config_menu");
@@ -2456,7 +2469,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("set_saveload_alert_onoff");
             continue;
           case 108:
-            append_node(Type::None, Member("set_saveload_alert_onoff_default"));
+            append_callable("set_saveload_alert_onoff_default", Type::None);
             continue;
           case 10:
             append_callable("get_saveload_alert_onoff", Type::Int);
@@ -2609,7 +2622,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("alloc", Type::None);
             continue;
           case 5:
-            append_callable("free", Type::None);
+            append_callable("free", Type::None, AWAIT);
             continue;
           case 12:
             append_callable("is_excall", Type::Int);

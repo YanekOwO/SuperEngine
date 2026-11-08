@@ -23,6 +23,7 @@
 
 #include "libsiglus/bindings/input.hpp"
 #include "libsiglus/bindings/registry.hpp"
+#include "vm/serialization.hpp"
 
 #include "srbind/srbind.hpp"
 
@@ -83,6 +84,14 @@ void BindInput(SiglusMachine& runtime) {
 
   sb::class_<InputButton> key(m, "InputButton", false);
   RegisterBindingClass(runtime, key);
+  key.def_serialization([](const InputButton& h,
+                           serilang::ObjectWriter& out) { out.Put(h.source); },
+                        [&runtime](serilang::ObjectReader& in) {
+                          auto& host = runtime.host();
+                          return std::make_unique<InputButton>(
+                              in.Get<ScriptInput::Source>(), host.script_input);
+                        });
+
   key.def("on_down", [](InputButton* ref) -> int {
     auto state = ref->Get();
     return state.on_down;
