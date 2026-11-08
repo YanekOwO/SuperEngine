@@ -32,10 +32,12 @@
 #include "vm/dict.hpp"
 #include "vm/exception.hpp"
 #include "vm/function.hpp"
+#include "vm/list.hpp"
 
 #include <format>
 #include <iostream>
 #include <unordered_map>
+#include <utility>
 
 namespace libsiglus::binding {
 namespace sr = serilang;
@@ -47,6 +49,77 @@ static std::string NormalizeCommandName(std::string_view name) {
       c = static_cast<char>(c - 'A' + 'a');
   }
   return result;
+}
+
+static std::string NormalizeSceneName(std::string name) {
+  for (char& c : name) {
+    if ('A' <= c && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  }
+  return name;
+}
+
+sr::Value ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
+  auto it = mod.globals->find(GetZlabelId(zlabel));
+  if (it == mod.globals->cend())
+    it = mod.globals->find("%%script");
+
+  if (it == mod.globals->cend()) {
+    throw sr::RuntimeError(
+        std::format("scene {} has no entry for z-label {}", mod.name, zlabel));
+  }
+
+  const auto* bound = it->second.Get_if<sr::BoundMethod>();
+  if (!bound || !bound->method.Get_if<sr::Function>() ||
+      bound->additional_args.size() != 1 ||
+      !bound->additional_args.front().Get_if<sr::List>()) {
+    throw sr::RuntimeError(
+        std::format("scene {} entry is not a dispatcher adapter", mod.name));
+  }
+  return it->second;
+}
+
+sr::Module& Loader::LoadScene(std::string scene_name) {
+  if (scene_name.empty())
+    throw sr::RuntimeError("scene name is empty");
+
+  sr::Module* mod = Load(NormalizeSceneName(std::move(scene_name)));
+  if (!mod)
+    throw sr::RuntimeError("could not load destination scene");
+
+  return *mod;
+}
+
+sr::Value Loader::ResolveSceneEntry(std::string scene_name, int zlabel) {
+  return ResolveZlabelEntry(LoadScene(std::move(scene_name)), zlabel);
+}
+
+sr::Value Loader::ResolveSceneCommand(std::string scene_name,
+                                      const std::string& command_name) {
+  return ResolveSceneUserCommand(std::move(scene_name), command_name).function;
+}
+
+const UserCommand& Loader::ResolveSceneUserCommand(
+    std::string scene_name,
+    const std::string& command_name) {
+  return ResolveUserCommand(LoadScene(std::move(scene_name)), command_name);
+}
+
+sr::Value Loader::ResolveScriptCall(const ScriptCall& call) {
+  if (const auto* command = std::get_if<CmdTarget>(&call.target))
+    return ResolveUserCommandTarget(*command);
+  const auto& scene = std::get<SceneTarget>(call.target);
+  sr::Module* mod = nullptr;
+  if (const auto* id = std::get_if<int>(&scene.scene)) {
+    if (*id < 0)
+      throw sr::RuntimeError("EX-call scene id must be non-negative");
+    mod = Load(*id);
+  } else {
+    mod = &LoadScene(std::get<std::string>(scene.scene));
+  }
+  if (!mod)
+    throw sr::RuntimeError("EX-call could not load destination scene");
+  return ResolveZlabelEntry(*mod, scene.zlabel);
 }
 
 sr::Module* Loader::Load(int scene) {

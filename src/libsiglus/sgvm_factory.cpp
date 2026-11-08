@@ -39,7 +39,6 @@
 #include "core/stage.hpp"
 #include "core/window_title.hpp"
 #include "libsiglus/archive.hpp"
-#include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/gexedat.hpp"
@@ -266,8 +265,9 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
         if (!target.command || target.command->empty())
           throw sr::RuntimeError(
               "WAKU.BTN.FRAME_ACTION requires a scene and command");
-        const auto& command = ResolveSceneUserCommand(
-            *rt.ActiveMachine().loader, target.scene, *target.command);
+        const auto& command =
+            rt.ActiveMachine().loader->ResolveSceneUserCommand(target.scene,
+                                                               *target.command);
         if (command.args != std::vector<Type>{Type::FrameAction, Type::Object})
           throw sr::RuntimeError(
               "WAKU.BTN.FRAME_ACTION requires a command taking FrameAction, "
@@ -281,8 +281,9 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
   rt.system->text().SetMwndCallHandler(
       [&rt](const MwndConfig::CallTarget& target) {
         if (target.command) {
-          const auto& command = binding::ResolveSceneUserCommand(
-              *rt.ActiveMachine().loader, target.scene, *target.command);
+          const auto& command =
+              rt.ActiveMachine().loader->ResolveSceneUserCommand(
+                  target.scene, *target.command);
           rt.OpenExcall(command.target);
         } else
           rt.OpenExcall(

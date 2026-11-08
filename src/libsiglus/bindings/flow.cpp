@@ -23,16 +23,12 @@
 
 #include "libsiglus/bindings/registry.hpp"
 
-#include "libsiglus/archive.hpp"
-#include "libsiglus/bindings/flow.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/intern_name.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
-#include "vm/function.hpp"
 #include "vm/future.hpp"
-#include "vm/instruction.hpp"
 #include "vm/list.hpp"
 #include "vm/object.hpp"
 #include "vm/string.hpp"
@@ -41,87 +37,10 @@
 
 #include <format>
 #include <string>
-#include <vector>
 
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
-
-static std::string NormalizeSceneName(std::string name) {
-  for (char& c : name) {
-    if ('A' <= c && c <= 'Z')
-      c = static_cast<char>(c - 'A' + 'a');
-  }
-  return name;
-}
-
-static sr::Value ResolveZlabelEntry(const sr::Module& mod, int zlabel) {
-  auto it = mod.globals->find(GetZlabelId(zlabel));
-  if (it == mod.globals->cend())
-    it = mod.globals->find("%%script");
-
-  if (it == mod.globals->cend()) {
-    throw sr::RuntimeError(
-        std::format("scene {} has no entry for z-label {}", mod.name, zlabel));
-  }
-
-  const auto* bound = it->second.Get_if<sr::BoundMethod>();
-  if (!bound || !bound->method.Get_if<sr::Function>() ||
-      bound->additional_args.size() != 1 ||
-      !bound->additional_args.front().Get_if<sr::List>()) {
-    throw sr::RuntimeError(
-        std::format("scene {} entry is not a dispatcher adapter", mod.name));
-  }
-  return it->second;
-}
-
-static sr::Module& LoadScene(Loader& loader, std::string scene_name) {
-  if (scene_name.empty())
-    throw sr::RuntimeError("scene name is empty");
-
-  sr::Module* mod = loader.Load(NormalizeSceneName(std::move(scene_name)));
-  if (!mod)
-    throw sr::RuntimeError("could not load destination scene");
-
-  return *mod;
-}
-
-sr::Value ResolveSceneEntry(Loader& loader,
-                            std::string scene_name,
-                            int zlabel) {
-  return ResolveZlabelEntry(LoadScene(loader, std::move(scene_name)), zlabel);
-}
-
-sr::Value ResolveSceneCommand(Loader& loader,
-                              std::string scene_name,
-                              const std::string& command_name) {
-  return ResolveSceneUserCommand(loader, std::move(scene_name), command_name)
-      .function;
-}
-
-const UserCommand& ResolveSceneUserCommand(Loader& loader,
-                                           std::string scene_name,
-                                           const std::string& command_name) {
-  return loader.ResolveUserCommand(LoadScene(loader, std::move(scene_name)),
-                                   command_name);
-}
-
-sr::Value ResolveScriptCall(Loader& loader, const ScriptCall& call) {
-  if (const auto* command = std::get_if<CmdTarget>(&call.target))
-    return loader.ResolveUserCommandTarget(*command);
-  const auto& scene = std::get<SceneTarget>(call.target);
-  sr::Module* mod = nullptr;
-  if (const auto* id = std::get_if<int>(&scene.scene)) {
-    if (*id < 0)
-      throw sr::RuntimeError("EX-call scene id must be non-negative");
-    mod = loader.Load(*id);
-  } else {
-    mod = &LoadScene(loader, std::get<std::string>(scene.scene));
-  }
-  if (!mod)
-    throw sr::RuntimeError("EX-call could not load destination scene");
-  return ResolveZlabelEntry(*mod, scene.zlabel);
-}
 
 void BindFlow(SiglusMachine& rt) {
   sr::VM& vm = *rt.vm;
@@ -155,7 +74,7 @@ void BindFlow(SiglusMachine& rt) {
         if (const auto* id = scene.Get_if<int>())
           mod = loader->Load(*id);
         else if (const auto* name = scene.Get_if<sr::String>())
-          mod = &LoadScene(*loader, name->str_);
+          mod = &loader->LoadScene(name->str_);
         else
           throw sr::RuntimeError("scene entry expects str or int");
         if (!mod)

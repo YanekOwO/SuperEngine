@@ -29,7 +29,7 @@
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "core/mwnd_config.hpp"
-#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
@@ -206,8 +206,8 @@ class SiglusMwndMessageTest : public ::testing::Test {
       scene.AppendInt(0);  // Global print carries a read marker after its call.
     scene.AddTo(*runtime.archive);
     (*runtime.GameplayMachine().vm->globals_)["print_message"] =
-        ResolveSceneCommand(*runtime.GameplayMachine().loader, "message",
-                            "print_message");
+        runtime.GameplayMachine().loader->ResolveSceneCommand("message",
+                                                              "print_message");
   }
 };
 

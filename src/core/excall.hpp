@@ -54,6 +54,7 @@ struct Excall {
   std::shared_ptr<char> lifetime;
   bool allocated = false;
   bool releasing = false;
+
   Stage stage;
   std::vector<int> flags;
   std::shared_ptr<CounterList> counters;

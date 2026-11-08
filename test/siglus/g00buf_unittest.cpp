@@ -26,7 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "core/image_resources.hpp"
-#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "m6/compiler_pipeline.hpp"
 #include "m6/vm_factory.hpp"
@@ -101,8 +101,9 @@ TEST_F(SiglusG00bufBindingTest, ExactLoadElementRetainsImageForNamedLookup) {
        {0, 1, static_cast<int>(Type::String), 0, static_cast<int>(Type::None)})
     scene.AppendInt(value);
   scene.AddTo(archive);
-  (*runtime.GameplayMachine().vm->globals_)["preload"] = ResolveSceneCommand(
-      *runtime.GameplayMachine().loader, "preload", "preload");
+  (*runtime.GameplayMachine().vm->globals_)["preload"] =
+      runtime.GameplayMachine().loader->ResolveSceneCommand("preload",
+                                                            "preload");
   ExpectLoad("line");
 
   Run("preload(\"line\");");

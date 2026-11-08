@@ -33,7 +33,7 @@
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/mwnd_config.hpp"
-#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "m6/compiler_pipeline.hpp"
@@ -193,8 +193,9 @@ TEST_F(SiglusFrameWaitTest, RecompiledFrameElementSuspendsItsScene) {
   scene.AppendInt(1);
   scene.AppendInt(static_cast<int>(Type::Int));
   scene.AddTo(*runtime.archive);
-  (*runtime.GameplayMachine().vm->globals_)["entry"] = ResolveSceneCommand(
-      *runtime.GameplayMachine().loader, "frames", "advance");
+  (*runtime.GameplayMachine().vm->globals_)["entry"] =
+      runtime.GameplayMachine().loader->ResolveSceneCommand("frames",
+                                                            "advance");
 
   harness.Invoke("result = entry();");
   EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("result"));
@@ -228,8 +229,9 @@ TEST_F(SiglusFrameWaitTest, RecompiledDispElementSuspendsItsScene) {
   scene.AppendInt(1);
   scene.AppendInt(static_cast<int>(Type::Int));
   scene.AddTo(*runtime.archive);
-  (*runtime.GameplayMachine().vm->globals_)["entry"] = ResolveSceneCommand(
-      *runtime.GameplayMachine().loader, "display", "advance");
+  (*runtime.GameplayMachine().vm->globals_)["entry"] =
+      runtime.GameplayMachine().loader->ResolveSceneCommand("display",
+                                                            "advance");
 
   harness.Invoke("result = entry();");
   EXPECT_FALSE(runtime.GameplayMachine().vm->globals_->contains("result"));

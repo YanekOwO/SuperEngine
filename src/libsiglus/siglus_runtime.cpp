@@ -29,7 +29,7 @@
 #include "core/input.hpp"
 #include "core/kidoku_table.hpp"
 #include "core/mask.hpp"
-#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/memory.hpp"
 #include "libsiglus/bindings/trace.hpp"
 #include "libsiglus/scene_entry.hpp"
@@ -317,8 +317,7 @@ void SiglusRuntime::ApplyExcallRequests() {
       ActiveMachine().saved_window = system->text().GetCurrentMwnd();
     try {
       machine->Initialize();
-      auto entry =
-          binding::ResolveScriptCall(*machine->loader, request.request);
+      auto entry = machine->loader->ResolveScriptCall(request.request);
       auto* fiber = machine->vm->ScheduleExecute(entry);
       if (request.request.farcall) {
         // fresh, empty L/K banks for the excall
@@ -430,8 +429,8 @@ bool SiglusRuntime::ProcessRestart() {
   gameplay_ = std::make_unique<SiglusMachine>(*this);
   gameplay_->Initialize();
   Activate(*gameplay_);
-  gameplay_->vm->ScheduleExecute(binding::ResolveSceneEntry(
-      *gameplay_->loader, request.scene, request.zlabel));
+  gameplay_->vm->ScheduleExecute(
+      gameplay_->loader->ResolveSceneEntry(request.scene, request.zlabel));
   return false;
 }
 
@@ -555,9 +554,8 @@ void SiglusRuntime::Start(std::optional<int> start_scene) {
           std::format("Scene {}: %%script not found", *start_scene));
   } else {
     auto start = (*gameexe)("START_SCENE");
-    script = binding::ResolveSceneEntry(*ActiveMachine().loader,
-                                        start.StrAt(0).value_or("_start"),
-                                        start.IntAt(1).value_or(0));
+    script = ActiveMachine().loader->ResolveSceneEntry(
+        start.StrAt(0).value_or("_start"), start.IntAt(1).value_or(0));
   }
   GameplayMachine().vm->ScheduleExecute(script);
 }
@@ -926,9 +924,8 @@ void SiglusRuntime::UpdateSelection(int ms) {
       if (!ActiveMachine().loader)
         throw sr::RuntimeError(
             "Selection start callback requires a scene loader");
-      auto entry = binding::ResolveSceneEntry(*ActiveMachine().loader,
-                                              s->request.start_scene,
-                                              s->request.start_entry);
+      auto entry = ActiveMachine().loader->ResolveSceneEntry(
+          s->request.start_scene, s->request.start_entry);
       ActiveMachine().vm->InvokeUntilBlocked(entry, {});
     }
     for (std::size_t i = 0; i < s->items.size(); ++i)

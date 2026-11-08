@@ -167,11 +167,14 @@ const LocalConfig& TextSystem::FontConfig() const {
 void TextSystem::AdvanceExcallText(std::chrono::milliseconds delta) {
   if (!excall_stage_ || !excall_allocated_ || !excall_allocated_())
     return;
+
+  delta = std::max(delta, std::chrono::milliseconds::zero());
   for (const auto& layer : excall_stage_->mwnd.storage)
-    for (const auto& window : layer)
-      if (window)
-        window->AdvanceMessageText(
-            std::max(delta, std::chrono::milliseconds::zero()));
+    for (const auto& window : layer) {
+      if (!window)
+        continue;
+      window->AdvanceMessageText(delta);
+    }
 }
 
 void TextSystem::ExecuteTextSystem() {

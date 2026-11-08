@@ -28,7 +28,7 @@
 #include "core/gameexe.hpp"
 #include "database_test_support.hpp"
 #include "libsiglus/archive.hpp"
-#include "libsiglus/bindings/flow.hpp"
+#include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/element_parser.hpp"
 #include "libsiglus/recompiler.hpp"
@@ -243,8 +243,7 @@ class SiglusDatabaseBindingTest : public ::testing::Test {
     scene.AppendInt(static_cast<int>(result));
     scene.AddTo(archive);
     (*runtime.GameplayMachine().vm->globals_)[name] =
-        binding::ResolveSceneCommand(*runtime.GameplayMachine().loader, name,
-                                     name);
+        runtime.GameplayMachine().loader->ResolveSceneCommand(name, name);
   }
 };
 
@@ -386,8 +385,8 @@ TEST_F(SiglusDatabaseBindingTest,
     scene.AppendInt(value);
   scene.AddTo(archive);
   (*runtime.GameplayMachine().vm->globals_)["unsupported"] =
-      binding::ResolveSceneCommand(*runtime.GameplayMachine().loader,
-                                   "unsupported", "unsupported");
+      runtime.GameplayMachine().loader->ResolveSceneCommand("unsupported",
+                                                            "unsupported");
   try {
     Run("unsupported();");
     FAIL() << "expected checked execution error";

@@ -44,6 +44,8 @@ struct UserCommand {
   CmdTarget target;
 };
 
+serilang::Value ResolveZlabelEntry(const serilang::Module& mod, int zlabel);
+
 class Loader {
  public:
   explicit Loader(Archive& ar,
@@ -51,6 +53,14 @@ class Loader {
                   bool debug = true,
                   bool trace = false)
       : archive_(ar), vm_(v), is_debug_(debug), trace_enabled_(trace) {}
+
+  serilang::Module& LoadScene(std::string scene_name);
+  const UserCommand& ResolveSceneUserCommand(std::string scene_name,
+                                             const std::string& command_name);
+  serilang::Value ResolveSceneCommand(std::string scene_name,
+                                      const std::string& command_name);
+  serilang::Value ResolveSceneEntry(std::string scene_name, int zlabel);
+  serilang::Value ResolveScriptCall(const ScriptCall& call);
 
   serilang::Module* Load(int scene);
   serilang::Module* Load(std::string const& scnname);
