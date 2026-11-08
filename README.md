@@ -15,37 +15,28 @@ Share / {insert name of popular P2P app in your locale}.
 
 ## STATUS
 
-| Titles                 | Status          | Notes                                                     |
-|------------------------|-----------------|-----------------------------------------------------------|
-| Kanon Standard Edition | Full Support    | Also supports [NDT's patch][kanon]                        |
-| Air Standard Edition   | Full Support    |                                                           |
-| CLANNAD                | Full Support    |                                                           |
-| CLANNAD (Full Voice)   | Full Support    | [Licensed][clannad]                                       |
-| CLANNAD Side Stories   | Partial Support | [Licensed][clannad_side_stories]                          |
-| Planetarian CD         | Full Support    | [Discontinued][planetarian], Planetarian HD not supported |
-| Tomoyo After           | Full Support    |                                                           |
-| Little Busters         | Partial Support | Untested, Steam edition not supported                     |
-| Kud Wafter             | Full Support    |                                                           |
+| Titles | Status |
+|--------|--------|
+| Rewrite | Not Supported |
+| Rewrite Harvest festa! | Not Supported |
+| Angel Beats! 1st Beat | Partial Support |
+| Harmonia | Not Supported |
+| Summer Pockets | Not Supported |
+| Summer Pockets Reflection Blue | Partial Support |
+| Loopers | Partial Support |
+| Planetarian HD | Not Supported |
+| Planetarian: Snow Globe | Not Supported |
+| Lunaria: Virtualized Moonchild | Partial Support |
+| Stella of The End | Full Support |
+| Prima Doll: Fuyuzora Hanabi / Sekka Monyō | Not Supported |
+| Prima Doll: Mumei Tenrei | Not Supported |
+| Kōsai Toshi: Augment Protocol | Not Supported |
+| Anemoi | Not Supported |
 
-[kanon]: http://radicalr.pestermom.com/vn.html
-[clannad]: http://store.steampowered.com/app/324160/
-[clannad_side_stories]: https://store.steampowered.com/app/420100/
-[planetarian]: http://store.steampowered.com/app/316720/
-
-rlvm is now at the point where enough commands are implemented that
-other games *may* work. The above is only a list of what I've tested
-first hand or what I've been told.
-
-rlvm has an implementation of rlBabel; English patches compiled with
-Haeleth's rlBabel should line break correctly. I've successfully tested
-it with the Kanon patch from NDT.
-
-rlvm supports KOE, NWK and OVK archives for voices, along with ogg
-vorbis voice patches which follow the convention
-<packnumber>/z<packnumber><sampleid>.ogg.
-
-Fullscreen can be entered by pressing Alt+{F,Enter} on Linux and
-Command+{F,Enter} on Mac.
+Current rlvm development focuses on supporting newer Siglus games.
+Changes may temporarily break RealLive support. I'll address these issues
+and update the support status once the new features have stabilized and
+I've done more testing.
 
 ## USING RLVM
 
@@ -190,22 +181,14 @@ The `g00` CLI inspects G00 images, exports editable PNGs with region metadata,
 encodes PNGs and sprite sheets as lossless G00 files, and extracts individual
 sprites. See [tools/README.md](tools/README.md) for build instructions and examples.
 
+### Dumping Game Data with rlkp
 
-## KNOWN ISSUES
+The `rlkp` tool dumps RealLive and Siglus scripts as readable text and extracts
+audio, images, and movies from a game directory. Use `-o` to write files to an
+output directory; output defaults to standard output. For Siglus games, use
+`--scenario` to dump a single scenario by number.
 
-- **Clannad Side Stories**: The game runs, but due to incomplete opcode support,
-  several issues remain:
-  - Missing sound effects.
-  - Menu may not work.
-
-  It is advised to delete `~/.rlvm/KEY_HIKARI_SAKA_STEAM_EN` before first running
-  the game in newer versions of rlvm.
-
-- **Little Busters' Baseball Minigame**: This minigame doesn't function because
-  it relies on a Windows DLL, which rlvm does not support. Similarly, the
-  **dungeon crawling minigame** in *Tomoyo After* is also affected for the same
-  reason.
-
-- **Steam Edition of Little Busters**: The asset files in this version are
-  packed into `.PAK` archives, which rlvm currently cannot recognize. As a
-  result, this edition of the game is not supported.
+```bash
+./build/release/rlkp /path/to/GameDirectory/ -o dump
+./build/release/rlkp /path/to/SiglusGameDirectory/ --scenario 0 -o dump
+```

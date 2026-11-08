@@ -1,5 +1,36 @@
-GAME COMPATIBILITY STATUS
+GAME COMPATIBILITY STATUS (Siglus)
 =======================================================================
+
+Angel Beats! 1st Beat
+---------------------
+- Only the first few scenarios are playable.
+- Missing instructions will cause the game to crash.
+
+Summer Pockets Reflection Blue
+------------------------------
+- Appears to work; currently untested.
+
+Loopers
+-------
+- Playable to the end.
+- An unrecognized element causes a crash during the epilogue.
+- Graphical glitches around character portraits and message window faces.
+
+Lunaria: Virtualized Moonchild
+------------------------------
+- Appears to work; currently untested.
+
+Stella of The End
+-----------------
+- Playable to the end.
+- The slider in the configuration menu doesn't work.
+
+
+GAME COMPATIBILITY STATUS (RealLive)
+=======================================================================
+
+This section documents the original rlvm project's support status. It is
+outdated; I haven't tested these games myself yet.
 
 Kanon SE ALL
 ------------
