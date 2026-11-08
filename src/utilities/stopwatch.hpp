@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include "core/serialization_context.hpp"
+#include "utilities/serialization.hpp"
+
 #include <chrono>
 #include <memory>
 
@@ -85,6 +88,20 @@ class Stopwatch {
   duration_t LapTime();
 
  private:
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    auto snapshot = *this;
+    snapshot.Update();
+    ar & snapshot.state_ & snapshot.time_ & snapshot.lap_time_;
+  }
+  void load(auto& ar, unsigned int) {
+    ar & state_ & time_ & lap_time_;
+    clock_ = SerializationContext::Get(ar).GetClock();
+    RebaseClock();
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+  void RebaseClock();
+
   /**
    * @brief Updates the internal time based on the clock.
    * @throws std::runtime_error if the clock time moves backward.

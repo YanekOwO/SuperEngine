@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/rect.hpp"
 
 #include <filesystem>
@@ -56,6 +58,15 @@ struct CaptureRequest {
   Point offset;
   std::string png_name;
   int priority = 3;  // Siglus NONE/SAVE/END/CAPTURE priorities are 0/1/2/3.
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & kind & end & display & size & offset & png_name & priority;
+    if constexpr (std::decay_t<decltype(ar)>::is_loading::value)
+      if (kind < CaptureKind::Save || kind > CaptureKind::Buffer)
+        throw std::runtime_error("Invalid saved capture kind");
+  }
 };
 
 struct CaptureFlags {
@@ -93,6 +104,8 @@ class CaptureManager {
   void Release(CaptureKind kind, int priority = 3);
   std::shared_ptr<SDLSurface> Snapshot(CaptureKind kind) const;
   int save_priority() const { return save_priority_; }
+  // Encode the retained save capture in the configured thumbnail format.
+  std::optional<std::string> EncodeSaveThumbnail() const;
   void FromFile(const std::filesystem::path& filename);
   void CreateBuffer(Size size);
   void DestroyBuffer();

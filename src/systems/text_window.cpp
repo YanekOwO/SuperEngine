@@ -226,7 +226,8 @@ bool TextWindow::ApplyMessageCommand(const MessageCommand& command,
 }
 
 void TextWindow::Restore(const MessagePage& page,
-                         std::optional<RGBColour> initial_color) {
+                         std::optional<RGBColour> initial_color,
+                         ReplayMode mode) {
   // Copy first: callers may restore this window's own page.
   MessagePage restored = page;
   const auto& state = restored.initial_state;
@@ -251,9 +252,14 @@ void TextWindow::Restore(const MessagePage& page,
       }
     for (const auto& face : state.faces)
       FaceOpenImpl(face.filename, face.index, true);
+    if (mode == ReplayMode::Animated)
+      EnsureMessageStream().deferring = true;
     for (const auto& command : restored.history)
       ApplyMessageCommand(command, true);
-    FlushMessageText();
+    if (mode == ReplayMode::Immediate)
+      FlushMessageText();
+    else
+      EnsureMessageStream().deferring = false;
     page_ = std::move(restored);
   } catch (...) {
     restoring_ = was_restoring;
@@ -281,6 +287,30 @@ void TextWindow::ClearMouseCapture() {
     textbox_waku_->ClearMouseCapture();
   if (namebox_waku_)
     namebox_waku_->ClearMouseCapture();
+}
+
+TextWindow::SavedFaces TextWindow::CaptureFaces() const {
+  SavedFaces faces;
+  for (int i = 0; i < kNumFaceSlots; ++i) {
+    if (const auto& slot = face_slot_[i])
+      faces[i] =
+          SavedFace{FaceSlotConfig{slot->x, slot->y, slot->is_behind,
+                                   slot->hide_other_windows, slot->unknown},
+                    slot->filename};
+  }
+  return faces;
+}
+
+void TextWindow::RestoreFaces(const SavedFaces& faces) {
+  for (int i = 0; i < kNumFaceSlots; ++i) {
+    if (!faces[i]) {
+      face_slot_[i].reset();
+      continue;
+    }
+    face_slot_[i] = std::make_unique<FaceSlot>(faces[i]->config);
+    if (!faces[i]->filename.empty())
+      FaceOpenImpl(faces[i]->filename, i, true);
+  }
 }
 
 std::shared_ptr<TextWindow> TextWindow::Clone() const {
@@ -324,7 +354,9 @@ std::shared_ptr<TextWindow> TextWindow::Clone() const {
   return result;
 }
 
-void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
+void TextWindow::SetTextboxWaku(int waku_set,
+                                std::unique_ptr<TextWaku> waku,
+                                bool initialize_actions) {
   ASSERTX_NE(waku.get(), nullptr);
   if (textbox_waku_)
     waku->ResetObjectsFrom(*textbox_waku_);
@@ -334,11 +366,13 @@ void TextWindow::SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
     waku->ResetFacesFrom(*textbox_waku_);
   textbox_config_.waku_set = waku_set;
   textbox_waku_ = std::move(waku);
-  if (!history_view_)
+  if (initialize_actions && !history_view_)
     system_.text().InitializeMwndButtonFrameActions(*textbox_waku_);
 }
 
-void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
+void TextWindow::SetNameboxWaku(int waku_set,
+                                std::unique_ptr<TextWaku> waku,
+                                bool initialize_actions) {
   ASSERTX_NE(waku.get(), nullptr);
   if (namebox_waku_)
     waku->ResetObjectsFrom(*namebox_waku_);
@@ -346,7 +380,7 @@ void TextWindow::SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku) {
     waku->ResetButtonsFrom(*namebox_waku_);
   namebox_config_.waku_set = waku_set;
   namebox_waku_ = std::move(waku);
-  if (!history_view_)
+  if (initialize_actions && !history_view_)
     system_.text().InitializeMwndButtonFrameActions(*namebox_waku_);
 }
 

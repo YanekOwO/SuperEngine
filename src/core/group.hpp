@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <optional>
 
 struct Group {
@@ -49,4 +51,12 @@ struct Group {
   void Reset();
   void InitSel();
   void ClearTransientInteraction();
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & order & layer & cancel_priority & cancel_se & hit_button_no &
+        pushed_button_no & decided_button_no & result & result_button_no &
+        status & cancel_enabled & pressed_button_no;
+  }
 };

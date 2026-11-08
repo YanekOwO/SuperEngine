@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <string>
 #include <vector>
 
@@ -37,6 +39,11 @@ class GanDecoder {
     int time;
     int alpha;
     int other;  // No idea what this is.
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) {
+      ar & pattern & x & y & time & alpha & other;
+    }
   };
 
   // Constructor

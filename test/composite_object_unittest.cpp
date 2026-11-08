@@ -21,12 +21,17 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
+#include "core/object.hpp"
 #include "core/object_internal/drawer/file.hpp"
+#include "image_archive_test_support.hpp"
+#include "number_test_support.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <vector>
+
+namespace {
 
 TEST(SiglusCompositeObjectTest, DetectsCompositeNames) {
   EXPECT_TRUE(IsCompositeObjectName("base | face"));
@@ -79,3 +84,32 @@ TEST(SiglusCompositeObjectTest, RejectsUnsupportedNonzeroBlend) {
   EXPECT_THROW(ParseCompositeObjectName("base|face(0,0,blend=1)"),
                std::runtime_error);
 }
+
+// ------------------------------------------------------------------------------
+
+class CompositeObjectArchiveTest : public ::testing::Test {};
+
+TEST_F(CompositeObjectArchiveTest, RebuildsCompositeGeometry) {
+  // A restored composite drawer rebuilds bounds and pixel sampling from its
+  // layers.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.make_surface = [] { return MakeNumberTestAtlas(); };
+    auto image = MakeNumberTestAtlas();
+    std::unique_ptr<GraphicsObjectData>
+        source = std::make_unique<CompositeGraphicsObject>(
+            std::vector<ObjectLayer>{{image, Point(-7, 4), 0, 0, "atlas"},
+                                     {image, Point(19, 8), 1, 0, "atlas"}}),
+        target;
+    GraphicsObject object;
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    ASSERT_NE(dynamic_cast<CompositeGraphicsObject*>(target.get()), nullptr);
+    EXPECT_EQ(target->SrcRect(object), source->SrcRect(object));
+    EXPECT_EQ(target->DstOrigin(object), source->DstOrigin(object));
+    EXPECT_EQ(target->GetPixelColor(Point(3, 4), 0),
+              source->GetPixelColor(Point(3, 4), 0));
+  });
+}
+
+}  // namespace

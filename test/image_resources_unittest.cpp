@@ -22,26 +22,33 @@
 //
 // -----------------------------------------------------------------------
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include "core/image_resources.hpp"
+#include "core/serialization_context.hpp"
+#include "image_archive_test_support.hpp"
 #include "mock_asset_scanner.hpp"
 #include "mock_graphics_backend.hpp"
+#include "serialization_test_helpers.hpp"
 #include "systems/igraphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/bytestream.hpp"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <array>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace {
 
 namespace fs = std::filesystem;
 using ::testing::InSequence;
@@ -359,3 +366,79 @@ TEST_F(ImageResourcesUnitTest, RejectsToneCurveIndexWhenNoEffectsAreAvailable) {
   EXPECT_THROW(images_.LoadSurfaceFromFile("background?10"),
                std::runtime_error);
 }
+
+TEST_F(ImageResourcesUnitTest, RestoresPreloadNamesWithoutSavingCachedPixels) {
+  // A preload is reconstructed from its asset, independently of cache identity.
+  ExpectLoad("background");
+  images_.PreloadImage(2, "background");
+  auto original = images_.FindPreloaded("background");
+  std::stringstream bytes;
+  {
+    boost::archive::binary_oarchive archive(bytes);
+    archive << images_.CaptureCheckpoint();
+  }
+  ImageResources::CheckpointState saved;
+  {
+    boost::archive::binary_iarchive archive(bytes);
+    archive >> saved;
+  }
+  ASSERT_EQ(saved.preloaded, (std::vector<std::string>{"", "", "background"}));
+  ExpectLoad("background");
+  images_.PrepareCheckpoint(saved);
+  images_.RestoreCheckpoint(std::move(saved));
+  EXPECT_NE(images_.FindPreloaded("background"), nullptr);
+  EXPECT_NE(images_.FindPreloaded("background"), original);
+  EXPECT_EQ(images_.FindCached("background"), nullptr);
+}
+
+// ------------------------------------------------------------------------------
+
+class ImageResourcesArchiveTest : public ::testing::Test {};
+
+TEST_F(ImageResourcesArchiveTest, PreparationDoesNotReplaceLivePreloads) {
+  // Preparing sparse saved slots loads candidates without changing live
+  // preloads.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost host;
+    host.images.PreloadImage(0, "live");
+    auto live = host.images.FindPreloaded("live");
+    ImageResources::CheckpointState source{.preloaded = {"", "new"}}, target;
+    serialization_test::RoundTrip(source, target, format);
+    host.images.PrepareCheckpoint(target);
+    EXPECT_EQ(host.images.FindPreloaded("live"), live);
+    EXPECT_FALSE(host.images.FindPreloaded("new"));
+    host.images.RestoreCheckpoint(std::move(target));
+    EXPECT_FALSE(host.images.FindPreloaded("live"));
+    ASSERT_TRUE(host.images.FindPreloaded("new"));
+    EXPECT_EQ(host.images.CaptureCheckpoint().preloaded, source.preloaded);
+  });
+}
+
+TEST_F(ImageResourcesArchiveTest, PreparedImagesAreNotArchived) {
+  // Only preload names persist; prepared image pointers are reconstructed
+  // later.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageResources::CheckpointState source{.preloaded = {"picture"}}, target;
+    source.prepared.emplace_back("picture",
+                                 std::make_shared<SDLSurface>(Size(1, 1)));
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target.preloaded, source.preloaded);
+    EXPECT_TRUE(target.prepared.empty());
+  });
+}
+
+TEST_F(ImageResourcesArchiveTest, FailedPreparationPreservesLiveState) {
+  // An unavailable saved preload does not replace a live image.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost host;
+    host.images.PreloadImage(0, "live");
+    auto live = host.images.FindPreloaded("live");
+    ImageResources::CheckpointState source{.preloaded = {"missing"}}, target;
+    serialization_test::RoundTrip(source, target, format);
+    host.fail = true;
+    EXPECT_THROW(host.images.PrepareCheckpoint(target), std::runtime_error);
+    EXPECT_EQ(host.images.FindPreloaded("live"), live);
+  });
+}
+
+}  // namespace

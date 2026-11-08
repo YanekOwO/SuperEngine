@@ -23,6 +23,10 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+#include "core/serialization_context.hpp"
+#include "utilities/serialization.hpp"
+
 #include "core/colour.hpp"
 #include "core/object_internal/objdrawer.hpp"
 
@@ -41,6 +45,13 @@ struct StringObjectStyle {
   int shadow_mode = -1;
 
   bool operator==(const StringObjectStyle&) const = default;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & size & xspace & yspace & count & color & shadow_color & outline_color &
+        shadow_mode;
+  }
 };
 
 struct StringObjectGlyph {
@@ -102,4 +113,24 @@ class StringDrawer final : public GraphicsObjectData {
   mutable std::optional<StringObjectFontSettings> cached_font_;
   mutable std::shared_ptr<SDLSurface> surface_;
   mutable Point origin_;
+
+ private:
+  // Only archive construction may create the inert, unbound drawer.
+  StringDrawer() = default;
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & text_ &
+        style_;
+  }
+  void load(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & text_ &
+        style_;
+    context_ = SerializationContext::Get(ar).StringRenderer();
+    dirty_ = true;
+    cached_font_.reset();
+    surface_.reset();
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
+
+BOOST_CLASS_EXPORT_KEY(StringDrawer)

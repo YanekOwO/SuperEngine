@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "utilities/stopwatch.hpp"
 
 #include <boost/serialization/access.hpp>
@@ -78,20 +80,6 @@ class Animator {
   mutable Stopwatch
       timer_;  // mutable because internal state is coupled with time
 
-  // boost::serialization support
   friend class boost::serialization::access;
-  template <class Archive>
-  void save(Archive& ar, const unsigned int version) const {
-    ar & after_& IsPlaying();
-  }
-  template <class Archive>
-  void load(Archive& ar, const unsigned int version) {
-    ar & after_;
-    bool is_playing;
-    ar & is_playing;
-    if (is_playing)
-      timer_.Apply(Stopwatch::Action::Run);
-  }
-
-  BOOST_SERIALIZATION_SPLIT_MEMBER();
+  void serialize(auto& ar, unsigned int) { ar & after_ & timer_; }
 };

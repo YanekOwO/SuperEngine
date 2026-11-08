@@ -25,11 +25,14 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/colour.hpp"
 #include "core/rect.hpp"
 #include "core/text_layout.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -42,53 +45,176 @@ struct Text {
   // when only its prefix fitted on this page.
   std::string text, final_lookahead;
   std::size_t accepted_bytes = std::string_view::npos;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & text & final_lookahead & accepted_bytes;
+  }
 };
 struct Name {
   std::string name, next_char;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & name & next_char;
+  }
 };
 struct NameWithoutDisplay {
   std::string name;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & name;
+  }
 };
 struct SetNameMode {
   int mode;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & mode;
+  }
 };
 struct KoeMarker {
   int id;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & id;
+  }
 };
-struct HardBreak {};
+struct HardBreak {
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {}
+};
 struct NextMessage {
   TextLayout layout;
   RGBColour color;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & layout & color;
+  }
 };
-struct SetIndentation {};
-struct ClearIndentation {};
+struct SetIndentation {
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {}
+};
+struct ClearIndentation {
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {}
+};
 struct SetFontColor {
   RGBColour color;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & color;
+  }
 };
 struct SetDefaultTextColor {
   RGBColour color;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & color;
+  }
 };
 struct SetFontSize {
   int size;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & size;
+  }
 };
-struct RubyBegin {};
+struct RubyBegin {
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {}
+};
 struct RubyText {
   std::string ruby;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & ruby;
+  }
 };
 struct SetInsertion {
   Point point;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & point;
+  }
 };
 struct SetGlyphRenderOffset {
   Point offset;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & offset;
+  }
 };
 struct FaceOpen {
   std::string filename;
   int index;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & filename & index;
+  }
 };
 struct FaceClose {
   int index;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & index;
+  }
 };
-struct MarkItalic {};
+struct MarkItalic {
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {}
+};
 
 }  // namespace msgcmd
 
@@ -122,10 +248,20 @@ struct MessagePageState {
   std::string name;
   bool next_char_italic = false;
   std::vector<msgcmd::FaceOpen> faces;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & layout & default_font_size & default_color & color & name &
+        next_char_italic & faces;
+  }
 };
 
 // An owned, copyable description of a message, independent of its renderer.
 struct MessagePage {
+  // Zero means this page has no available interpreter rollback checkpoint.
+  std::uint64_t checkpoint_id = 0;
   MessagePageState initial_state;
 
   // Number of characters on this page (used in automode)
@@ -135,4 +271,13 @@ struct MessagePage {
   std::vector<MessageCommand> history;
 
   inline bool empty() const { return history.empty(); }
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & initial_state & number_of_chars_on_page;
+    SerializeBoundedSequence(ar, history);
+    ar & checkpoint_id;
+  }
 };

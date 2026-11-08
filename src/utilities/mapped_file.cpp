@@ -26,7 +26,8 @@
 
 #include <stdexcept>
 
-MappedFile::MappedFile(const std::string& filename, std::size_t size) {
+MappedFile::MappedFile(const std::string& filename, std::size_t size)
+    : path_(filename) {
   const bool is_readonly = size == 0;
   if (is_readonly) {
     file_.open(filename, boost::iostreams::mapped_file::mapmode::readonly);

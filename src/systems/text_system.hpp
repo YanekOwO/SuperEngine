@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/event_listener.hpp"
 #include "core/game_config.hpp"
 #include "core/message_page.hpp"
@@ -63,6 +65,12 @@ class ImageResources;
 
 class TextSystem final : public EventListener {
  public:
+  static void ConstructSavedWindow(TextWindow* target,
+                                   System& system,
+                                   int window,
+                                   bool history);
+  void InitializeSavedWindow(TextWindow& window);
+
   struct GraphicsHooks {
     std::shared_ptr<ImageResources> images;
     std::function<std::shared_ptr<SDLSurface>()> load_emoji;
@@ -219,6 +227,11 @@ class TextSystem final : public EventListener {
 
   bool IsReadingBacklog() const;
   void StopReadingBacklog();
+  void SetBacklogLoadHandler(std::function<void(std::uint64_t)> handler) {
+    backlog_load_ = std::move(handler);
+  }
+  // Dispatches the checkpoint attached to the currently displayed page set.
+  bool RequestBacklogLoad();
 
   void SetKeyCursor(int new_cursor);
 
@@ -228,9 +241,6 @@ class TextSystem final : public EventListener {
   // Update the mouse cursor.
   void SetMousePosition(const Point& pos);
   bool HandleMouseClick(const Point& pos, bool pressed);
-
-  // Save pieces of state that would be saved to disk.
-  void TakeSavepointSnapshot();
 
   // Returns a surface with |utf8str| rendered with the other specified
   // properties. Will search |utf8str| for object text syntax and will change
@@ -305,6 +315,7 @@ class TextSystem final : public EventListener {
  private:
   // Whether we are reading the backlog
   bool is_reading_backlog_;
+  std::function<void(std::uint64_t)> backlog_load_;
   WindowList history_windows_;
   std::chrono::milliseconds message_time_{};
   std::optional<KeyCode> history_close_key_;
@@ -350,11 +361,6 @@ class TextSystem final : public EventListener {
 
   // Our parent system object.
   System& system_;
-
-  // This state can change after the last savepoint marker. These are the
-  // values that should be saved to disk.
-  int savepoint_active_window_;
-  int savepoint_cursor_number_;
 
   // cached font data
   std::map<std::string, std::pair<std::filesystem::path, int>> resolved_fonts_;

@@ -101,6 +101,12 @@ int BgmTable::GetListen(std::string name) const {
 
 std::size_t BgmTable::Count() const { return listened_.size(); }
 
+void BgmTable::RestoreListenState(std::vector<bool> listened) {
+  if (listened.size() != names_.size())
+    throw std::invalid_argument("saved BGM table size does not match the game");
+  listened_ = std::move(listened);
+}
+
 int BgmTable::Find(const std::string& name) const {
   for (std::size_t i = 0; i < names_.size(); ++i) {
     if (!names_[i].empty() && boost::iequals(names_[i], name))

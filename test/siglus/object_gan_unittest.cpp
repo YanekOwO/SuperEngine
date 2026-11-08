@@ -30,6 +30,7 @@
 #include "libsiglus/bindings/util.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "mock_graphics_backend.hpp"
+#include "serialization_test_helpers.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/bytestream.hpp"
 #include "utilities/file.hpp"
@@ -160,6 +161,25 @@ TEST_F(SiglusObjectGanTest, MissingAnimationPreservesAssignedImage) {
 
   EXPECT_EQ(Object().GetDrawer<>(), original);
   EXPECT_EQ(Object().FilePath(), "display_atlas");
+}
+
+TEST_F(SiglusObjectGanTest, SerializationReloadsAssignedImage) {
+  // A serialized GAN owner reloads its assigned image rather than editor
+  // metadata.
+  Run("object.load_gan(\"motion\");");
+  auto reloaded = std::make_shared<SDLSurface>(Size(4, 3));
+  reloaded->Fill(RGBAColour(90, 80, 70, 255));
+  EXPECT_CALL(*backend, LoadSurface(std::filesystem::path("display_atlas.g00")))
+      .Times(2)
+      .WillRepeatedly(::testing::Return(reloaded));
+  serialization_test::ForEachFormat([&](auto format) {
+    GraphicsObject restored;
+    serialization_test::RoundTrip(Object(), restored, format, {},
+                                  {.images = runtime.images.get()});
+    ASSERT_NE(restored.GetDrawer<GanGraphicsObjectData>(), nullptr);
+    EXPECT_EQ(restored.GetDrawer().GetPixelColor(Point(), 0),
+              RGBAColour(90, 80, 70, 255));
+  });
 }
 
 }  // namespace libsiglus::binding

@@ -22,17 +22,21 @@
 // -----------------------------------------------------------------------
 
 #include <gtest/gtest.h>
-
-#include "core/object_internal/drawer/string.hpp"
-#include "systems/sdl/sdl_surface.hpp"
-#include "utf8.h"
-#include "utilities/string_utilities.hpp"
-
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "core/object.hpp"
+#include "core/object_internal/drawer/string.hpp"
+#include "headless_resource_host.hpp"
+#include "serialization_test_helpers.hpp"
+#include "systems/sdl/sdl_surface.hpp"
+#include "utilities/string_utilities.hpp"
+
+#include "utf8.h"
+
+namespace {
 
 class StringDrawerTest : public ::testing::Test {
  protected:
@@ -387,3 +391,77 @@ TEST_F(StringLayoutTest, AutomaticWrapAndExplicitNewlineUseCurrentInlineSize) {
                         {"界", Point(0, 24), 24, 0},
                         {"C", Point(0, 48), 24, 0}});
 }
+
+// ------------------------------------------------------------------------------
+
+class StringDrawerArchiveTest : public ::testing::Test {};
+
+TEST_F(StringDrawerArchiveTest, RetainsTextAndStyle) {
+  // A polymorphic string drawer preserves text and all styling fields.
+  serialization_test::ForEachFormat([&](auto format) {
+    StringObjectStyle style{.size = 18,
+                            .xspace = 2,
+                            .yspace = 3,
+                            .count = 8,
+                            .color = 4,
+                            .shadow_color = 5,
+                            .outline_color = 6,
+                            .shadow_mode = 3};
+    std::unique_ptr<GraphicsObjectData> source = std::make_unique<StringDrawer>(
+                                            "hello", style,
+                                            StringObjectRenderContext{}),
+                                        target;
+    serialization_test::RoundTrip(source, target, format);
+    auto* restored = dynamic_cast<StringDrawer*>(target.get());
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->text(), "hello");
+    EXPECT_EQ(restored->style(), style);
+  });
+}
+
+TEST_F(StringDrawerArchiveTest, RebuildsPixelsUsingDestinationRenderer) {
+  // A cached source image is discarded and rendered by destination host
+  // services.
+  serialization_test::ForEachFormat([&](auto format) {
+    HeadlessResourceHost host;
+    int source_renders = 0;
+    StringObjectRenderContext context{
+        .rasterize =
+            [&](const std::string&, int, RGBColour) {
+              ++source_renders;
+              auto image = std::make_shared<SDLSurface>(Size(2, 2));
+              image->Fill(RGBAColour(255, 0, 0, 255));
+              return image;
+            },
+        .color = [](int) { return RGBColour::White(); },
+        .font_settings = [] { return StringObjectFontSettings{}; }};
+    std::unique_ptr<GraphicsObjectData> source = std::make_unique<StringDrawer>(
+                                            "A", StringObjectStyle{}, context),
+                                        target;
+    GraphicsObject object;
+    auto original = source->CurrentSurface(object);
+    ASSERT_TRUE(original);
+    const auto calls = source_renders;
+    serialization_test::RoundTrip(source, target, format, {}, host.Context());
+    auto restored = target->CurrentSurface(object);
+    ASSERT_TRUE(restored);
+    EXPECT_NE(restored->GetSize(), original->GetSize());
+    EXPECT_EQ(source_renders, calls);
+  });
+}
+
+TEST_F(StringDrawerArchiveTest, RenderingRequiresDestinationSystem) {
+  // A loaded string without host services rejects rasterization rather than
+  // using stale pixels.
+  serialization_test::ForEachFormat([&](auto format) {
+    std::unique_ptr<GraphicsObjectData> source = std::make_unique<StringDrawer>(
+                                            "A", StringObjectStyle{},
+                                            StringObjectRenderContext{}),
+                                        target;
+    serialization_test::RoundTrip(source, target, format);
+    GraphicsObject object;
+    EXPECT_THROW(target->CurrentSurface(object), std::runtime_error);
+  });
+}
+
+}  // namespace

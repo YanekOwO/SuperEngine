@@ -23,6 +23,11 @@
 
 #include "core/object_internal/drawer/number.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/object.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 
@@ -87,8 +92,9 @@ std::vector<NumberObjectGlyph> LayoutNumberObject(
   return glyphs;
 }
 
-NumberDrawer::NumberDrawer(std::shared_ptr<SDLSurface> atlas)
-    : atlas_(std::move(atlas)) {
+NumberDrawer::NumberDrawer(std::string filename,
+                           std::shared_ptr<SDLSurface> atlas)
+    : filename_(std::move(filename)), atlas_(std::move(atlas)) {
   if (!atlas_ || atlas_->GetNumPatterns() == 0)
     throw std::invalid_argument("Number object requires a picture atlas");
 }
@@ -129,7 +135,8 @@ void NumberDrawer::UpdateLayers(const GraphicsObject& go) const {
       continue;
     layers.push_back({.surface = atlas_,
                       .offset = Point(glyph.x, 0),
-                      .cut_no = glyph.pattern});
+                      .cut_no = glyph.pattern,
+                      .filename = filename_});
   }
   layers_.SetLayers(std::move(layers));
   cached_pattern_ = pattern;
@@ -182,3 +189,11 @@ bool NumberDrawer::HitTestAtSource(const GraphicsObject& go,
   UpdateLayers(go);
   return layers_.HitTest(source_point, alpha_test);
 }
+
+void NumberDrawer::ValidateCheckpoint() const {
+  if (!atlas_ || atlas_->GetNumPatterns() == 0)
+    throw std::runtime_error("Number object requires a picture atlas");
+  ValidateStyle(style_);
+}
+
+BOOST_CLASS_EXPORT_IMPLEMENT(NumberDrawer)

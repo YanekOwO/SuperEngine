@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <boost/circular_buffer.hpp>
 #include <cstddef>
 #include <string>
@@ -42,8 +44,39 @@ class MessageBack {
     bool pct_flag = false;
     std::string image_file;
     int image_x = 0;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & msg & original_name & display_name & debug_msg & koe_no_list &
+          chara_no_list & scene_no & line_no & pct_flag & image_file & image_x;
+    }
   };
 
+  struct CheckpointState {
+    std::vector<MsgbkEntry> entries;
+    std::size_t current = 0;
+    bool new_message = true;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      SerializeBoundedSequence(ar, entries, kMaxHistory);
+      ar & current & new_message;
+      if constexpr (Archive::is_loading::value) {
+        if (entries.size() > kMaxHistory ||
+            (!entries.empty() && current >= entries.size()) ||
+            (entries.empty() && current != 0))
+          throw std::runtime_error("Invalid saved backlog position");
+      }
+    }
+  };
+  CheckpointState CaptureCheckpoint() const;
+  void RestoreCheckpoint(CheckpointState state);
+
+ public:
   MessageBack();
 
   void Reset();
@@ -64,4 +97,18 @@ class MessageBack {
   boost::circular_buffer<MsgbkEntry> entries_;
   std::size_t current_msg_pos_ = 0;
   bool new_msg_ = true;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void save(Archive& ar, const unsigned int) const {
+    ar& CaptureCheckpoint();
+  }
+  template <class Archive>
+  void load(Archive& ar, const unsigned int) {
+    CheckpointState state;
+    ar & state;
+    RestoreCheckpoint(std::move(state));
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };

@@ -414,3 +414,19 @@ void Stage::TakeSavepointSnapshot() {
 
   saved_graphics_stack = graphics_stack;
 }
+
+Stage Stage::CaptureCheckpoint() const {
+  Stage snapshot;
+  snapshot.objects = objects;
+  snapshot.groups = groups;
+  snapshot.effects = effects;
+  snapshot.quakes = quakes;
+  snapshot.mwnd = mwnd;
+  snapshot.selection = selection;
+  snapshot.mwnd_order = mwnd_order;
+  snapshot.screen_effects = screen_effects;
+  snapshot.transition_render_range_ = transition_render_range_;
+  snapshot.foreground_render_alpha_ = foreground_render_alpha_;
+  snapshot.next_render_alpha_ = next_render_alpha_;
+  return snapshot;
+}

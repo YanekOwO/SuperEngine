@@ -42,9 +42,11 @@ class MappedFile {
   void Write(std::size_t position, const std::string& data);
 
   std::size_t Size() const { return file_.size(); }
+  const std::filesystem::path& path() const { return path_; }
 
  private:
   boost::iostreams::mapped_file file_;
+  std::filesystem::path path_;
 };
 
 struct FilePos {

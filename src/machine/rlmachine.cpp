@@ -165,7 +165,6 @@ void RLMachine::MarkSavepoint() {
   savepoint_call_stack_ = call_stack_.Clone();
   savepoint_local_config_ = *local_config_;
   stage().TakeSavepointSnapshot();
-  GetSystem().text().TakeSavepointSnapshot();
 }
 
 ScenarioConfig RLMachine::GetScenarioConfig() const {

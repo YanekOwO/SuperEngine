@@ -21,15 +21,17 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
-#include "core/counter.hpp"
 #include "core/frame_counter.hpp"
+#include "core/counter.hpp"
 #include "mock_clock.hpp"
+#include "serialization_test_helpers.hpp"
 #include "utilities/clock.hpp"
 
+#include <gtest/gtest.h>
 #include <chrono>
 #include <memory>
+
+namespace {
 
 using std::chrono_literals::operator""ms;
 
@@ -498,3 +500,106 @@ TEST(FrameCounterCounterSourceTest, CopiesShareSourceAndRetainItsLifetime) {
   }
   EXPECT_TRUE(observed_source.expired());
 }
+
+// ------------------------------------------------------------------------------
+
+class FrameCounterArchiveTest : public ::testing::Test {};
+
+TEST_F(FrameCounterArchiveTest, RebasesClockWithoutChangingRemainingDuration) {
+  // A partially elapsed event loads at a new epoch and finishes after its
+  // remaining duration.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    clock->SetElapsed(1000ms);
+    FrameCounter source(clock, Interpolation({0, 100}), 1000);
+    clock->AdvanceTime(250ms);
+    auto target_clock = std::make_shared<MockClock>();
+    target_clock->SetElapsed(9000ms);
+    FrameCounter target;
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.clock = target_clock});
+    EXPECT_FLOAT_EQ(target.ReadFrame(), 25);
+    target_clock->AdvanceTime(250ms);
+    EXPECT_FLOAT_EQ(target.ReadFrame(), 50);
+    target_clock->AdvanceTime(500ms);
+    EXPECT_FLOAT_EQ(target.ReadFrame(), 100);
+    EXPECT_FALSE(target.IsActive());
+  });
+}
+
+TEST_F(FrameCounterArchiveTest, PreservesSharedCounterSource) {
+  // An event and its counter share one archive; advancing the restored counter
+  // drives the event.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto counter = std::make_shared<Counter>();
+    counter->StartGame();
+    FrameCounter event(counter, Interpolation({0, 100}), 100);
+    counter->Advance(50ms, 0ms);
+    auto source = std::pair{event, counter};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    target.second->Advance(25ms, 0ms);
+    EXPECT_FLOAT_EQ(target.first.ReadFrame(), 75);
+    EXPECT_EQ(counter->Get(), 50);
+  });
+}
+
+TEST_F(FrameCounterArchiveTest, RetainsDelayedStart) {
+  // A future start is rebased with the loading clock and retains the same
+  // delay.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    FrameCounter source(clock, Interpolation({0, 100}), 100);
+    source.BeginTimer(50ms);
+    auto target_clock = std::make_shared<MockClock>();
+    target_clock->SetElapsed(9000ms);
+    FrameCounter target;
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.clock = target_clock});
+    target_clock->AdvanceTime(75ms);
+    EXPECT_FLOAT_EQ(target.ReadFrame(), 25);
+  });
+}
+
+TEST_F(FrameCounterArchiveTest, InactiveValueStaysFrozen) {
+  // A manually stopped event retains its value even after the loading clock
+  // advances.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    FrameCounter source(clock, Interpolation({0, 100}), 100);
+    source.SetFrame(37);
+    FrameCounter target;
+    serialization_test::RoundTrip(source, target, format, {}, {.clock = clock});
+    clock->AdvanceTime(1000ms);
+    EXPECT_FALSE(target.IsActive());
+    EXPECT_FLOAT_EQ(target.ReadFrame(), 37);
+  });
+}
+
+// ------------------------------------------------------------------------------
+
+class FrameCounterValidationTest : public ::testing::Test {};
+
+TEST_F(FrameCounterValidationTest, RejectsMissingCounter) {
+  // A counter-backed event cannot load with a null saved time source.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto bytes = serialization_test::Write(format, [](auto& ar) {
+      bool uses_counter = true;
+      std::shared_ptr<Counter> counter;
+      ar & uses_counter & counter;
+    });
+    FrameCounter target;
+    EXPECT_THROW(serialization_test::Read(
+                     bytes, format,
+                     [&](auto& ar) {
+                       boost::serialization::access::serialize(ar, target, 0);
+                     }),
+                 std::runtime_error);
+  });
+}
+
+}  // namespace

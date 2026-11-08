@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/colour.hpp"
 #include "core/message_page.hpp"
 #include "core/mwnd_config.hpp"
@@ -67,6 +69,15 @@ struct MwndMessageState {
   void ClearKoe();
   void MarkNovelClear(TextWindow& window);
   void MarkMessageClearReady(TextWindow& window, LocalConfig& config);
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & block_started & clear_ready & auto_mode_base_chars & current_koe &
+        current_character & current_koe_played & current_koe_no_auto_mode &
+        waku_file & filter_file & pending_ruby;
+  }
 };
 
 constexpr int kNumFaceSlots = MwndConfig::kNumFaceSlots;
@@ -93,10 +104,13 @@ class TextWindow {
 
   std::shared_ptr<TextWindow> Clone() const;
   const MessagePage& GetPage();
+  void SetCheckpointId(std::uint64_t id) { EnsurePage().checkpoint_id = id; }
   inline bool HasPage() const { return page_.has_value(); }
   void NewPage();
+  enum class ReplayMode { Immediate, Animated };
   void Restore(const MessagePage& page,
-               std::optional<RGBColour> initial_color = std::nullopt);
+               std::optional<RGBColour> initial_color = std::nullopt,
+               ReplayMode mode = ReplayMode::Immediate);
 
   // [Recorded in MessagePage] ------------------------------------------
   // Apply and record a non-text command. Submit text through SubmitText.
@@ -143,9 +157,14 @@ class TextWindow {
   void SetWakuFilterFile(const std::string& file);
 
   int window_number() const { return window_num_; }
+  bool history_view() const { return history_view_; }
 
-  void SetTextboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
-  void SetNameboxWaku(int waku_set, std::unique_ptr<TextWaku> waku);
+  void SetTextboxWaku(int waku_set,
+                      std::unique_ptr<TextWaku> waku,
+                      bool initialize_actions = true);
+  void SetNameboxWaku(int waku_set,
+                      std::unique_ptr<TextWaku> waku,
+                      bool initialize_actions = true);
   inline TextWaku* GetTextboxWaku() const { return textbox_waku_.get(); }
   inline TextWaku* GetNameboxWaku() const { return namebox_waku_.get(); }
   bool IsTextboxWakuVisible() const;
@@ -314,6 +333,20 @@ class TextWindow {
 
   bool next_char_italic_;
 
+  struct SavedFace {
+    FaceSlotConfig config;
+    std::string filename;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & config & filename;
+    }
+  };
+  using SavedFaces = std::array<std::optional<SavedFace>, kNumFaceSlots>;
+  SavedFaces CaptureFaces() const;
+  void RestoreFaces(const SavedFaces& faces);
   struct FaceSlot;
   std::unique_ptr<FaceSlot> face_slot_[kNumFaceSlots];
 
@@ -334,4 +367,20 @@ class TextWindow {
   std::unique_ptr<KoeReplayInfo> koe_replay_info_;
 
   System& system_;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void save(Archive& ar, const unsigned int) const;
+  template <class Archive>
+  void load(Archive& ar, const unsigned int);
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
+
+namespace boost::serialization {
+template <class Archive>
+void save_construct_data(Archive& ar,
+                         const TextWindow* window,
+                         const unsigned int);
+template <class Archive>
+void load_construct_data(Archive& ar, TextWindow* window, const unsigned int);
+}  // namespace boost::serialization

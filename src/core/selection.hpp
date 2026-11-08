@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include "core/serialization_context.hpp"
+#include "utilities/serialization.hpp"
+
 #include "core/button_action_table.hpp"
 #include "core/colour.hpp"
 #include "core/rect.hpp"
@@ -50,6 +53,13 @@ struct SelectionOption {
   int type = 1;
   // COLOR_TABLE index; a negative value inherits the menu's normal text color.
   int color = -1;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & text & type & color;
+  }
 };
 
 // Normalized command arguments shared by the selection state and its runtime.
@@ -75,6 +85,16 @@ struct SelectionRequest {
   std::string start_scene;
   // Scene entry label for the opening callback; a negative value disables it.
   int start_entry = 0;
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & kind;
+    SerializeBoundedSequence(ar, options);
+    ar & cancel_enabled & close_window & template_no & scene & kidoku &
+        sync_type & capture & start_scene & start_entry;
+  }
 };
 
 // Gameexe SELBTN.n settings. Positions and spacing are in pixels; animation
@@ -109,6 +129,17 @@ struct BtnSelTemplate {
   // Rejects template numbers outside SELBTN.CNT (default count: 16).
   static BtnSelTemplate ParseSiglus(Gameexe& gexe, int number);
   static BtnSelTemplate ParseReallive(Gameexe& gexe, int number);
+
+ private:
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & format & base_file & filter_file & base_pos & rep_pos & text_pos &
+        x_align & y_align & max_rows & column_width & font_size & x_spacing &
+        y_spacing & text_count & text_x_align & text_y_align & color &
+        hit_color & action & center_x & center_y & frame_actions & open_type &
+        open_time & close_type & close_time & decide_type & decide_time;
+  }
 };
 
 // Stage-owned selection presentation.
@@ -125,6 +156,13 @@ class Selection {
     std::shared_ptr<SDLSurface> normal, highlighted;
     // Logical text/button size, excluding text-surface shadow padding.
     Size size;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & position & hit_rect & size;
+    }
   };
   struct Presentation {
     // Transient drawing adjustments; layout and hit rectangles stay fixed.
@@ -190,11 +228,41 @@ class Selection {
 
   Point Origin() const;
 
+  Size RebuildVisuals(System& system, ImageResources* images);
+
  private:
-  Phase phase_ = Phase::Prepared;
-  int elapsed_ = 0;
+  Selection() = default;
+  void RestoreVisuals(const SerializationContext& context);
+
   int AnimationRows() const;
   void Close();
+
+  Phase phase_ = Phase::Prepared;
+  int elapsed_ = 0;
+
+ private:
+  friend class boost::serialization::access;
+  void save(auto& ar, const unsigned int) const {
+    ar & request & config & button_action & sorter & origin & result &
+        open_hook_done & phase_;
+    SerializeBoundedSequence(ar, items);
+    ar & window & filter_colour & filter_mode;
+  }
+  void load(auto& ar, const unsigned int) {
+    ar & request & config & button_action & sorter & origin & result &
+        open_hook_done & phase_;
+    SerializeBoundedSequence(ar, items);
+    ar & window & filter_colour & filter_mode;
+    capture.reset();
+
+    if (phase_ < Phase::Prepared || phase_ > Phase::Finished)
+      throw std::runtime_error("Invalid saved selection phase");
+    elapsed_ = 0;
+    focused.reset();
+    pressed.reset();
+    RestoreVisuals(SerializationContext::Get(ar));
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
 
 // Resolves surfaces, text styling, and hit geometry. Window requests require

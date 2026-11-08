@@ -21,17 +21,18 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/mask.hpp"
+#include "image_archive_test_support.hpp"
 #include "mock_clock.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <chrono>
 #include <memory>
 
-using std::chrono_literals::operator""ms;
-
 namespace {
+
+using std::chrono_literals::operator""ms;
 
 FrameCounter MakeMaskCounter(
     const std::shared_ptr<Clock>& clock,
@@ -123,6 +124,115 @@ TEST(MaskTest, CreateReinitializesParametersAndMutators) {
   EXPECT_EQ(mask.Param().y, 0);
   EXPECT_EQ(mask.filename(), "replacement.png");
   EXPECT_FALSE(mask.IsMutatorRunning(&Mask::Parameters::x));
+}
+
+// ------------------------------------------------------------------------------
+
+class MaskArchiveTest : public ::testing::Test {};
+
+TEST_F(MaskArchiveTest, RebindsEachEventProperty) {
+  // Two partially completed events resume against their own restored
+  // coordinates.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    Mask source;
+    source.AddMutator(Mask::ParameterMutator(
+        &Mask::Parameters::x,
+        FrameCounter(clock, Interpolation({0, 100}), 1000)));
+    source.AddMutator(Mask::ParameterMutator(
+        &Mask::Parameters::y,
+        FrameCounter(clock, Interpolation({20, 60}), 2000)));
+    clock->AdvanceTime(250ms);
+    source.Execute();
+    auto target_clock = std::make_shared<MockClock>();
+    target_clock->SetElapsed(8000ms);
+    Mask target;
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.clock = target_clock});
+    target_clock->AdvanceTime(250ms);
+    target.Execute();
+    EXPECT_EQ(target.Param().x, 50);
+    EXPECT_EQ(target.Param().y, 30);
+  });
+}
+
+TEST_F(MaskArchiveTest, ListRestoresSurfaceAndPosition) {
+  // A populated mask reloads its named image while retaining its position.
+  serialization_test::ForEachFormat([&](auto format) {
+    MaskList source(2), target;
+    ImageArchiveHost loading;
+    auto surface = std::make_shared<SDLSurface>(Size(2, 1));
+    surface->Fill(RGBAColour(1, 2, 3, 4));
+    source.At(1).Create("mask", surface);
+    source.At(1).Param() = {.x = 17, .y = -9};
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    ASSERT_EQ(target.size(), 2u);
+    EXPECT_FALSE(target.At(0).surface());
+    EXPECT_EQ(target.At(1).filename(), "mask");
+    EXPECT_EQ(target.At(1).Param().x, 17);
+    EXPECT_EQ(target.At(1).Param().y, -9);
+    ASSERT_TRUE(target.At(1).surface());
+    EXPECT_EQ(target.At(1).surface()->GetPixelAt(Point()),
+              RGBAColour(12, 34, 56, 78));
+  });
+}
+
+TEST_F(MaskArchiveTest, EmptyMaskClearsPreviousSurface) {
+  // A reset mask clears a populated destination without requiring asset
+  // services.
+  serialization_test::ForEachFormat([&](auto format) {
+    Mask source, target;
+    target.Create("previous", std::make_shared<SDLSurface>(Size(1, 1)));
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_TRUE(target.filename().empty());
+    EXPECT_FALSE(target.surface());
+  });
+}
+
+TEST_F(MaskArchiveTest, RejectsMismatchedEventCount) {
+  // A payload with a property but no event is rejected before event rebinding.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto bytes = serialization_test::Write(format, [](auto& ar) {
+      Mask::Parameters param;
+      std::string filename;
+      std::vector<int> properties{0};
+      std::vector<Mask::ParameterMutator> events;
+      ar & param & filename;
+      SerializeBoundedSequence(ar, properties);
+      SerializeBoundedSequence(ar, events);
+    });
+    Mask target;
+    EXPECT_THROW(serialization_test::Read(
+                     bytes, format,
+                     [&](auto& ar) {
+                       boost::serialization::access::member_load(ar, target, 0);
+                     }),
+                 std::runtime_error);
+  });
+}
+
+TEST_F(MaskArchiveTest, RejectsUnknownEventProperty) {
+  // A payload with an invalid property identifier cannot construct a setter.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto bytes = serialization_test::Write(format, [](auto& ar) {
+      Mask::Parameters param;
+      std::string filename;
+      std::vector<int> properties{2};
+      std::vector<Mask::ParameterMutator> events(1);
+      ar & param & filename;
+      SerializeBoundedSequence(ar, properties);
+      SerializeBoundedSequence(ar, events);
+    });
+    Mask target;
+    EXPECT_THROW(serialization_test::Read(
+                     bytes, format,
+                     [&](auto& ar) {
+                       boost::serialization::access::member_load(ar, target, 0);
+                     }),
+                 std::runtime_error);
+  });
 }
 
 }  // namespace

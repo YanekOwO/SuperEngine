@@ -31,6 +31,7 @@
 #include <deque>
 #include <list>
 #include <mutex>
+#include <optional>
 
 class AudioPlayer {
  public:

@@ -21,14 +21,17 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/object_internal/object_layers.hpp"
+#include "image_archive_test_support.hpp"
 #include "number_test_support.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+
+namespace {
 
 class ObjectLayersTest : public ::testing::Test {
  protected:
@@ -85,3 +88,45 @@ TEST_F(ObjectLayersTest, HitTestsRejectPointsOutsideSourceBounds) {
   EXPECT_FALSE(layers.HitTest(Point(0, 15), true));
   EXPECT_TRUE(layers.HitTest(Point(10, 14), false));
 }
+
+// ------------------------------------------------------------------------------
+
+class ObjectLayersArchiveTest : public ::testing::Test {};
+
+TEST_F(ObjectLayersArchiveTest, RebuildsBoundsFromDestinationAsset) {
+  // Different destination pattern geometry replaces the source layer bounds.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.size = Size(4, 3);
+    loading.regions = {
+        {.rect = Rect::REC(0, 0, 4, 3), .originX = 7, .originY = 8}};
+    ObjectLayers source, target;
+    source.SetLayers({{.surface = std::make_shared<SDLSurface>(Size(1, 1)),
+                       .offset = Point(10, 20),
+                       .filename = "layer"}});
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    EXPECT_EQ(target.Bounds(), Rect::REC(3, 12, 4, 3));
+  });
+}
+
+TEST_F(ObjectLayersArchiveTest, RebuildsBoundsAndHitGeometry) {
+  // Loading layers replaces stale bounds and retains alpha-sensitive hit
+  // geometry.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.make_surface = [] { return MakeNumberTestAtlas(); };
+    auto image = MakeNumberTestAtlas();
+    ObjectLayers source, target;
+    source.SetLayers({{image, Point(-7, 4), 0, 0, "atlas"},
+                      {image, Point(19, 8), 1, 0, "atlas"}});
+    target.SetLayers({{image, Point(200, 300), 0, 0}});
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    EXPECT_EQ(target.Bounds(), source.Bounds());
+    for (Point point : {Point(), Point(5, 5), Point(20, 5), Point(100, 100)})
+      EXPECT_EQ(target.HitTest(point, true), source.HitTest(point, true));
+  });
+}
+
+}  // namespace

@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/frame_counter.hpp"
 
 #include <concepts>
@@ -33,6 +35,12 @@
 template <class Setter, class Context = void>
 class Mutator {
  public:
+  Mutator() = default;
+  FrameCounter& counter() { return fc_; }
+  const FrameCounter& counter() const { return fc_; }
+  const Setter& setter() const { return setter_; }
+  void SetSetter(Setter setter) { setter_ = std::move(setter); }
+
   Mutator(Setter setter, FrameCounter fc)
       : setter_(std::move(setter)), fc_(std::move(fc)) {}
 
@@ -100,6 +108,12 @@ class Mutator {
     }
   }
 
-  Setter setter_;
+  Setter setter_{};
   FrameCounter fc_;
+
+ private:
+  friend class boost::serialization::access;
+  // The owning resource saves a symbolic setter and rebinds it after loading;
+  // executable functions and member pointers never enter the archive.
+  void serialize(auto& ar, unsigned int) { ar & fc_; }
 };

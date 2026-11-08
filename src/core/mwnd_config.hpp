@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/button_action_table.hpp"
 #include "core/colour.hpp"
 #include "core/rect.hpp"
@@ -59,6 +61,13 @@ class MwndConfig {
     int unknown = 0;
 
     bool operator==(const FaceSlot&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & x & y & is_behind & hide_other_windows & unknown;
+    }
   };
 
   struct Namebox {
@@ -78,6 +87,14 @@ class MwndConfig {
       Point GetTextOrigin(Point anchor, Size text_size) const;
 
       bool operator==(const SiglusLayout&) const = default;
+
+     private:
+      friend class boost::serialization::access;
+      template <class Archive>
+      void serialize(Archive& ar, const unsigned int) {
+        ar & auto_size & alignment & window_size & message_position &
+            message_offset & message_margin & window_margin;
+      }
     };
 
     // Native Siglus anchor and text positioning, independent of RealLive's
@@ -107,6 +124,15 @@ class MwndConfig {
     int character_size = 0;
 
     bool operator==(const Namebox&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & siglus_layout & has_waku & waku_set & x_spacing &
+          horizontal_padding & vertical_padding & x_offset & y_offset &
+          waku_dir_set & centering & minimum_size & character_size;
+    }
   };
 
   // Textbox frame, geometry, background attributes, and wait-cursor settings.
@@ -143,6 +169,16 @@ class MwndConfig {
     Point keycursor_pos;
 
     bool operator==(const Textbox&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & screen_size & window_attr_mod & waku_set & colour & is_filter &
+          origin & x_distance_from_origin & y_distance_from_origin &
+          upper_box_padding & lower_box_padding & left_box_padding &
+          right_box_padding & keycursor_type & keycursor_pos;
+    }
   };
 
   // Message window settings, adapted from RealLive WINDOW or Siglus MWND.
@@ -249,6 +285,13 @@ class MwndConfig {
     std::optional<int> entrypoint;
 
     bool operator==(const CallTarget&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & scene & command & entrypoint;
+    }
   };
 
   // Message-window waku button
@@ -290,6 +333,15 @@ class MwndConfig {
     int reallive_pattern = 0;
 
     bool operator==(const Button&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & name & file & slot_id & cut_no & position_base & position &
+          explicit_size & action_no & se_no & action & action_option & mode &
+          required_mode & call & frame_action & reallive_pattern;
+    }
   };
 
   // Button sound-effect template (BUTTON.SE); negative SE numbers mean silence.

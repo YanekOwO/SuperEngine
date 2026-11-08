@@ -23,10 +23,12 @@
 // -----------------------------------------------------------------------
 
 #include "core/button_action_table.hpp"
-
 #include "core/gameexe.hpp"
+#include "serialization_test_helpers.hpp"
 
 #include <gtest/gtest.h>
+
+namespace {
 
 using State = ButtonActionTable::State;
 static State NeutralState() { return State{}; }
@@ -87,3 +89,23 @@ TEST(ButtonActionTableTest, ParsesSparseRealliveEntriesAndFillsDefaults) {
   EXPECT_EQ(entry.push, (State{5, Point(7, 8), 255, 0, 0}));
   EXPECT_EQ(entry.disable, NeutralState());
 }
+
+// ------------------------------------------------------------------------------
+
+class ButtonActionArchiveTest : public ::testing::Test {};
+
+TEST_F(ButtonActionArchiveTest, RetainsAllButtonStates) {
+  // Distinct corrections for every button state survive an archive round trip.
+  serialization_test::ForEachFormat([&](auto format) {
+    ButtonActionTable::Entry source, target;
+    source.normal = {1, Point(2, 3), 4, 5, 6};
+    source.hit = {7, Point(8, 9), 10, 11, 12};
+    source.push = {13, Point(14, 15), 16, 17, 18};
+    source.select = {19, Point(20, 21), 22, 23, 24};
+    source.disable = {25, Point(26, 27), 28, 29, 30};
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target, source);
+  });
+}
+
+}  // namespace

@@ -23,10 +23,12 @@
 // -----------------------------------------------------------------------
 
 #include "core/mwnd_config.hpp"
-
 #include "core/gameexe.hpp"
+#include "serialization_test_helpers.hpp"
 
 #include <gtest/gtest.h>
+
+namespace {
 
 class MwndOverflowConfigTest : public ::testing::Test {
  protected:
@@ -525,3 +527,94 @@ TEST(MwndConfigTest, SiglusWindowOrderAndCapacityAreExplicit) {
   EXPECT_EQ(config.window_capacity(), 4);
   EXPECT_FALSE(MwndConfig::ParseReallive(gameexe).layered_windows());
 }
+
+// ------------------------------------------------------------------------------
+
+class MwndConfigArchiveTest : public ::testing::Test {};
+
+TEST_F(MwndConfigArchiveTest, RetainsNameboxGeometry) {
+  // A configured Siglus namebox retains its nested layout and frame settings.
+  serialization_test::ForEachFormat([&](auto format) {
+    MwndConfig::Namebox source, target;
+    source.siglus_layout = MwndConfig::Namebox::SiglusLayout{
+        .auto_size = true,
+        .alignment = 2,
+        .window_size = Size(17, 23),
+        .message_position = Point(4, 5),
+        .message_offset = Point(6, 7),
+        .message_margin = Rect::GRP(1, 2, 3, 4),
+        .window_margin = Rect::GRP(5, 6, 7, 8)};
+    source.has_waku = true;
+    source.waku_set = 3;
+    source.x_spacing = 2;
+    source.horizontal_padding = 4;
+    source.vertical_padding = 5;
+    source.x_offset = -3;
+    source.y_offset = 8;
+    source.waku_dir_set = 1;
+    source.centering = 2;
+    source.minimum_size = 7;
+    source.character_size = 18;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target, source);
+  });
+}
+
+TEST_F(MwndConfigArchiveTest, RetainsTextboxGeometry) {
+  // Textbox positioning, filtering and key cursor geometry remain intact.
+  serialization_test::ForEachFormat([&](auto format) {
+    MwndConfig::Textbox source{.screen_size = Size(640, 480),
+                               .window_attr_mod = 2,
+                               .waku_set = 3,
+                               .colour = RGBAColour(1, 2, 3, 4),
+                               .is_filter = true,
+                               .origin = 3,
+                               .x_distance_from_origin = 9,
+                               .y_distance_from_origin = 10,
+                               .upper_box_padding = 11,
+                               .lower_box_padding = 12,
+                               .left_box_padding = 13,
+                               .right_box_padding = 14,
+                               .keycursor_type = 2,
+                               .keycursor_pos = Point(15, 16)},
+        target;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target, source);
+  });
+}
+
+TEST_F(MwndConfigArchiveTest, RetainsButtonCallTargets) {
+  // A button retains optional call destinations and its layout and mode
+  // settings.
+  serialization_test::ForEachFormat([&](auto format) {
+    MwndConfig::Button source, target;
+    source.name = "load";
+    source.file = "button";
+    source.slot_id = 7;
+    source.cut_no = 3;
+    source.position_base = 2;
+    source.position = Point(4, 5);
+    source.explicit_size = Size(6, 7);
+    source.action_no = 8;
+    source.se_no = 9;
+    source.action_option = 10;
+    source.mode = 11;
+    source.required_mode = 12;
+    source.call = MwndConfig::CallTarget{"scene", "command", 13};
+    source.frame_action = MwndConfig::CallTarget{"animation", {}, 14};
+    source.reallive_pattern = 15;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target, source);
+  });
+}
+
+TEST_F(MwndConfigArchiveTest, RetainsFaceSlotSettings) {
+  // Nondefault face coordinates and visibility policies survive serialization.
+  serialization_test::ForEachFormat([&](auto format) {
+    MwndConfig::FaceSlot source{7, -3, 1, 1, 9}, target;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target, source);
+  });
+}
+
+}  // namespace

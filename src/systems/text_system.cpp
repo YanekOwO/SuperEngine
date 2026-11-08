@@ -23,6 +23,8 @@
 // -----------------------------------------------------------------------
 
 #include <fontconfig/fontconfig.h>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 
@@ -32,6 +34,7 @@
 #include "core/gameexe.hpp"
 #include "core/image_resources.hpp"
 #include "core/rlevent_listener.hpp"
+#include "core/serialization_context.hpp"
 #include "core/stage.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/serialization.hpp"
@@ -589,6 +592,10 @@ void TextSystem::OnEvent(std::shared_ptr<Event> event) {
             else if (input.button == MouseButton::WHEELDOWN && pressed)
               ForwardPage();
             else if (input.button == MouseButton::LEFT) {
+              if (!pressed &&
+                  system_.gameexe()("MSGBK.MSG_CLICK_ACTION").ReadInt(1) == 2 &&
+                  RequestBacklogLoad())
+                return true;
               if (!HandleMouseClick(system_.rlEvent().GetCursorPos(),
                                     pressed) &&
                   !pressed)
@@ -734,6 +741,19 @@ void TextSystem::ReplayPageSet(const PageSet& set) {
 
 bool TextSystem::IsReadingBacklog() const { return is_reading_backlog_; }
 
+bool TextSystem::RequestBacklogLoad() {
+  if (!backlog_load_ || !IsReadingBacklog() ||
+      previous_page_it_ == previous_page_sets_.end())
+    return false;
+  for (const auto& [number, page] : *previous_page_it_) {
+    if (page.checkpoint_id) {
+      backlog_load_(page.checkpoint_id);
+      return true;
+    }
+  }
+  return false;
+}
+
 void TextSystem::StopReadingBacklog() {
   if (!IsReadingBacklog())
     return;
@@ -818,11 +838,6 @@ bool TextSystem::HandleMouseClick(const Point& pos, bool pressed) {
       return true;
     }
   return false;
-}
-
-void TextSystem::TakeSavepointSnapshot() {
-  savepoint_active_window_ = active_window();
-  savepoint_cursor_number_ = GetCursorNumber();
 }
 
 bool parseInteger(std::string::const_iterator& begin,
@@ -1153,31 +1168,86 @@ void TextSystem::SetKidokuRead(const int in) {
 void TextSystem::SetSkipMode(int in) { skip_mode_ = in; }
 
 template <class Archive>
-void TextSystem::load(Archive& ar, unsigned int version) {
-  int win, cursor_num;
-  ar & win & cursor_num;
-
-  set_active_window(win);
-  SetKeyCursor(cursor_num);
+void TextSystem::save(Archive& ar, const unsigned int) const {
+  const int cursor = GetCursorNumber();
+  const std::size_t history_index =
+      std::distance(previous_page_sets_.cbegin(),
+                    std::list<PageSet>::const_iterator(previous_page_it_));
+  const auto selected_window = selected_mwnd_.lock();
+  ar & active_window_ & cursor & is_reading_backlog_ & in_pause_state_ &
+      in_selection_mode_ & system_visible_ & skip_mode_ & auto_skip_mode_ &
+      auto_skip_suspended_ & kidoku_read_ & message_time_ & history_windows_ &
+      current_pageset_ & previous_page_sets_ & history_index &
+      window_visual_override_ & selected_window;
 }
 
 template <class Archive>
-void TextSystem::save(Archive& ar, unsigned int version) const {
-  ar & savepoint_active_window_ & savepoint_cursor_number_;
+void TextSystem::load(Archive& ar, const unsigned int) {
+  int active_window, cursor;
+  bool reading_backlog, pause, selection, visible, skip, auto_skip;
+  bool auto_skip_suspended, kidoku_read;
+  std::chrono::milliseconds message_time;
+  WindowList history_windows;
+  PageSet current_pages;
+  std::list<PageSet> previous_pages;
+  std::size_t history_index;
+  std::map<int, bool> visual_override;
+  std::shared_ptr<TextWindow> selected_window;
+  ar & active_window & cursor & reading_backlog & pause & selection & visible &
+      skip & auto_skip & auto_skip_suspended & kidoku_read & message_time &
+      history_windows & current_pages & previous_pages & history_index &
+      visual_override & selected_window;
+  if (history_index > previous_pages.size() || cursor < -1)
+    throw std::runtime_error("Invalid saved message state");
+  auto prepared_cursor =
+      cursor == -1 ? nullptr : std::make_shared<TextKeyCursor>(system_, cursor);
+
+  // Decode and reconstruct first. Runtime archives install these values only
+  // after all resources and script continuations have been prepared.
+  auto commit = [=, this, history_windows = std::move(history_windows),
+                 current_pages = std::move(current_pages),
+                 previous_pages = std::move(previous_pages),
+                 visual_override = std::move(visual_override)]() mutable {
+    active_window_ = active_window;
+    text_key_cursor_ = std::move(prepared_cursor);
+    is_reading_backlog_ = reading_backlog;
+    in_pause_state_ = pause;
+    in_selection_mode_ = selection;
+    system_visible_ = visible;
+    skip_mode_ = skip;
+    auto_skip_mode_ = auto_skip;
+    auto_skip_suspended_ = auto_skip_suspended;
+    kidoku_read_ = kidoku_read;
+    message_time_ = message_time;
+    history_windows_ = std::move(history_windows);
+    current_pageset_ = std::move(current_pages);
+    previous_page_sets_ = std::move(previous_pages);
+    previous_page_it_ = previous_page_sets_.begin();
+    std::advance(previous_page_it_, history_index);
+    window_visual_override_ = std::move(visual_override);
+    selected_mwnd_ = selected_window;
+    mwnd_capture_window_.reset();
+    history_close_key_.reset();
+  };
+  if (auto& defer = SerializationContext::Get(ar).defer_commit)
+    defer(std::move(commit));
+  else
+    commit();
 }
 
-// -----------------------------------------------------------------------
-
-// Explicit instantiations for text archives (since we hide the
-// implementation)
-
+// Explicit instantiations keep both archive formats on the same path.
+template void TextSystem::save<boost::archive::binary_oarchive>(
+    boost::archive::binary_oarchive&,
+    unsigned int) const;
+template void TextSystem::load<boost::archive::binary_iarchive>(
+    boost::archive::binary_iarchive&,
+    unsigned int);
 template void TextSystem::save<boost::archive::text_oarchive>(
-    boost::archive::text_oarchive& ar,
-    unsigned int version) const;
-
+    boost::archive::text_oarchive&,
+    unsigned int) const;
 template void TextSystem::load<boost::archive::text_iarchive>(
-    boost::archive::text_iarchive& ar,
-    unsigned int version);
+    boost::archive::text_iarchive&,
+    unsigned int);
 
 bool TextSystem::CurrentlySkipping() const {
   return !local_config_.disable_skip && skip_mode() &&
@@ -1374,4 +1444,33 @@ bool TextSystem::IsInterfaceHidden() const {
 void TextSystem::ToggleInterfaceHidden() {
   if (graphics_hooks_.toggle_interface)
     graphics_hooks_.toggle_interface();
+}
+
+void TextSystem::ConstructSavedWindow(TextWindow* target,
+                                      System& system,
+                                      int window,
+                                      bool history) {
+  auto& text = system.text();
+  auto params = text.mwnd_config_.GetWindow(window);
+  if (params.textbox.window_attr_mod == 0) {
+    params.textbox.colour = text.global_config_.filter_color;
+    params.textbox.is_filter = text.global_config_.reallive.window_filter != 0;
+  }
+  ::new (target)
+      TextWindow(system, window, text.text_impl_.get(), params, history);
+}
+
+void TextSystem::InitializeSavedWindow(TextWindow& window) {
+  TextFactory factory(mwnd_config_);
+  const auto& textbox = window.GetTextboxConfig();
+  window.SetTextboxWaku(
+      textbox.waku_set,
+      factory.CreateWaku(system_, window, textbox.waku_set, 0), false);
+  const auto& namebox = window.GetNameboxConfig();
+  if (window.Layout().GetNameMode() == TextLayout::NameMode::SeparateWindow &&
+      namebox.has_waku)
+    window.SetNameboxWaku(
+        namebox.waku_set,
+        factory.CreateWaku(system_, window, namebox.waku_set, 0), false);
+  window.SetKoeReplayInfo(BuildKoeReplayInfo(system_, system_.gameexe()));
 }

@@ -101,7 +101,7 @@ void SetObjectDataToGan(RLMachine& machine,
 
   // create graphics object
   auto obj_data = std::make_unique<GanGraphicsObjectData>(
-      image, std::move(dec.animation_sets));
+      imgFilename, image, std::move(dec.animation_sets));
   InitObjectWith(obj, std::move(obj_data));
 }
 
@@ -127,7 +127,7 @@ void objOfFileLoader(RLMachine& machine,
   string file_str = full_path.string();
   if (file_str.ends_with("g00") || file_str.ends_with("pdt")) {
     auto surface = machine.GetSurfaceNamed(filename);
-    auto obj_data = std::make_unique<GraphicsObjectOfFile>(surface);
+    auto obj_data = std::make_unique<GraphicsObjectOfFile>(filename, surface);
     InitObjectWith(obj, std::move(obj_data));
   } else if (file_str.ends_with("anm")) {
     std::vector<char> file_content = LoadFile(full_path);

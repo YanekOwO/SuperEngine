@@ -101,3 +101,5 @@ void Stopwatch::Update() {
   }
   last_tick_ = now;
 }
+
+void Stopwatch::RebaseClock() { last_tick_ = clock_->GetTime(); }

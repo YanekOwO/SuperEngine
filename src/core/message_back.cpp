@@ -94,3 +94,25 @@ void MessageBack::ReadyMsg() {
   entries_.push_back(MsgbkEntry{});
   current_msg_pos_ = entries_.size() - 1;
 }
+
+MessageBack::CheckpointState MessageBack::CaptureCheckpoint() const {
+  return CheckpointState{.entries = GetEntries(),
+                         .current = current_msg_pos_,
+                         .new_message = new_msg_};
+}
+
+void MessageBack::RestoreCheckpoint(CheckpointState state) {
+  if (state.entries.size() > kMaxHistory ||
+      (!state.entries.empty() && state.current >= state.entries.size()) ||
+      (state.entries.empty() && state.current != 0)) {
+    throw std::runtime_error("Invalid saved backlog position");
+  }
+
+  // circular_buffer::assign would shrink capacity to the snapshot's size.
+  // Retain the configured history capacity for messages appended after load.
+  entries_.clear();
+  for (auto& entry : state.entries)
+    entries_.push_back(std::move(entry));
+  current_msg_pos_ = state.current;
+  new_msg_ = state.new_message;
+}

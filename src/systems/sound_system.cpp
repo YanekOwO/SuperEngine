@@ -29,12 +29,15 @@
 
 #include "core/avdec/audio_decoder.hpp"
 #include "core/avspec.hpp"
+#include "core/serialization_context.hpp"
 #include "systems/event_system.hpp"
 #include "systems/system.hpp"
 #include "systems/system_error.hpp"
 
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <iostream>
@@ -324,81 +327,92 @@ bool SoundSystem::BgmPlaying() const {
   return false;
 }
 
-void SoundSystem::BgmPlay(const std::string& bgm_name, bool loop) {
-  if (!boost::iequals(GetBgmName(), bgm_name)) {
-    player_t player = LoadMusic(bgm_name);
-    player->SetLoopTimes(loop ? -1 : 0);
-    sound_impl_->PlayBgm(player);
+SoundSystem::PlaybackStatus SoundSystem::GetBgmStatus() const {
+  if (auto player = GetBgm()) {
+    if (player->GetStatus() == AudioPlayer::STATUS::PAUSED)
+      return PlaybackStatus::Paused;
+    if (BgmPlaying())
+      return PlaybackStatus::Playing;
   }
+  return PlaybackStatus::Stopped;
 }
 
-void SoundSystem::BgmPlay(const std::string& bgm_name,
-                          bool loop,
-                          int fade_in_ms) {
-  if (!boost::iequals(GetBgmName(), bgm_name)) {
-    player_t player = LoadMusic(bgm_name);
-    player->FadeIn(fade_in_ms);
-    player->SetLoopTimes(loop ? -1 : 0);
-    sound_impl_->PlayBgm(player);
-  }
+bool SoundSystem::BgmFadingOut() const {
+  return bgm_state_.fading_out && BgmPlaying();
 }
 
-void SoundSystem::BgmPlay(const std::string& bgm_name,
+void SoundSystem::BgmPlay(const std::string& name, bool loop) {
+  BgmPlay(name, loop, 0);
+}
+
+void SoundSystem::BgmPlay(const std::string& name, bool loop, int fade_in_ms) {
+  if (boost::iequals(bgm_state_.name, name) && BgmPlaying() &&
+      !bgm_state_.fading_out && bgm_state_.loop == loop)
+    return;
+  auto player = LoadMusic(name);
+  player->SetLoopTimes(loop ? -1 : 0);
+  player->FadeIn(fade_in_ms);
+  sound_impl_->PlayBgm(std::move(player));
+  bgm_state_ = {.name = name, .loop = loop, .status = PlaybackStatus::Playing};
+}
+
+void SoundSystem::BgmPlay(const std::string& name,
                           bool loop,
                           int fade_in_ms,
                           int fade_out_ms) {
-  if (!boost::iequals(GetBgmName(), bgm_name)) {
-    player_t player = LoadMusic(bgm_name);
-    player->FadeIn(fade_in_ms);
-    player->SetLoopTimes(loop ? -1 : 0);
-    // TODO: Fade out currently playing bgm
-    sound_impl_->PlayBgm(player);
-  }
+  // Crossfading the previous track is not implemented by the backend.
+  BgmPlay(name, loop, fade_in_ms);
 }
 
-void SoundSystem::BgmPrepare(const std::string& bgm_name, bool loop) {
-  player_t player = LoadMusic(bgm_name);
+void SoundSystem::BgmPrepare(const std::string& name, bool loop) {
+  auto player = LoadMusic(name);
   player->SetLoopTimes(loop ? -1 : 0);
   player->Pause();
-  sound_impl_->PlayBgm(player);
+  sound_impl_->PlayBgm(std::move(player));
+  bgm_state_ = {.name = name,
+                .loop = loop,
+                .prepared = true,
+                .status = PlaybackStatus::Paused};
 }
 
 void SoundSystem::BgmStop() {
-  player_t player = sound_impl_->GetBgm();
-  if (player)
+  if (auto player = GetBgm())
     player->Terminate();
+  bgm_state_ = {};
 }
 
 void SoundSystem::BgmPause() {
-  player_t player = sound_impl_->GetBgm();
-  if (player)
+  if (auto player = GetBgm(); player && BgmPlaying()) {
     player->Pause();
+    bgm_state_.status = PlaybackStatus::Paused;
+    bgm_state_.fading_out = false;
+  }
 }
 
 void SoundSystem::BgmUnPause() {
-  player_t player = sound_impl_->GetBgm();
-  if (player)
+  if (auto player = GetBgm();
+      player && player->GetStatus() == AudioPlayer::STATUS::PAUSED) {
     player->Unpause();
+    bgm_state_.prepared = false;
+    bgm_state_.status = PlaybackStatus::Playing;
+    bgm_state_.fading_out = false;
+  }
 }
 
 void SoundSystem::BgmFadeOut(int fade_out_ms) {
-  player_t player = sound_impl_->GetBgm();
-  if (player)
+  if (fade_out_ms <= 0) {
+    BgmStop();
+    return;
+  }
+  if (auto player = GetBgm(); player && BgmPlaying()) {
     player->FadeOut(fade_out_ms);
+    bgm_state_.fading_out = true;
+  }
 }
 
-std::string SoundSystem::GetBgmName() const {
-  auto player = sound_impl_->GetBgm();
-  if (player)
-    return player->GetName();
-  return "";
-}
+std::string SoundSystem::GetBgmName() const { return bgm_state_.name; }
 
-bool SoundSystem::BgmLooping() const {
-  // TODO: maintain the looping status
-  // this function is used for serialization
-  return true;
-}
+bool SoundSystem::BgmLooping() const { return bgm_state_.loop; }
 
 void SoundSystem::SetChannelVolume(const int channel, const int level) {
   pcm_adjustment_tasks_.erase(channel);
@@ -446,43 +460,91 @@ void SoundSystem::WavPlay(const std::string& wav_file,
   WavPlayImpl(wav_file, channel, loop);
 }
 
-void SoundSystem::WavPlay(const std::string& filename,
+void SoundSystem::WavPlay(const std::string& name,
                           bool loop,
                           const int channel,
                           const int fadein_ms) {
+  auto& state = channel_state_.at(channel);
   if (!IsSoundEnabled(SoundCategory::Pcm))
     return;
-
-  if (auto wav_file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
-      wav_file.has_value()) {
-    player_t player = CreateAudioPlayer(wav_file.value());
-    player->SetLoopTimes(loop ? -1 : 0);
-    player->FadeIn(fadein_ms);
-    channel_categories_.at(channel) = SoundCategory::Pcm;
-    SetChannelVolumeImpl(channel);
-    sound_impl_->PlayChannel(channel, player);
-  } else
-    throw wav_file.error();
+  auto player = LoadWave(name, loop);
+  player->FadeIn(fadein_ms);
+  channel_categories_.at(channel) = SoundCategory::Pcm;
+  se_fading_.at(channel) = false;
+  SetChannelVolumeImpl(channel);
+  sound_impl_->PlayChannel(channel, std::move(player));
+  state = {.name = name, .loop = loop, .status = PlaybackStatus::Playing};
 }
 
-bool SoundSystem::WavPlaying(const int channel) {
-  return sound_impl_->IsPlaying(channel);
+void SoundSystem::WavPrepare(const std::string& name, bool loop, int channel) {
+  auto& state = channel_state_.at(channel);
+  sound_impl_->HaltChannel(channel);
+  state = {.name = name, .loop = loop, .prepared = true};
+  channel_categories_.at(channel) = SoundCategory::Pcm;
+  se_fading_.at(channel) = false;
+}
+
+void SoundSystem::WavPause(int channel) {
+  auto& state = channel_state_.at(channel);
+  if (state.name.empty() ||
+      (!state.prepared && GetWavStatus(channel) == PlaybackStatus::Stopped))
+    return;
+  sound_impl_->HaltChannel(channel);
+  state.status = PlaybackStatus::Paused;
+  state.fading_out = false;
+}
+
+void SoundSystem::WavResume(int channel, int fade_in_ms) {
+  const auto state = channel_state_.at(channel);
+  if (!state.name.empty())
+    WavPlay(state.name, state.loop, channel, fade_in_ms);
+}
+
+bool SoundSystem::WavPlaying(const int channel) const {
+  return GetWavStatus(channel) == PlaybackStatus::Playing;
+}
+
+SoundSystem::PlaybackStatus SoundSystem::GetWavStatus(int channel) const {
+  const auto& state = channel_state_.at(channel);
+  if (state.status == PlaybackStatus::Paused)
+    return PlaybackStatus::Paused;
+  return sound_impl_->IsPlaying(channel) ? PlaybackStatus::Playing
+                                         : PlaybackStatus::Stopped;
+}
+
+bool SoundSystem::WavFadingOut(int channel) const {
+  return channel_state_.at(channel).fading_out && WavPlaying(channel);
 }
 
 void SoundSystem::WavStop(const int channel) {
+  auto& state = channel_state_.at(channel);
   sound_impl_->HaltChannel(channel);
+  state = {};
+  se_fading_.at(channel) = false;
 }
 
-void SoundSystem::WavStopAll() { sound_impl_->HaltAllChannels(); }
+void SoundSystem::WavStopAll() {
+  sound_impl_->HaltAllChannels();
+  channel_state_.fill({});
+  se_fading_.fill(false);
+}
 
 void SoundSystem::WavFadeOut(const int channel, const int fadetime) {
+  auto& state = channel_state_.at(channel);
+  if (fadetime <= 0 || !WavPlaying(channel)) {
+    WavStop(channel);
+    return;
+  }
   sound_impl_->FadeOutChannel(channel, fadetime);
+  state.fading_out = true;
+  state.prepared = false;
 }
 
 int SoundSystem::FindIdleChannel() const {
   // Automatic WAV and SE playback must not borrow the global PCM pool.
   for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
-    if (!sound_impl_->IsPlaying(channel))
+    if (!sound_impl_->IsPlaying(channel) && !channel_state_[channel].prepared &&
+        channel_state_[channel].status != PlaybackStatus::Paused)
       return channel;
   throw std::runtime_error("All channels are busy.");
 }
@@ -549,7 +611,7 @@ void SoundSystem::PlaySe(const int se_num) {
     channel = FindIdleChannel();
 
   // Make sure there isn't anything playing on the current channel
-  sound_impl_->HaltChannel(channel);
+  WavStop(channel);
   if (file_name == "") {
     // Just stop a channel in case of an empty file name.
     return;
@@ -582,6 +644,7 @@ void SoundSystem::PlaySeByKoeNo(int id) {
 }
 
 void SoundSystem::StartSe(player_t player, int channel) {
+  channel_state_.at(channel) = {};
   UpdateSeVolume(system_.event().GetTicks());
   player->SetLoopTimes(0);
   channel_categories_.at(channel) = SoundCategory::Se;
@@ -711,6 +774,8 @@ void SoundSystem::KoePlayImpl(int id, int character_volume) {
   AudioDecoder decoder(voice_sample.content, voice_sample.format_name);
   auto player = std::make_shared<AudioPlayer>(std::move(decoder));
 
+  channel_state_[KOE_CHANNEL] = {};
+  se_fading_[KOE_CHANNEL] = false;
   channel_categories_[KOE_CHANNEL] = SoundCategory::Voice;
   SetChannelVolumeImpl(KOE_CHANNEL);
   player->SetVolume(static_cast<float>(std::clamp(character_volume, 0, 255)) /
@@ -722,7 +787,7 @@ bool SoundSystem::KoePlaying() const {
   return sound_impl_->IsPlaying(KOE_CHANNEL);
 }
 
-void SoundSystem::KoeStop() { sound_impl_->HaltChannel(KOE_CHANNEL); }
+void SoundSystem::KoeStop() { WavStop(KOE_CHANNEL); }
 
 void SoundSystem::PlayMovieAudio(const std::filesystem::path& path,
                                  int volume) {
@@ -791,60 +856,140 @@ player_t SoundSystem::LoadMusic(const std::string& bgm_name) {
   return player;
 }
 
-void SoundSystem::WavPlayImpl(const std::string& filename,
-                              const int channel,
-                              bool loop) {
-  if (!IsSoundEnabled(SoundCategory::Pcm))
-    return;
+player_t SoundSystem::LoadWave(const std::string& name, bool loop) {
+  const auto path = voice_assets_->FindFile(name, SOUNDFILETYPES);
+  if (!path)
+    throw path.error();
+  auto player = CreateAudioPlayer(*path);
+  player->SetLoopTimes(loop ? -1 : 0);
+  return player;
+}
 
-  if (auto wav_file = voice_assets_->FindFile(filename, SOUNDFILETYPES);
-      wav_file.has_value()) {
-    player_t player = CreateAudioPlayer(wav_file.value());
-    player->SetLoopTimes(loop ? -1 : 0);
-    channel_categories_.at(channel) = SoundCategory::Pcm;
-    SetChannelVolumeImpl(channel);
-    sound_impl_->PlayChannel(channel, player);
-  } else
-    throw wav_file.error();
+void SoundSystem::WavPlayImpl(const std::string& name, int channel, bool loop) {
+  WavPlay(name, loop, channel, 0);
 }
 
 template <class Archive>
-void SoundSystem::save(Archive& ar, unsigned int version) const {
-  std::string track_name;
-  bool looping = false;
+void SoundSystem::save(Archive& ar, unsigned int) const {
+  auto bgm = bgm_state_;
+  bgm.status = GetBgmStatus();
+  if (bgm.fading_out || bgm.name.empty() ||
+      (bgm.status != PlaybackStatus::Paused &&
+       (bgm.status != PlaybackStatus::Playing || !bgm.loop)))
+    bgm = {};
 
-  if (BgmPlaying()) {
-    track_name = GetBgmName();
-    looping = BgmLooping();
+  auto pcm = channel_state_;
+  auto volumes = channel_volume_;
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel) {
+    auto& state = pcm[channel];
+    state.status = GetWavStatus(channel);
+    if (state.fading_out || state.name.empty() ||
+        (!state.prepared &&
+         (!state.loop || state.status == PlaybackStatus::Stopped)))
+      state = {};
+    volumes[channel] = GetChannelVolume(channel);
+  }
+  const int bgm_volume = GetBgmVolumeScript();
+  const int se_volume = std::clamp(GetSeVolumeScript(), 0, 255);
+  ar & bgm & pcm & volumes & bgm_volume & se_volume & movie_script_volume_;
+}
+
+template <class Archive>
+void SoundSystem::load(Archive& ar, unsigned int) {
+  PlaybackState bgm;
+  std::array<PlaybackState, NUM_TOTAL_CHANNELS> pcm;
+  std::array<int, NUM_TOTAL_CHANNELS> volumes;
+  int bgm_volume, se_volume, movie_volume;
+  ar & bgm & pcm & volumes & bgm_volume & se_volume & movie_volume;
+
+  const auto valid_volume = [](int value) {
+    return value >= 0 && value <= 255;
+  };
+  if (!std::all_of(volumes.begin(), volumes.end(), valid_volume) ||
+      !valid_volume(bgm_volume) || !valid_volume(se_volume) ||
+      !valid_volume(movie_volume))
+    throw std::runtime_error("Invalid saved script volume");
+  const auto validate = [](const PlaybackState& state, bool music) {
+    if (state.status != PlaybackStatus::Stopped &&
+        state.status != PlaybackStatus::Playing &&
+        state.status != PlaybackStatus::Paused)
+      throw std::runtime_error("Invalid saved playback state");
+    if (state.name.empty()) {
+      if (state.loop || state.prepared ||
+          state.status != PlaybackStatus::Stopped)
+        throw std::runtime_error("Saved playback requires an asset name");
+    } else if (music) {
+      if ((state.prepared && state.status != PlaybackStatus::Paused) ||
+          (state.status != PlaybackStatus::Paused &&
+           (state.status != PlaybackStatus::Playing || !state.loop)))
+        throw std::runtime_error("Invalid saved music state");
+    } else if ((state.prepared && state.status == PlaybackStatus::Playing) ||
+               (!state.prepared &&
+                (!state.loop || state.status == PlaybackStatus::Stopped))) {
+      throw std::runtime_error("Invalid saved PCM state");
+    }
+  };
+  validate(bgm, true);
+  for (const auto& state : pcm)
+    validate(state, false);
+
+  player_t music;
+  if (!bgm.name.empty()) {
+    music = LoadMusic(bgm.name);
+    music->SetLoopTimes(bgm.loop ? -1 : 0);
+    if (bgm.status == PlaybackStatus::Paused)
+      music->Pause();
+  }
+  std::array<player_t, NUM_TOTAL_CHANNELS> players;
+  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel) {
+    const auto& state = pcm[channel];
+    if (!state.name.empty())
+      players[channel] = LoadWave(state.name, state.loop);
   }
 
-  const int bgm_volume = GetBgmVolumeScript();
-  auto channel_volumes = channel_volume_;
-  for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel)
-    channel_volumes[channel] = GetChannelVolume(channel);
-  ar & track_name & looping & bgm_volume & channel_volumes &
-      movie_script_volume_;
+  auto commit = [this, bgm = std::move(bgm), pcm = std::move(pcm), volumes,
+                 bgm_volume, se_volume, movie_volume, music = std::move(music),
+                 players = std::move(players)]() mutable {
+    Reset();
+    pcm_adjustment_tasks_.clear();
+    bgm_adjustment_task_.reset();
+    channel_volume_ = volumes;
+    channel_categories_.fill(SoundCategory::Pcm);
+    channel_categories_[KOE_CHANNEL] = SoundCategory::Voice;
+    bgm_script_volume_ = bgm_volume;
+    se_script_volume_ = se_target_volume_ = se_volume;
+    movie_script_volume_ = movie_volume;
+    next_pcm_ = 0;
+    bgm_state_ = std::move(bgm);
+    channel_state_ = std::move(pcm);
+    if (music)
+      sound_impl_->PlayBgm(std::move(music));
+    for (int channel = 0; channel < NUM_TOTAL_CHANNELS; ++channel) {
+      const auto& state = channel_state_[channel];
+      if (players[channel] && !state.prepared &&
+          state.status == PlaybackStatus::Playing) {
+        channel_categories_[channel] = SoundCategory::Pcm;
+        sound_impl_->PlayChannel(channel, std::move(players[channel]));
+      }
+    }
+    ApplyConfiguration();
+  };
+  auto& context = SerializationContext::Get(ar);
+  if (context.defer_commit)
+    context.defer_commit(std::move(commit));
+  else
+    commit();
 }
 
-template <class Archive>
-void SoundSystem::load(Archive& ar, unsigned int version) {
-  std::string track_name;
-  bool looping;
-  ar & track_name & looping & bgm_script_volume_ & channel_volume_ &
-      movie_script_volume_;
-
-  pcm_adjustment_tasks_.clear();
-  bgm_adjustment_task_.reset();
-  ApplyConfiguration();
-  if (track_name != "")
-    BgmPlay(track_name, looping);
-}
-
-// Explicit instantiations for text archives (since we hide the implementation)
 template void SoundSystem::save<boost::archive::text_oarchive>(
-    boost::archive::text_oarchive& ar,
-    unsigned int version) const;
-
+    boost::archive::text_oarchive&,
+    unsigned int) const;
 template void SoundSystem::load<boost::archive::text_iarchive>(
-    boost::archive::text_iarchive& ar,
-    unsigned int version);
+    boost::archive::text_iarchive&,
+    unsigned int);
+template void SoundSystem::save<boost::archive::binary_oarchive>(
+    boost::archive::binary_oarchive&,
+    unsigned int) const;
+template void SoundSystem::load<boost::archive::binary_iarchive>(
+    boost::archive::binary_iarchive&,
+    unsigned int);

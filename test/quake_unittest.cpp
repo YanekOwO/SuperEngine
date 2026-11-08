@@ -4,10 +4,10 @@
 //
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/quake.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -215,6 +215,87 @@ TEST(QuakeListTest, HandleKeepsQuakeAliveAfterListDestruction) {
   EXPECT_FALSE(handle->IsActive());
   handle.reset();
   EXPECT_TRUE(lifetime.expired());
+}
+
+// ------------------------------------------------------------------------------
+
+class QuakeArchiveTest : public ::testing::Test {};
+
+TEST_F(QuakeArchiveTest, ContinuesPhaseAndEndingEnvelope) {
+  // Every periodic quake resumes its saved phase and fade-out envelope.
+  serialization_test::ForEachFormat([&](auto format) {
+    for (int type : {0, 1, 2}) {
+      SCOPED_TRACE(type);
+      QuakeState source, target;
+      ASSERT_TRUE(source.Start({.type = type,
+                                .direction = 30,
+                                .power = 12,
+                                .period_ms = 100,
+                                .count = 4,
+                                .center_x = 20,
+                                .center_y = 30,
+                                .begin_order = 2,
+                                .end_order = 9}));
+      source.Advance(35);
+      source.End(80);
+      source.Advance(15);
+      serialization_test::RoundTrip(source, target, format);
+      for (int delta : {0, 20, 70}) {
+        source.Advance(delta);
+        target.Advance(delta);
+        auto expected = source.CurrentTransform(),
+             actual = target.CurrentTransform();
+        EXPECT_DOUBLE_EQ(actual.scale, expected.scale);
+        EXPECT_DOUBLE_EQ(actual.translate_x, expected.translate_x);
+        EXPECT_DOUBLE_EQ(actual.translate_y, expected.translate_y);
+        EXPECT_EQ(target.IsActive(), source.IsActive());
+      }
+    }
+  });
+}
+
+TEST_F(QuakeArchiveTest, ContinuesQueuedOffsets) {
+  // An offset quake retains its current frame remainder and later queued
+  // offsets.
+  serialization_test::ForEachFormat([&](auto format) {
+    QuakeState source, target;
+    std::vector<QuakeState::OffsetFrame> frames{{3, 4, 50}, {-2, 8, 70}};
+    source.QueueOffsets(frames);
+    source.Advance(30);
+    serialization_test::RoundTrip(source, target, format);
+    target.Advance(25);
+    EXPECT_DOUBLE_EQ(target.CurrentTransform().translate_x, -2);
+    EXPECT_DOUBLE_EQ(target.CurrentTransform().translate_y, 8);
+    target.Advance(70);
+    EXPECT_FALSE(target.IsActive());
+  });
+}
+
+// ------------------------------------------------------------------------------
+
+class QuakeListArchiveTest : public ::testing::Test {};
+
+TEST_F(QuakeListArchiveTest, ExternalHandleSharesRestoredQuake) {
+  // A quake list and external handle refer to the same restored active quake.
+  serialization_test::ForEachFormat([&](auto format) {
+    QuakeList list(2);
+    auto quake = list.GetHandle(1);
+    quake->Start({.type = 0,
+                  .power = 10,
+                  .period_ms = 100,
+                  .begin_order = 2,
+                  .end_order = 5});
+    auto source = std::pair{list, quake};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target.first.size(), 2u);
+    EXPECT_EQ(target.first.GetHandle(1), target.second);
+    EXPECT_TRUE(target.first.IsActive());
+    EXPECT_TRUE(target.first.TransformForOrder(0).IsIdentity());
+    target.first.Advance(25);
+    EXPECT_EQ(target.first.GetHandle(1)->CurrentTransform().translate_x,
+              target.second->CurrentTransform().translate_x);
+  });
 }
 
 }  // namespace

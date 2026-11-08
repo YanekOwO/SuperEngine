@@ -24,12 +24,17 @@
 
 #pragma once
 
+#include "core/serialization_context.hpp"
+#include "utilities/serialization.hpp"
+
 #include "core/mutator.hpp"
 
+#include <boost/serialization/split_member.hpp>
 #include <functional>
+#include <stdexcept>
 #include <string>
 
-class ObjectParameter;
+struct ObjectParameter;
 
 using ObjectParameterMutator =
     Mutator<std::function<void(ObjectParameter&, int)>, ObjectParameter>;
@@ -37,11 +42,12 @@ using ObjectParameterMutator =
 class ObjectMutator {
   using DoneFn = std::function<void(ObjectParameter&)>;
   ObjectParameterMutator mutator_;
-  int repr_;
+  int repr_ = 0;
   std::string name_;
   DoneFn on_complete_;
 
  public:
+  ObjectMutator() = default;
   ObjectMutator(ObjectParameterMutator mut,
                 int repr = 0,
                 std::string name = "unknown");
@@ -66,4 +72,24 @@ class ObjectMutator {
 
   bool Update(ObjectParameter& pm);
   void SetToEnd(ObjectParameter& pm);
+
+ private:
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    if (on_complete_) {
+      throw std::runtime_error(
+          "Cannot save an unnamed object completion callback");
+    }
+    ar & repr_ & name_ & mutator_;
+  }
+  void load(auto& ar, unsigned int) {
+    ar & repr_ & name_ & mutator_;
+    SerializationContext& context = SerializationContext::Get(ar);
+    if (!context.object_setter) {
+      throw std::runtime_error("Saved object event requires setter bindings");
+    }
+    mutator_.SetSetter(context.object_setter(name_, repr_));
+    on_complete_ = {};
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };

@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -26,9 +23,13 @@
 
 #include "core/object_internal/drawer/colour_filter.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/object.hpp"
 #include "core/render_geometry.hpp"
-#include "systems/sdl/gl_frame_buffer.hpp"
 #include "systems/sdl/glrenderer.hpp"
 #include "systems/sdl/gltexture.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -98,3 +99,5 @@ Rect ColourFilterObjectData::SrcRect(const GraphicsObject&) const {
 Point ColourFilterObjectData::DstPosition(const GraphicsObject& go) const {
   return GraphicsObjectData::DstPosition(go) + screen_rect_.origin();
 }
+
+BOOST_CLASS_EXPORT_IMPLEMENT(ColourFilterObjectData)

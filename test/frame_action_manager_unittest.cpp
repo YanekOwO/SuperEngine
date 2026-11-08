@@ -22,17 +22,22 @@
 // -----------------------------------------------------------------------
 
 #include "core/frame_action_manager.hpp"
-
 #include "core/game_config.hpp"
+#include "core/object_internal/objdrawer.hpp"
+#include "core/selection.hpp"
 #include "core/stage.hpp"
+#include "serialization_test_helpers.hpp"
+#include "systems/sdl/sdl_surface.hpp"
+#include "systems/text_window.hpp"
 
 #include <gtest/gtest.h>
-
 #include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
 
 using namespace std::chrono_literals;
 
@@ -575,3 +580,110 @@ TEST_F(FrameActionManagerTest, EndRejectsNullAction) {
   EXPECT_THROW(manager.End({}), std::invalid_argument);
   EXPECT_TRUE(exec.calls.empty());
 }
+
+TEST_F(FrameActionManagerTest, DispatchVisitsChildCreatedByParentCallback) {
+  // The parent's callback creates a child; the same traversal visits it at zero
+  // time.
+  auto parent = Object();
+  manager.Start(parent, -1, false, ScriptCall{.target = target});
+  exec.on_exec = [&](const ActionReference& reference, ScriptCall) {
+    if (reference.owner == parent.owner) {
+      parent.owner->EnsureChildCapacity(1);
+      auto& child = parent.owner->TouchChild(0);
+      auto owner = parent.owner->GetChildren()[0];
+      manager.Start({child.GetFrameAction(), owner}, -1, false,
+                    ScriptCall{.target = target});
+    }
+  };
+  manager.AdvanceAndDispatch(3ms, 20ms);
+  ASSERT_EQ(exec.calls.size(), 2);
+  EXPECT_EQ(exec.calls[1].reference.owner, parent.owner->GetChildren()[0]);
+  EXPECT_EQ(exec.calls[1].time, 0);
+}
+
+// ------------------------------------------------------------------------------
+
+class FrameActionManagerArchiveTest : public ::testing::Test {};
+
+TEST_F(FrameActionManagerArchiveTest, RestoreDoesNotDispatchCallbacks) {
+  // Loading global, channel and object actions performs no script dispatch.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage stage(1);
+    LocalConfig config;
+    FrameActionManager manager(stage, config, 1);
+    ScriptCall call{
+        .target = CmdTarget{3, 7}, .integers = {42}, .strings = {"animation"}};
+    auto object = stage.objects.Get(kLayerFg, 0);
+    for (auto ref :
+         {ActionReference{manager.global_action(), {}},
+          ActionReference{TouchFrameAction(manager.global_channels()[0]), {}},
+          ActionReference{object->GetFrameAction(), object}})
+      manager.Start(ref, 1000, true, call);
+    auto source =
+        std::pair{stage.CaptureCheckpoint(), manager.CaptureCheckpoint()};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    int calls = 0;
+    manager.SetExec([&](const ActionReference&, ScriptCall) { ++calls; });
+    stage = std::move(target.first);
+    manager.RestoreCheckpoint(std::move(target.second));
+    EXPECT_EQ(calls, 0);
+  });
+}
+
+TEST_F(FrameActionManagerArchiveTest,
+       RestoredActionsContinueCommandsAndTiming) {
+  // Restored actions dispatch their saved arguments after advancing from the
+  // saved counter.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    Stage stage(1);
+    LocalConfig config;
+    FrameActionManager manager(stage, config, 1);
+    ScriptCall call{
+        .target = CmdTarget{3, 7}, .integers = {42}, .strings = {"animation"}};
+    auto object = stage.objects.Get(kLayerFg, 0);
+    for (auto ref :
+         {ActionReference{manager.global_action(), {}},
+          ActionReference{TouchFrameAction(manager.global_channels()[0]), {}},
+          ActionReference{object->GetFrameAction(), object}})
+      manager.Start(ref, 1000, true, call);
+    manager.Advance(20ms, 5ms);
+    auto source =
+        std::pair{stage.CaptureCheckpoint(), manager.CaptureCheckpoint()};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    manager.CancelAll();
+    stage = std::move(target.first);
+    manager.RestoreCheckpoint(std::move(target.second));
+    int calls = 0;
+    manager.SetExec([&](const ActionReference& reference, ScriptCall restored) {
+      EXPECT_EQ(restored, call);
+      EXPECT_TRUE(reference.action->IsActive());
+      EXPECT_FALSE(reference.action->end_action);
+      EXPECT_EQ(reference.action->end_time, 1000);
+      EXPECT_EQ(reference.action->GetCounter()->Get(), 30);
+      ++calls;
+    });
+    manager.AdvanceAndDispatch(10ms, 1ms);
+    EXPECT_EQ(calls, 3);
+  });
+}
+
+// ------------------------------------------------------------------------------
+
+class FrameActionArchiveTest : public ::testing::Test {};
+
+TEST_F(FrameActionArchiveTest, TransientEndFlagIsNotRestored) {
+  // A final-callback marker is transient while its script command persists.
+  serialization_test::ForEachFormat([&](auto format) {
+    FrameAction source, target;
+    source.end_action = true;
+    source.call = {.target = CmdTarget{3, 4}};
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_FALSE(target.end_action);
+    EXPECT_EQ(target.call, source.call);
+  });
+}
+
+}  // namespace

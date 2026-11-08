@@ -99,7 +99,7 @@ std::unique_ptr<TextWaku> TextFactory::CreateWaku(System& system,
         continue;
       auto object = waku->TouchButton(button.slot_id);
       object->SetDrawer(std::make_unique<GraphicsObjectOfFile>(
-          system.text().LoadImage(button.file)));
+          button.file, system.text().LoadImage(button.file)));
       object->SetFilePath(button.file);
       object->Param().SetVisible(true);
       object->Param().SetButtonOpts(button.action_no, button.se_no, 0, 0);

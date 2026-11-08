@@ -145,7 +145,7 @@ void FrameActionManager::End(ActionReference reference) {
     action.Reset();
 }
 
-void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
+void FrameActionManager::Advance(ms real_delta, ms game_delta) {
   const auto real_time = std::max(ms::zero(), real_delta);
   const auto game_time = std::max(ms::zero(), game_delta);
 
@@ -160,6 +160,9 @@ void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
                      !(reference.owner ? objects_stopped : globals_stopped))
                    action.counter->Advance(game_time, real_time);
                });
+}
+
+void FrameActionManager::Dispatch() {
   VisitActions(global_action_, global_channels_, stage_,
                [&](const ActionReference& reference, bool) {
                  auto& action = *reference.action;
@@ -194,4 +197,19 @@ void FrameActionManager::CancelAll() {
                [](const ActionReference& reference, bool) {
                  reference.action->Reset();
                });
+}
+
+void FrameActionManager::AdvanceAndDispatch(ms real_delta, ms game_delta) {
+  Advance(real_delta, game_delta);
+  Dispatch();
+}
+
+FrameActionManager::CheckpointState FrameActionManager::CaptureCheckpoint()
+    const {
+  return {global_action_, global_channels_};
+}
+
+void FrameActionManager::RestoreCheckpoint(CheckpointState state) {
+  global_action_ = std::move(state.global);
+  global_channels_ = std::move(state.channels);
 }

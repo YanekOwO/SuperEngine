@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/effect.hpp"
 #include "core/group.hpp"
 #include "core/object.hpp"
@@ -104,6 +106,13 @@ struct StageElement {
   }
 
   storage_type storage;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    for (auto& layer : storage)
+      SerializeBoundedSequence(ar, layer);
+  }
 };
 
 class TextWindow;
@@ -115,8 +124,13 @@ class Stage {
     // Inclusive bounds in lexicographic (order, layer) sorter order.
     std::pair<int, int> begin;
     std::pair<int, int> end;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) { ar & begin & end; }
   };
 
+ public:
   Stage(int object_size = 0,
         int effect_size = 0,
         int group_size = 0,
@@ -158,6 +172,9 @@ class Stage {
   std::deque<std::string> saved_graphics_stack;
 
  public:
+  // Copy live resources while omitting RealLive replay/savepoint caches.
+  Stage CaptureCheckpoint() const;
+
   void Reset();
 
   // A process where the front and back buffers swap, updating the display to
@@ -246,4 +263,18 @@ class Stage {
   std::optional<TransitionRenderRange> transition_render_range_;
   double foreground_render_alpha_ = 1.0;
   double next_render_alpha_ = 0.0;
+
+ private:
+  // boost.serialization support
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & objects & groups & effects & quakes & mwnd & selection & mwnd_order &
+        screen_effects & transition_render_range_;
+    if constexpr (std::decay_t<decltype(ar)>::is_loading::value) {
+      foreground_render_alpha_ = transition_render_range_ ? 0.0 : 1.0;
+      next_render_alpha_ = transition_render_range_ ? 1.0 : 0.0;
+    }
+    // TODO: Serialize btnsel and world when those elements are implemented.
+    // Their bindings remain unavailable; loading creates no placeholders.
+  }
 };

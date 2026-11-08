@@ -382,3 +382,51 @@ CaptureFlags CaptureManager::ImportFlags(const fs::path& path) {
     throw std::runtime_error("Truncated capture flag archive");
   return result;
 }
+
+std::optional<std::string> CaptureManager::EncodeSaveThumbnail() const {
+  if (!config_.save_thumbnail || !save_)
+    return std::nullopt;
+  if (config_.png_thumbnail) {
+    std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> rgba(
+        SDL_ConvertSurface(save_->RawSurface(), SDL_PIXELFORMAT_RGBA32),
+        SDL_DestroySurface);
+    if (!rgba)
+      throw std::runtime_error(SDL_GetError());
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    image.width = rgba->w;
+    image.height = rgba->h;
+    image.format = PNG_FORMAT_RGBA;
+    png_alloc_size_t size = 0;
+    if (!png_image_write_to_memory(&image, nullptr, &size, 0, rgba->pixels,
+                                   rgba->pitch, nullptr)) {
+      const std::string error = image.message;
+      png_image_free(&image);
+      throw std::runtime_error(error);
+    }
+    std::string bytes(size, '\0');
+    if (!png_image_write_to_memory(&image, bytes.data(), &size, 0, rgba->pixels,
+                                   rgba->pitch, nullptr)) {
+      const std::string error = image.message;
+      png_image_free(&image);
+      throw std::runtime_error(error);
+    }
+    png_image_free(&image);
+    bytes.resize(size);
+    return bytes;
+  }
+  std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> rgb(
+      SDL_ConvertSurface(save_->RawSurface(), SDL_PIXELFORMAT_BGR24),
+      SDL_DestroySurface);
+  std::unique_ptr<SDL_IOStream, decltype(&SDL_CloseIO)> stream(
+      SDL_IOFromDynamicMem(), SDL_CloseIO);
+  if (!rgb || !stream || !SDL_SaveBMP_IO(rgb.get(), stream.get(), false))
+    throw std::runtime_error(SDL_GetError());
+  const auto size = SDL_GetIOSize(stream.get());
+  const auto* data = static_cast<const char*>(SDL_GetPointerProperty(
+      SDL_GetIOProperties(stream.get()),
+      SDL_PROP_IOSTREAM_DYNAMIC_MEMORY_POINTER, nullptr));
+  if (size < 0 || !data)
+    throw std::runtime_error(SDL_GetError());
+  return std::string(data, static_cast<std::size_t>(size));
+}

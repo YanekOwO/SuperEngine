@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/frame_counter.hpp"
 
 #include <limits>
@@ -76,7 +78,19 @@ struct Effect {
   struct Event {
     FrameCounter counter;
     int value;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) { ar & counter & value; }
   };
+
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & x & y & z & mono & reverse & bright & dark & color_r & color_g &
+        color_b & color_rate & color_add_r & color_add_g & color_add_b &
+        begin_order & end_order & begin_layer & end_layer & wipe_copy &
+        wipe_erase & events_;
+  }
   std::map<int, Event> events_;
 
   int GetRenderValue(int property) const;

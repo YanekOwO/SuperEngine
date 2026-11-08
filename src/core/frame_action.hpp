@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/counter.hpp"
 #include "core/script_call.hpp"
 
@@ -48,6 +50,12 @@ struct FrameAction {
   std::shared_ptr<Counter> counter;
   int end_time = 0;
   bool end_action = false;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & call & active & counter & end_time;
+  }
 };
 
 using FrameActionList = std::vector<std::shared_ptr<FrameAction>>;

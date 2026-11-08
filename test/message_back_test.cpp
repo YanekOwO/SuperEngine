@@ -22,12 +22,14 @@
 // -----------------------------------------------------------------------
 
 #include "core/message_back.hpp"
+#include "serialization_test_helpers.hpp"
 
 #include <gtest/gtest.h>
-
 #include <limits>
 #include <string>
 #include <vector>
+
+namespace {
 
 using Entry = MessageBack::MsgbkEntry;
 
@@ -342,3 +344,63 @@ TEST(MessageBackTest, GetEntriesReturnsIndependentCopies) {
   EXPECT_EQ(saved_copy[0].msg, "First");
   EXPECT_TRUE(modified_copy.empty());
 }
+
+// ------------------------------------------------------------------------------
+
+class MessageBackArchiveTest : public ::testing::Test {};
+
+TEST_F(MessageBackArchiveTest, ContinuesCurrentEntry) {
+  // A restored backlog appends to its saved current entry with names and paired
+  // voice metadata.
+  serialization_test::ForEachFormat([&](auto format) {
+    MessageBack source, target;
+    source.AddNamae("speaker");
+    source.AddKoe(17, 3);
+    source.AddMessage("first");
+    serialization_test::RoundTrip(source, target, format);
+    target.AddMessage(" second");
+    auto entries = target.GetEntries();
+    ASSERT_EQ(entries.size(), 1u);
+    EXPECT_EQ(entries[0].msg, "first second");
+    EXPECT_EQ(entries[0].koe_no_list, (std::vector<int>{17}));
+    EXPECT_EQ(entries[0].chara_no_list, (std::vector<int>{3}));
+    EXPECT_EQ(entries[0].original_name, source.GetEntries()[0].original_name);
+  });
+}
+
+TEST_F(MessageBackArchiveTest, RetainsHistoryCapacityAfterLoading) {
+  // Loading a short backlog keeps capacity for later messages and evicts only
+  // at 256 entries.
+  serialization_test::ForEachFormat([&](auto format) {
+    MessageBack source, target;
+    source.AddMessage("first");
+    source.GoNextMsg();
+    serialization_test::RoundTrip(source, target, format);
+    for (int i = 0; i < 256; ++i) {
+      target.AddMessage(std::to_string(i));
+      target.GoNextMsg();
+    }
+    auto entries = target.GetEntries();
+    ASSERT_EQ(entries.size(), 256u);
+    EXPECT_EQ(entries.front().msg, "0");
+    EXPECT_EQ(entries.back().msg, "255");
+  });
+}
+
+TEST_F(MessageBackArchiveTest, RejectsInvalidCurrentEntry) {
+  // Empty and nonempty histories reject current positions outside their saved
+  // entries.
+  serialization_test::ForEachFormat([&](auto format) {
+    for (bool empty : {false, true}) {
+      MessageBack::CheckpointState source, target;
+      if (!empty)
+        source.entries.resize(1);
+      source.current = 1;
+      auto bytes = serialization_test::Save(source, format);
+      EXPECT_THROW(serialization_test::Load(bytes, target, format),
+                   std::runtime_error);
+    }
+  });
+}
+
+}  // namespace

@@ -21,20 +21,21 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/frame_action.hpp"
 #include "core/object.hpp"
+#include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_mutator.hpp"
 #include "mock_clock.hpp"
 #include "mock_graphics_object_data.hpp"
+#include "serialization_test_helpers.hpp"
 #include "vm/function.hpp"
 
+#include <gtest/gtest.h>
 #include <memory>
 
-using std::chrono_literals::operator""ms;
-
 namespace {
+
+using std::chrono_literals::operator""ms;
 
 ObjectParameterMutator MakeMutator(
     std::function<void(ObjectParameter&, int)> setter,
@@ -49,8 +50,6 @@ ObjectParameterMutator MakeMutator(
                                  InterpolationMode::Linear),
                    duration_ms));
 }
-
-}  // namespace
 
 class GraphicsObjectTest : public ::testing::Test {
  protected:
@@ -495,3 +494,46 @@ TEST_F(GraphicsObjectTest, MatchingMutatorsRunIndependently) {
   obj.ExecuteMutators();
   EXPECT_EQ(completion_count, 1);
 }
+
+// ------------------------------------------------------------------------------
+
+class GraphicsObjectArchiveTest : public ::testing::Test {};
+
+TEST_F(GraphicsObjectArchiveTest, ChildGraphPreservesSharedIdentity) {
+  // Two parents share a sparse child graph after loading, independently of the
+  // source graph.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto child = std::make_shared<GraphicsObject>();
+    child->Param().SetY(42);
+    std::vector<std::shared_ptr<GraphicsObject>> source{
+        std::make_shared<GraphicsObject>(), std::make_shared<GraphicsObject>()},
+        target;
+    source[0]->GetChildren() = {nullptr, child};
+    source[1]->GetChildren() = {child};
+    serialization_test::RoundTrip(source, target, format);
+    ASSERT_EQ(target.size(), 2u);
+    ASSERT_EQ(target[0]->GetChildren().size(), 2u);
+    EXPECT_FALSE(target[0]->GetChildren()[0]);
+    auto restored = target[0]->GetChildren()[1];
+    EXPECT_EQ(restored, target[1]->GetChildren()[0]);
+    ASSERT_TRUE(restored);
+    EXPECT_NE(restored, child);
+    EXPECT_EQ(restored->Param().y(), 42);
+  });
+}
+
+TEST_F(GraphicsObjectArchiveTest, DetachedHandleOwnsRestoredObject) {
+  // A resource owned only by a pointer is restored without a stage slot.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto source = std::make_shared<GraphicsObject>();
+    source->Param().SetX(71);
+    std::shared_ptr<GraphicsObject> target;
+    serialization_test::RoundTrip(source, target, format);
+    ASSERT_TRUE(target);
+    EXPECT_NE(target, source);
+    EXPECT_EQ(target->Param().x(), 71);
+    EXPECT_FALSE(target->HasDrawer());
+  });
+}
+
+}  // namespace

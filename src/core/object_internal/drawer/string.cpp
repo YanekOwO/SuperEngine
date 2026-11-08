@@ -23,6 +23,11 @@
 
 #include "core/object_internal/drawer/string.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "systems/sdl/sdl_surface.hpp"
 #include "utf8.h"
 #include "utilities/string_utilities.hpp"
@@ -255,3 +260,5 @@ Point StringDrawer::DstOrigin(const GraphicsObject&) const {
   UpdateSurface();
   return origin_;
 }
+
+BOOST_CLASS_EXPORT_IMPLEMENT(StringDrawer)

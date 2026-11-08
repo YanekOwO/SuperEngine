@@ -21,13 +21,15 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
-#include "core/interpolation.hpp"
 #include "core/mutator.hpp"
+#include "core/interpolation.hpp"
 #include "mock_clock.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <memory>
+
+namespace {
 
 using std::chrono_literals::operator""ms;
 
@@ -111,3 +113,31 @@ TEST(MutatorTest, ContextualAccessorReceivesFrozenRepeatingValue) {
   mutator.SetToEnd(context);
   EXPECT_EQ(context.value, 25);
 }
+
+// ------------------------------------------------------------------------------
+
+class MutatorArchiveTest : public ::testing::Test {};
+
+TEST_F(MutatorArchiveTest, ReboundSetterUsesSavedProgress) {
+  // A generic mutator saves progress while the destination supplies its own
+  // callable.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    int original = 0, restored = 0;
+    using Event = Mutator<std::function<void(int)>>;
+    Event source([&](int v) { original = v; },
+                 FrameCounter(clock, Interpolation({0, 100}), 100));
+    clock->AdvanceTime(40ms);
+    Event target;
+    serialization_test::RoundTrip(source, target, format, {}, {.clock = clock});
+    EXPECT_FALSE(target.setter());
+    target.SetSetter([&](int v) { restored = v; });
+    clock->AdvanceTime(20ms);
+    target.Update();
+    EXPECT_EQ(restored, 60);
+    EXPECT_EQ(original, 0);
+  });
+}
+
+}  // namespace

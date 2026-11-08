@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/rect.hpp"
 
 #include <cstddef>
@@ -53,6 +55,13 @@ class ButtonActionTable {
     int rep_dark = 0;
 
     bool operator==(const State&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & pattern & rep_pos & rep_tr & rep_bright & rep_dark;
+    }
   };
 
   // Button action template
@@ -72,6 +81,13 @@ class ButtonActionTable {
     void SetState(ButtonState state, State value);
 
     bool operator==(const Entry&) const = default;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & normal & hit & push & select & disable;
+    }
   };
 
   static ButtonActionTable ParseSiglus(Gameexe& gexe);

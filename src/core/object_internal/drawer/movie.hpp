@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+#include "core/serialization_context.hpp"
+
 #include "core/avdec/omv.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "utilities/clock.hpp"
@@ -81,4 +84,30 @@ class ObjectMovieData : public GraphicsObjectData {
   std::vector<char> frame_;
   int current_time_ = 0;
   unsigned int last_tick_ = 0;
+
+ private:
+  ObjectMovieData() = default;
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    auto& context = SerializationContext::Get(ar);
+    bool relative = false;
+    auto path = context.SavePath(path_, relative);
+    const bool has_surface = static_cast<bool>(surface_);
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & path &
+        relative & loop_ & auto_free_ & real_time_ & paused_ & has_surface;
+  }
+  void load(auto& ar, unsigned int) {
+    std::string path;
+    bool relative = false, has_surface = false;
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & path &
+        relative & loop_ & auto_free_ & real_time_ & paused_ & has_surface;
+    auto& context = SerializationContext::Get(ar);
+    path_ = context.LoadPath(path, relative);
+    if (has_surface && (loop_ || !auto_free_ || paused_))
+      RestoreCheckpoint(context);
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+  void RestoreCheckpoint(const SerializationContext& context);
 };
+
+BOOST_CLASS_EXPORT_KEY(ObjectMovieData)

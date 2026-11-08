@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -40,6 +42,12 @@ struct QuakeTransform {
 
   // Compose |next| after the transform already stored in this object.
   void Then(const QuakeTransform& next);
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & scale & translate_x & translate_y;
+  }
 };
 
 class QuakeState {
@@ -69,6 +77,10 @@ class QuakeState {
     int x;
     int y;
     int duration_ms;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) { ar & x & y & duration_ms; }
   };
   static std::vector<OffsetFrame> ParseRealliveShake(Gameexe& gexe, int spec);
 
@@ -107,6 +119,14 @@ class QuakeState {
   std::int64_t end_elapsed_ms_ = 0;
   QuakeTransform transform_;
   std::deque<OffsetFrame> offsets_;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & type_ & direction_ & power_ & period_ms_ & count_ & end_count_ &
+        center_x_ & center_y_ & begin_order_ & end_order_ & elapsed_ms_ &
+        ending_ & end_duration_ms_ & end_elapsed_ms_ & transform_ & offsets_;
+  }
 };
 
 class QuakeList {
@@ -122,6 +142,12 @@ class QuakeList {
 
  private:
   std::vector<std::shared_ptr<QuakeState>> elements_;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    SerializeBoundedSequence(ar, elements_);
+  }
 };
 
 QuakeTransform ComposeQuakeTransforms(

@@ -24,6 +24,11 @@
 
 #include "core/object.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/frame_action.hpp"
 #include "core/image_resources.hpp"
 #include "core/object_internal/animator.hpp"
@@ -231,12 +236,13 @@ void GraphicsObject::ReplaceFileDrawer(
       layers.push_back({.surface = images->GetSurfaceNamed(part.file_name),
                         .offset = Point(part.x, part.y),
                         .cut_no = part.cut_no,
-                        .blend_type = part.blend_type});
+                        .blend_type = part.blend_type,
+                        .filename = part.file_name});
     }
     drawer = std::make_unique<CompositeGraphicsObject>(std::move(layers));
   } else {
     auto surface = images->GetSurfaceNamed(filename);
-    drawer = std::make_unique<GraphicsObjectOfFile>(surface);
+    drawer = std::make_unique<GraphicsObjectOfFile>(filename, surface);
   }
 
   Param() = std::move(params);
@@ -348,7 +354,7 @@ void GraphicsObject::Execute() {
 
 void GraphicsObject::ExecuteMutators() {
   std::erase_if(object_mutators_,
-                [&](auto& it) { return it.Update(this->Param()); });
+                [this](auto& it) { return it.Update(Param()); });
   for (auto& child : child_) {
     if (child)
       child->ExecuteMutators();

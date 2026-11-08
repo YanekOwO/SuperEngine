@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <string>
 #include <variant>
 #include <vector>
@@ -31,12 +33,20 @@ struct CmdTarget {
   int scene_id;
   int entry;
   bool operator==(const CmdTarget&) const = default;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) { ar & scene_id & entry; }
 };
 
 struct SceneTarget {
   std::variant<int, std::string> scene = 0;
   int zlabel = 0;
   bool operator==(const SceneTarget&) const = default;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) { ar & scene & zlabel; }
 };
 
 // Calls between execution instances contain engine data, never VM objects.
@@ -46,4 +56,13 @@ struct ScriptCall {
   std::vector<std::string> strings;
   bool farcall = false;
   bool operator==(const ScriptCall&) const = default;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & target;
+    SerializeBoundedSequence(ar, integers);
+    SerializeBoundedSequence(ar, strings);
+    ar & farcall;
+  }
 };

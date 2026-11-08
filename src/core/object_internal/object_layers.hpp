@@ -23,10 +23,15 @@
 
 #pragma once
 
+#include "core/serialization_context.hpp"
+#include "systems/sdl/sdl_surface.hpp"
+#include "utilities/serialization.hpp"
+
 #include "core/object_internal/objdrawer.hpp"
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 struct ObjectLayer {
@@ -34,6 +39,15 @@ struct ObjectLayer {
   Point offset;
   int cut_no = 0;
   int blend_type = 0;
+  std::string filename;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & filename & offset & cut_no & blend_type;
+    if constexpr (std::decay_t<decltype(ar)>::is_loading::value)
+      surface = SerializationContext::Get(ar).LoadSurface(filename);
+  }
 };
 
 // A collection of picture cuts positioned relative to an object's anchor.
@@ -56,4 +70,16 @@ class ObjectLayers {
  private:
   std::vector<ObjectLayer> layers_;
   Rect bounds_;
+
+ private:
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    SerializeBoundedSequence(ar, layers_);
+  }
+  void load(auto& ar, unsigned int) {
+    std::vector<ObjectLayer> layers;
+    SerializeBoundedSequence(ar, layers);
+    SetLayers(std::move(layers));
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };

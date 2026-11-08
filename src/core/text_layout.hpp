@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/rect.hpp"
 
 #include <cstddef>
@@ -47,6 +49,14 @@ class TextLayout {
     int x_spacing = 0;
     int y_spacing = 0;
     int ruby_spacing = 0;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & engine & font_size & ruby_font_size & x_spacing & y_spacing &
+          ruby_spacing;
+    }
   };
 
   // Supplies bare font advance; layout adds spacing for proportional ASCII.
@@ -134,6 +144,13 @@ class TextLayout {
     Point begin;
     bool crossed_line = false;
     bool has_base_text = false;
+
+   private:
+    friend class boost::serialization::access;
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int) {
+      ar & begin & crossed_line & has_base_text;
+    }
   };
 
   int AdvanceFor(int codepoint, const FontMetrics& metrics) const;
@@ -149,4 +166,13 @@ class TextLayout {
   bool splitting_roman_run_ = false;
   int last_trailing_spacing_ = 0;
   std::optional<RubySpan> ruby_;
+
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int) {
+    ar & settings_ & normal_size_ & extended_width_ & insertion_ &
+        indent_pixels_ & glyph_render_offset_ & name_mode_ &
+        last_token_was_name_ & splitting_roman_run_ & last_trailing_spacing_ &
+        ruby_;
+  }
 };

@@ -59,6 +59,8 @@ struct TextProperties {
   std::string ToString() const;
 
   // boost::serialization support
+ private:
+  friend class boost::serialization::access;
   template <class Archive>
   void serialize(Archive& ar, unsigned int version) {
     ar & value & text_size & xspace & yspace & char_count & colour &
@@ -91,6 +93,8 @@ struct DriftProperties {
   std::string ToString() const;
 
   // boost::serialization support
+ private:
+  friend class boost::serialization::access;
   template <class Archive>
   void serialize(Archive& ar, unsigned int version) {
     ar & count & use_animation & start_pattern & end_pattern &
@@ -114,6 +118,8 @@ struct DigitProperties {
   std::string ToString() const;
 
   // boost::serialization support
+ private:
+  friend class boost::serialization::access;
   template <class Archive>
   void serialize(Archive& ar, unsigned int version) {
     ar & value & digits & zero & sign & pack & space;
@@ -123,7 +129,7 @@ struct DigitProperties {
 struct ButtonProperties {
   int is_button = 0;
 
-  // Siglus base cut; separate from pat_no and outside RealLive save archives.
+  // Siglus base cut, independent of the displayed pattern number.
   int cut_no = 0;
 
   int action = 0;
@@ -158,14 +164,15 @@ struct ButtonProperties {
   std::string ToString() const;
 
   // boost::serialization support
-  template <class Archive>
-  void serialize(Archive& ar, unsigned int version) {
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int version) {
     // The override values are stuck here because I'm not sure about
     // initialization otherwise.
-    ar & is_button & action & se & group & button_number & state &
+    ar & is_button & cut_no & action & se & group & button_number & state &
         using_overides & pattern_override & x_offset_override &
         y_offset_override & rep_tr_override & rep_bright_override &
-        rep_dark_override;
+        rep_dark_override & config & call & hit_state & real_state & visible;
   }
 };
 
@@ -529,9 +536,7 @@ struct ObjectParameter {
 
  private:
   friend class boost::serialization::access;
-
-  template <class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
+  void serialize(auto& ar, const unsigned int version) {
     ar & is_visible & position_x & position_y & adjustment_offsets_x &
         adjustment_offsets_y & adjustment_vertical & origin_x & origin_y &
         origin_z & repetition_origin_x & repetition_origin_y & scale_x_percent &

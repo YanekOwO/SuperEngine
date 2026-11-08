@@ -1,6 +1,3 @@
-// -*- Mode: C++; tab-width:2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-// vi:tw=80:et:ts=2:sts=2
-//
 // -----------------------------------------------------------------------
 //
 // This file is part of RLVM, a RealLive virtual machine clone.
@@ -26,8 +23,12 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+
 #include "core/object_internal/objdrawer.hpp"
 #include "core/rect.hpp"
+#include "systems/sdl/gl_frame_buffer.hpp"
+#include "utilities/serialization.hpp"
 
 #include <memory>
 
@@ -55,5 +56,14 @@ class ColourFilterObjectData : public GraphicsObjectData {
   virtual Point DstPosition(const GraphicsObject& go) const override;
 
  private:
+  ColourFilterObjectData() = default;
+
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) &
+        screen_rect_;
+  }
   Rect screen_rect_;
 };
+
+BOOST_CLASS_EXPORT_KEY(ColourFilterObjectData)

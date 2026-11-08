@@ -21,14 +21,16 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/counter.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
+
+namespace {
 
 using std::chrono::milliseconds;
 using std::chrono_literals::operator""ms;
@@ -302,3 +304,85 @@ TEST(SiglusCounterListTest, AdvancesActiveCountersInTheirSelectedTimeDomain) {
     EXPECT_FALSE(counter->IsActive());
   }
 }
+
+// ------------------------------------------------------------------------------
+
+class CounterArchiveTest : public ::testing::Test {};
+
+TEST_F(CounterArchiveTest, SnapshotIsIndependentOfLiveProgress) {
+  // Encoding a looping frame freezes the saved position while live progress
+  // continues.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    Counter source;
+    source.StartFrameGame(10, 20, 100ms, true);
+    source.Advance(30ms, 0ms);
+    auto bytes = serialization_test::Save(source, format);
+    source.Advance(60ms, 0ms);
+    Counter target;
+    serialization_test::Load(bytes, target, format);
+    EXPECT_EQ(target.Get(), 13);
+    EXPECT_TRUE(target.IsActive());
+    target.Advance(80ms, 0ms);
+    EXPECT_EQ(target.Get(), 11);
+  });
+}
+
+TEST_F(CounterArchiveTest, PreservesSelectedTimeDomain) {
+  // Restored elapsed timers continue using their selected real or game delta.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    for (bool real : {false, true}) {
+      SCOPED_TRACE(real);
+      Counter source;
+      if (real)
+        source.StartReal();
+      else
+        source.StartGame();
+      source.Advance(10ms, 20ms);
+      Counter target;
+      serialization_test::RoundTrip(source, target, format);
+      target.Advance(3ms, 7ms);
+      EXPECT_EQ(target.Get(), real ? 27 : 13);
+    }
+  });
+}
+
+TEST_F(CounterArchiveTest, StoppedFrameCanResume) {
+  // A stopped descending frame retains its mode and resumes from its saved
+  // value.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    Counter source;
+    source.StartFrameReal(100, 0, 100ms, false);
+    source.Advance(0ms, 25ms);
+    source.Stop();
+    Counter target;
+    serialization_test::RoundTrip(source, target, format);
+    target.Advance(0ms, 25ms);
+    EXPECT_EQ(target.Get(), 75);
+    EXPECT_FALSE(target.IsActive());
+    target.Resume();
+    target.Advance(0ms, 75ms);
+    EXPECT_EQ(target.Get(), 0);
+    EXPECT_FALSE(target.IsActive());
+  });
+}
+
+TEST_F(CounterArchiveTest, ListRetainsAliasedAndNullHandles) {
+  // A sparse list and an external handle reconstruct one shared counter.
+  serialization_test::ForEachFormat([&](auto format) {
+    CounterList list(3);
+    list.elements_[1] = list.elements_[0];
+    list.elements_[2].reset();
+    auto source = std::pair{list, list.elements_[0]};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    ASSERT_EQ(target.first.size(), 3u);
+    EXPECT_EQ(target.first.elements_[0], target.second);
+    EXPECT_EQ(target.first.elements_[1], target.second);
+    EXPECT_FALSE(target.first.elements_[2]);
+  });
+}
+
+}  // namespace

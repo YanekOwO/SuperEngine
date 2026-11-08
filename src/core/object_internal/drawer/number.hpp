@@ -23,10 +23,15 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+#include "utilities/serialization.hpp"
+
 #include "core/object_internal/object_layers.hpp"
+#include "core/serialization_context.hpp"
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 struct NumberObjectStyle {
@@ -35,6 +40,12 @@ struct NumberObjectStyle {
   int space_mode = 0, space = 0;
 
   bool operator==(const NumberObjectStyle&) const = default;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & digits & zero & sign & pack_sign & space_mode & space;
+  }
 };
 
 struct NumberObjectGlyph {
@@ -54,7 +65,7 @@ std::vector<NumberObjectGlyph> LayoutNumberObject(
 // Number objects use a picture atlas with cuts 0-9 for digits.
 class NumberDrawer final : public GraphicsObjectData {
  public:
-  explicit NumberDrawer(std::shared_ptr<SDLSurface> atlas);
+  NumberDrawer(std::string filename, std::shared_ptr<SDLSurface> atlas);
 
   inline int value() const { return value_; }
   inline const NumberObjectStyle& style() const { return style_; }
@@ -82,10 +93,34 @@ class NumberDrawer final : public GraphicsObjectData {
  private:
   void UpdateLayers(const GraphicsObject& go) const;
 
+  std::string filename_;
   std::shared_ptr<SDLSurface> atlas_;
   int value_ = 0;
   NumberObjectStyle style_;
   mutable ObjectLayers layers_;
   mutable bool dirty_ = true;
   mutable std::optional<int> cached_pattern_;
+
+ private:
+  // The public constructor validates an atlas immediately. Archive loading
+  // fills this inert instance, then enforces the same invariant.
+  NumberDrawer() = default;
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) &
+        filename_ & value_ & style_;
+  }
+  void load(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) &
+        filename_ & value_ & style_;
+    atlas_ = SerializationContext::Get(ar).LoadSurface(filename_);
+    ValidateCheckpoint();
+    layers_ = {};
+    dirty_ = true;
+    cached_pattern_.reset();
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+  void ValidateCheckpoint() const;
 };
+
+BOOST_CLASS_EXPORT_KEY(NumberDrawer)

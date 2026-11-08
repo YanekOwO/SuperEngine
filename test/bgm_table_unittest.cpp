@@ -22,14 +22,15 @@
 // -----------------------------------------------------------------------
 
 #include "core/bgm_table.hpp"
-
 #include "core/gameexe.hpp"
+#include "serialization_test_helpers.hpp"
 
 #include <gtest/gtest.h>
-
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
 
 TEST(BgmTableTest, ConstructorRequiresMatchingStateSize) {
   EXPECT_THROW(BgmTable({"track"}, {}), std::invalid_argument);
@@ -99,3 +100,33 @@ TEST(BgmTableTest, RejectsInvalidSiglusCount) {
   gameexe.SetIntAt("BGM.CNT", 257);
   EXPECT_THROW(BgmTable::CreateFromSiglus(gameexe), std::runtime_error);
 }
+
+// ------------------------------------------------------------------------------
+
+class BgmTableArchiveTest : public ::testing::Test {};
+
+TEST_F(BgmTableArchiveTest, RestoresListenState) {
+  // Saved listen flags replace later changes without changing the game table.
+  serialization_test::ForEachFormat([&](auto format) {
+    BgmTable table({"one", "two"}, {true, false});
+    std::vector<bool> saved;
+    serialization_test::RoundTrip(table.ListenState(), saved, format);
+    table.SetListenAll(false);
+    table.RestoreListenState(std::move(saved));
+    EXPECT_EQ(table.GetListen("one"), 1);
+    EXPECT_EQ(table.GetListen("two"), 0);
+  });
+}
+
+TEST_F(BgmTableArchiveTest, SizeMismatchPreservesListenState) {
+  // A saved table of the wrong size fails without replacing live listen flags.
+  serialization_test::ForEachFormat([&](auto format) {
+    BgmTable table({"one", "two"}, {true, false});
+    std::vector<bool> source{false}, target;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_THROW(table.RestoreListenState(target), std::invalid_argument);
+    EXPECT_EQ(table.ListenState(), (std::vector<bool>{true, false}));
+  });
+}
+
+}  // namespace

@@ -44,6 +44,20 @@ struct ActionReference {
 
 class FrameActionManager {
  public:
+  struct CheckpointState {
+    std::shared_ptr<FrameAction> global;
+    FrameActionList channels;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) {
+      ar & global;
+      SerializeBoundedSequence(ar, channels);
+    }
+  };
+  CheckpointState CaptureCheckpoint() const;
+  void RestoreCheckpoint(CheckpointState state);
+
   // Execute synchronously using the saved call. During a final callback,
   // the action is inactive and end_action is true; call data remains available.
   using Exec = std::function<void(const ActionReference&, ScriptCall)>;
@@ -71,6 +85,9 @@ class FrameActionManager {
              bool real_time,
              ScriptCall call);
   void End(ActionReference reference);
+  void Advance(std::chrono::milliseconds real_delta,
+               std::chrono::milliseconds game_delta);
+  void Dispatch();
   void AdvanceAndDispatch(std::chrono::milliseconds real_delta,
                           std::chrono::milliseconds game_delta);
   void CancelGlobals();

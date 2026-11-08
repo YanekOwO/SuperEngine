@@ -24,7 +24,14 @@
 
 #include "core/object_internal/drawer/file.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/object.hpp"
+#include "log/core.hpp"
+#include "log/domain_logger.hpp"
 #include "systems/sdl/sdl_surface.hpp"
 #include "utilities/clock.hpp"
 
@@ -37,15 +44,25 @@
 
 // -----------------------------------------------------------------------
 // class GraphicsObjectOfFile
-GraphicsObjectOfFile::GraphicsObjectOfFile(std::shared_ptr<SDLSurface> surface)
+GraphicsObjectOfFile::GraphicsObjectOfFile(std::string filename,
+                                           std::shared_ptr<SDLSurface> surface)
+    : GraphicsObjectOfFile(
+          Source{.kind = SourceKind::Asset, .filename = std::move(filename)},
+          std::move(surface)) {}
+
+GraphicsObjectOfFile::GraphicsObjectOfFile(Source source,
+                                           std::shared_ptr<SDLSurface> surface)
     : animator_(std::make_shared<Clock>()),
-      surface_(surface),
+      source_(std::move(source)),
+      surface_(std::move(surface)),
       frame_time_(0),
       current_frame_(-1) {}
 
 GraphicsObjectOfFile::~GraphicsObjectOfFile() = default;
 
 int GraphicsObjectOfFile::PixelWidth(const GraphicsObject& rp) {
+  if (!surface_)
+    return 0;
   auto& param = rp.Param();
 
   const GrpRect& rect = surface_->GetPattern(param.GetPattNo());
@@ -54,6 +71,8 @@ int GraphicsObjectOfFile::PixelWidth(const GraphicsObject& rp) {
 }
 
 int GraphicsObjectOfFile::PixelHeight(const GraphicsObject& rp) {
+  if (!surface_)
+    return 0;
   auto& param = rp.Param();
 
   const GrpRect& rect = surface_->GetPattern(param.GetPattNo());
@@ -71,7 +90,7 @@ RGBAColour GraphicsObjectOfFile::GetPixelColor(Point point, int cut_no) const {
 }
 
 void GraphicsObjectOfFile::Execute() {
-  if (!animator_.IsPlaying())
+  if (!surface_ || !animator_.IsPlaying())
     return;
 
   auto anmtime = animator_.GetAnimationTime();
@@ -94,6 +113,8 @@ std::shared_ptr<const SDLSurface> GraphicsObjectOfFile::CurrentSurface(
 }
 
 Rect GraphicsObjectOfFile::SrcRect(const GraphicsObject& go) const {
+  if (!surface_)
+    return {};
   if (current_frame_ >= 0) {
     // If we've ever been treated as an animation, we need to continue acting
     // as an animation even if we've stopped.
@@ -104,6 +125,8 @@ Rect GraphicsObjectOfFile::SrcRect(const GraphicsObject& go) const {
 }
 
 Point GraphicsObjectOfFile::DstOrigin(const GraphicsObject& go) const {
+  if (!surface_)
+    return {};
   if (current_frame_ >= 0) {
     const GrpRect& rect = surface_->GetPattern(current_frame_);
     return Point(rect.originX, rect.originY);
@@ -127,15 +150,40 @@ void GraphicsObjectOfFile::PlaySet(int frame_time) {
 }
 
 Animator const* GraphicsObjectOfFile::GetAnimator() const {
-  if (surface_->GetNumPatterns() <= 0)
+  if (!surface_ || surface_->GetNumPatterns() <= 0)
     return nullptr;
   return &animator_;
 }
 
 Animator* GraphicsObjectOfFile::GetAnimator() {
-  if (surface_->GetNumPatterns() <= 0)
+  if (!surface_ || surface_->GetNumPatterns() <= 0)
     return nullptr;
   return &animator_;
+}
+
+void GraphicsObjectOfFile::WarnIfCapture() const {
+  if (source_.kind == SourceKind::Capture) {
+    static DomainLogger logger("serialization");
+    logger(Severity::Warn)
+        << "Capture objects cannot retain their image in a save. "
+           "Mark the object as not saved in Gameexe.ini.";
+  }
+}
+
+void GraphicsObjectOfFile::RestoreSurface(const SerializationContext& context) {
+  switch (source_.kind) {
+    case SourceKind::Asset:
+      surface_ = context.LoadSurface(source_.filename);
+      break;
+    case SourceKind::SaveThumbnail:
+    case SourceKind::LocalThumbnail:
+      surface_ = context.LoadThumbnail(
+          source_.thumbnail_number, source_.kind == SourceKind::LocalThumbnail);
+      break;
+    case SourceKind::Capture:
+      surface_.reset();
+      break;
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -287,3 +335,6 @@ std::vector<CompositeObjectPart> ParseCompositeObjectName(
 
   return result;
 }
+
+BOOST_CLASS_EXPORT_IMPLEMENT(GraphicsObjectOfFile)
+BOOST_CLASS_EXPORT_IMPLEMENT(CompositeGraphicsObject)

@@ -41,11 +41,14 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "core/gameexe.hpp"
 #include "core/object_internal/drawer/anm.hpp"
 #include "core/object_internal/drawer/gan.hpp"
+#include "core/serialization_context.hpp"
 #include "machine/rlmachine.hpp"
 #include "machine/save_game_header.hpp"
 #include "machine/serialization.hpp"
+#include "systems/event_system.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/system.hpp"
 #include "systems/text_system.hpp"
@@ -73,6 +76,16 @@ System& currentSystem() {
 }  // namespace Serialization
 
 namespace {
+
+SerializationContext MakeSerializationContext(RLMachine& machine) {
+  return {.system = &machine.GetSystem(),
+          .images = machine.image_resources().get(),
+          .clock = machine.GetSystem().event().GetClock(),
+          .backend = machine.presenter().backend(),
+          .game_root = machine.GetGameexe()("__GAMEPATH").Str().value_or(""),
+          .local_config = &machine.GetLocalConfig(),
+          .global_config = &machine.GetGlobalConfig()};
+}
 
 void ReadLocalFormat(boost::archive::text_iarchive& archive) {
   int version;
@@ -114,6 +127,7 @@ void saveGameTo(std::ostream& oss, RLMachine& machine) {
 
   try {
     boost::archive::text_oarchive oa(filtered_output);
+    SerializationContext::Init(oa, MakeSerializationContext(machine));
     oa << CURRENT_LOCAL_VERSION << std::string(LOCAL_FORMAT_SIGNATURE) << header
        << machine.GetMemoryStorage().GetLocalMemory()
        << const_cast<const RLMachine&>(machine)
@@ -202,6 +216,7 @@ void loadGameFrom(std::istream& iss, RLMachine& machine) {
 
   try {
     boost::archive::text_iarchive ia(filtered_input);
+    SerializationContext::Init(ia, MakeSerializationContext(machine));
     ReadLocalFormat(ia);
     LocalMemory local_memory;
     ia >> header >> local_memory;

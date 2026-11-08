@@ -21,12 +21,15 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/object_internal/object_parameter.hpp"
+#include "core/object.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
+
+namespace {
 
 TEST(ObjectParameterTest, DefaultInit) {
   ObjectParameter param;
@@ -318,3 +321,29 @@ TEST(ObjectParameterTest, SetterProxy) {
   EXPECT_EQ(param.adjustment_offsets_y,
             (std::vector<int>{0, 0, 24, -12, 0, 0, 0, 0}));
 }
+
+// ------------------------------------------------------------------------------
+
+class ObjectParameterArchiveTest : public ::testing::Test {};
+
+TEST_F(ObjectParameterArchiveTest, RetainsConfiguredButtonInteraction) {
+  // A configured waku button preserves its callback, visual overrides and
+  // interaction state.
+  serialization_test::ForEachFormat([&](auto format) {
+    ObjectParameter source, target;
+    source.button.cut_no = 7;
+    source.button.config.emplace();
+    source.button.config->name = "LOAD";
+    source.button.config->slot_id = 12;
+    source.button.call = CmdTarget{17, 4};
+    source.button.hit_state = ButtonState::Push;
+    source.button.real_state = ButtonState::Disable;
+    source.button.visible = false;
+    source.button.using_overides = true;
+    source.button.x_offset_override = -5;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target.button, source.button);
+  });
+}
+
+}  // namespace

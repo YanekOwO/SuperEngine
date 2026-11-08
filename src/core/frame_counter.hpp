@@ -26,6 +26,10 @@
 
 #pragma once
 
+#include "core/serialization_context.hpp"
+#include "utilities/serialization.hpp"
+
+#include "core/counter.hpp"
 #include "core/interpolation.hpp"
 
 #include <chrono>
@@ -45,6 +49,8 @@ class Counter;
 
 class FrameCounter {
  public:
+  // An inactive counter is safe to construct before its saved source is read.
+  FrameCounter();
   FrameCounter(std::shared_ptr<Clock> clock,
                Interpolation interpolation,
                int milliseconds);
@@ -96,4 +102,43 @@ class FrameCounter {
 
   std::chrono::milliseconds start_time_;
   std::chrono::milliseconds total_time_;
+
+ private:
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    bool uses_counter =
+        std::holds_alternative<std::shared_ptr<Counter>>(time_source_);
+    ar & uses_counter;
+
+    if (uses_counter) {
+      auto counter = std::get<std::shared_ptr<Counter>>(time_source_);
+      ar & counter;
+    }
+
+    auto start = start_time_;
+    if (!uses_counter)
+      start -= CurrentTime();
+
+    ar & interpolation_ & value_ & is_active_ & start & total_time_;
+  }
+  void load(auto& ar, unsigned int) {
+    bool uses_counter;
+    ar & uses_counter;
+
+    if (uses_counter) {
+      std::shared_ptr<Counter> counter;
+      ar & counter;
+      if (!counter)
+        throw std::runtime_error("Missing saved event counter");
+      time_source_ = std::move(counter);
+    } else {
+      time_source_ = SerializationContext::Get(ar).GetClock();
+    }
+
+    decltype(start_time_) start;
+    ar & interpolation_ & value_ & is_active_ & start & total_time_;
+
+    start_time_ = uses_counter ? start : start + CurrentTime();
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };

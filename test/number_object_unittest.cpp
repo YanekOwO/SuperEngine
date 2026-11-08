@@ -21,15 +21,19 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
+#include "core/object.hpp"
+#include "core/object_internal/drawer/number.hpp"
+#include "image_archive_test_support.hpp"
+#include "number_test_support.hpp"
+#include "serialization_test_helpers.hpp"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include "core/object_internal/drawer/number.hpp"
-#include "number_test_support.hpp"
-
 #include <limits>
 #include <memory>
 #include <stdexcept>
+
+namespace {
 
 using ::testing::ElementsAre;
 
@@ -158,7 +162,7 @@ class NumberDrawerTest : public ::testing::Test {
   GraphicsObject object;
 
   void SetUp() override {
-    object.SetDrawer(std::make_unique<NumberDrawer>(atlas));
+    object.SetDrawer(std::make_unique<NumberDrawer>("atlas", atlas));
   }
   NumberDrawer& Drawer() { return *object.GetDrawer<NumberDrawer>(); }
 };
@@ -273,7 +277,7 @@ TEST_F(NumberDrawerTest, NumberGeometryUsesSharedClipping) {
 
 TEST_F(NumberDrawerTest, MissingSignCutPreservesDigitPositions) {
   // A digits-only atlas omits its unavailable sign without moving the digits.
-  NumberDrawer digits_only(MakeNumberTestAtlas(10));
+  NumberDrawer digits_only("atlas", MakeNumberTestAtlas(10));
   digits_only.SetNumber(-12);
   EXPECT_EQ(digits_only.SrcRect(object), Rect::REC(0, 0, 22, 15));
   EXPECT_EQ(digits_only.DstOrigin(object), Point(-8, 3));
@@ -297,3 +301,117 @@ TEST_F(NumberDrawerTest, HiddenPaddingDoesNotBecomeClickable) {
   EXPECT_FALSE(Drawer().HitTest(object, Point(100, 100)));
   EXPECT_TRUE(Drawer().HitTest(object, Point(130, 100)));
 }
+
+// ------------------------------------------------------------------------------
+
+class NumberDrawerArchiveTest : public ::testing::Test {};
+
+TEST_F(NumberDrawerArchiveTest, ReloadsNamedNumberAtlas) {
+  // A number drawer samples the loading host's atlas instead of saved pixels.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.color = RGBAColour(90, 80, 70, 255);
+    NumberDrawer source("font", MakeNumberTestAtlas()),
+        target("old", MakeNumberTestAtlas());
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    EXPECT_EQ(loading.loaded_path, loading.root / "font.g00");
+    EXPECT_EQ(target.GetPixelColor(Point(), 0), loading.color);
+  });
+}
+
+TEST_F(NumberDrawerArchiveTest, RetainsValueAndStyle) {
+  // A polymorphic number drawer retains its value and every formatting option.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.make_surface = [] { return MakeNumberTestAtlas(); };
+    auto number =
+        std::make_unique<NumberDrawer>("atlas", MakeNumberTestAtlas());
+    number->SetNumber(-72);
+    NumberObjectStyle style{.digits = 4,
+                            .zero = true,
+                            .sign = true,
+                            .pack_sign = true,
+                            .space_mode = 1,
+                            .space = 17};
+    number->SetStyle(style);
+    std::unique_ptr<GraphicsObjectData> source = std::move(number), target;
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    auto* restored = dynamic_cast<NumberDrawer*>(target.get());
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->value(), -72);
+    EXPECT_EQ(restored->style(), style);
+  });
+}
+
+TEST_F(NumberDrawerArchiveTest, RebuildsCachedNumberGeometry) {
+  // A rendered number rebuilds its geometry on load and remains editable.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.make_surface = [] { return MakeNumberTestAtlas(); };
+    auto number =
+        std::make_unique<NumberDrawer>("atlas", MakeNumberTestAtlas());
+    number->SetNumber(72);
+    std::unique_ptr<GraphicsObjectData> source = std::move(number), target;
+    GraphicsObject object;
+    const auto expected = source->SrcRect(object);
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.images = &loading.images});
+    ASSERT_TRUE(target);
+    EXPECT_EQ(target->SrcRect(object), expected);
+    auto* restored = dynamic_cast<NumberDrawer*>(target.get());
+    ASSERT_NE(restored, nullptr);
+    restored->SetNumber(12345);
+    EXPECT_GT(target->SrcRect(object).width(), expected.width());
+  });
+}
+
+// ------------------------------------------------------------------------------
+
+class NumberDrawerValidationTest : public ::testing::Test {};
+
+TEST_F(NumberDrawerValidationTest, RejectsMissingAtlas) {
+  // An inert number payload without a picture atlas rejects reconstruction.
+  serialization_test::ForEachFormat([&](auto format) {
+    NumberDrawer target("atlas", MakeNumberTestAtlas());
+    auto bytes = serialization_test::Write(format, [&](auto& ar) {
+      std::string filename;
+      int value = 17;
+      NumberObjectStyle style;
+      ar& boost::serialization::base_object<GraphicsObjectData>(target) &
+          filename & value & style;
+    });
+    EXPECT_THROW(serialization_test::Read(
+                     bytes, format,
+                     [&](auto& ar) {
+                       boost::serialization::access::member_load(ar, target, 0);
+                     }),
+                 std::runtime_error);
+  });
+}
+
+TEST_F(NumberDrawerValidationTest, RejectsInvalidStyle) {
+  // A saved number with unsupported digit width rejects loading.
+  serialization_test::ForEachFormat([&](auto format) {
+    ImageArchiveHost loading;
+    loading.make_surface = [] { return MakeNumberTestAtlas(); };
+    NumberDrawer target("atlas", MakeNumberTestAtlas());
+    auto bytes = serialization_test::Write(format, [&](auto& ar) {
+      std::string filename = "atlas";
+      int value = 17;
+      NumberObjectStyle style{.digits = -1};
+      ar& boost::serialization::base_object<GraphicsObjectData>(target) &
+          filename & value & style;
+    });
+    EXPECT_THROW(serialization_test::Read(
+                     bytes, format,
+                     [&](auto& ar) {
+                       boost::serialization::access::member_load(ar, target, 0);
+                     },
+                     {.images = &loading.images}),
+                 std::invalid_argument);
+  });
+}
+
+}  // namespace

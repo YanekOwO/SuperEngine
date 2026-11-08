@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/tone_curve.hpp"
 #include "lru_cache.hpp"
 
@@ -41,6 +43,21 @@ class SDLSurface;
 // loaded_images() observes resources without retaining them.
 class ImageResources {
  public:
+  struct CheckpointState {
+    std::vector<std::string> preloaded;
+    // Prepared images are temporary load resources, never archive payload.
+    std::vector<std::pair<std::string, std::shared_ptr<SDLSurface>>> prepared;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) {
+      SerializeBoundedSequence(ar, preloaded);
+    }
+  };
+  CheckpointState CaptureCheckpoint() const;
+  void PrepareCheckpoint(CheckpointState& state);
+  void RestoreCheckpoint(CheckpointState state);
+
   ImageResources(std::shared_ptr<AssetScanner> scanner,
                  std::shared_ptr<IGraphicsBackend> backend,
                  ToneCurve tone_curves);

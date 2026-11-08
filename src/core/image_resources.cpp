@@ -133,3 +133,24 @@ std::shared_ptr<SDLSurface> ImageResources::FindPreloaded(
       return image;
   return nullptr;
 }
+
+ImageResources::CheckpointState ImageResources::CaptureCheckpoint() const {
+  CheckpointState state;
+  for (const auto& [name, surface] : preloaded_images_)
+    state.preloaded.push_back(name);
+  return state;
+}
+
+void ImageResources::PrepareCheckpoint(CheckpointState& state) {
+  state.prepared.clear();
+  for (const auto& name : state.preloaded)
+    state.prepared.emplace_back(
+        name, name.empty() ? nullptr : LoadSurfaceFromFile(name));
+}
+
+void ImageResources::RestoreCheckpoint(CheckpointState state) {
+  image_cache_.clear();
+  preloaded_images_ = std::move(state.prepared);
+  std::erase_if(loaded_images_,
+                [](const auto& entry) { return entry.second.expired(); });
+}

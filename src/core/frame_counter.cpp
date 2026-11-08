@@ -125,3 +125,6 @@ double FrameCounter::ComputeNormalizedTime() const {
   return static_cast<double>(elapsed.count()) /
          static_cast<double>(total_time_.count());
 }
+
+FrameCounter::FrameCounter()
+    : FrameCounter(std::make_shared<Counter>(), Interpolation({0, 0}), 0) {}

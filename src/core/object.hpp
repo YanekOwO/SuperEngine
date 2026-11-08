@@ -24,7 +24,10 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/frame_action.hpp"
+#include "core/object_internal/object_mutator.hpp"
 #include "core/object_internal/object_parameter.hpp"
 #include "core/render_geometry.hpp"
 
@@ -183,4 +186,15 @@ class GraphicsObject {
   std::vector<ObjectMutator> object_mutators_;
 
   std::vector<std::shared_ptr<GraphicsObject>> child_;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & param_ & file_path_;
+    SerializeBoundedSequence(ar, child_);
+    ar & frame_action_;
+    SerializeBoundedSequence(ar, frame_action_list_);
+    ar & object_data_;
+    SerializeBoundedSequence(ar, object_mutators_);
+  }
 };

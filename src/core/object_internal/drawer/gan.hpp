@@ -24,9 +24,13 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+#include "utilities/serialization.hpp"
+
 #include "core/avdec/gan.hpp"
 #include "core/object_internal/animator.hpp"
 #include "core/object_internal/objdrawer.hpp"
+#include "core/serialization_context.hpp"
 
 #include <memory>
 #include <string>
@@ -43,7 +47,8 @@ class GraphicsObject;
 // storing, and rendering GAN data as a GraphicsObjectData.
 class GanGraphicsObjectData : public GraphicsObjectData {
  public:
-  GanGraphicsObjectData(std::shared_ptr<SDLSurface> image,
+  GanGraphicsObjectData(std::string filename,
+                        std::shared_ptr<SDLSurface> image,
                         std::vector<std::vector<GanDecoder::Frame>> frames,
                         std::shared_ptr<Clock> clock = nullptr);
   virtual ~GanGraphicsObjectData();
@@ -75,8 +80,11 @@ class GanGraphicsObjectData : public GraphicsObjectData {
                                   float parent_alpha = 1.0f) const override;
 
  private:
+  GanGraphicsObjectData() : GanGraphicsObjectData("", nullptr, {}) {}
+
   Animator animator_;
 
+  std::string filename_;
   std::shared_ptr<SDLSurface> image_;
 
   using Frame = GanDecoder::Frame;
@@ -85,4 +93,15 @@ class GanGraphicsObjectData : public GraphicsObjectData {
   int current_set_;
   int current_frame_;
   unsigned int delta_time_;
+
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) &
+        filename_ & animation_sets & current_set_ & current_frame_ &
+        delta_time_ & animator_;
+    if constexpr (std::decay_t<decltype(ar)>::is_loading::value)
+      image_ = SerializationContext::Get(ar).LoadSurface(filename_);
+  }
 };
+
+BOOST_CLASS_EXPORT_KEY(GanGraphicsObjectData)

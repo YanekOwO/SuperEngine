@@ -24,6 +24,11 @@
 
 #include "core/object_internal/drawer/movie.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/object.hpp"
 #include "systems/igraphics_backend.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -83,6 +88,17 @@ int ObjectMovieData::PixelHeight(const GraphicsObject& go) {
 }
 
 std::unique_ptr<GraphicsObjectData> ObjectMovieData::Clone() const {
+  if (!surface_) {
+    auto empty = std::unique_ptr<ObjectMovieData>(new ObjectMovieData);
+    empty->path_ = path_;
+    empty->loop_ = loop_;
+    empty->auto_free_ = auto_free_;
+    empty->real_time_ = real_time_;
+    empty->paused_ = paused_;
+    empty->clock_ = clock_;
+    empty->backend_ = backend_;
+    return empty;
+  }
   auto cloned = std::make_unique<ObjectMovieData>(
       path_, loop_, auto_free_, real_time_, paused_, backend_, clock_);
   cloned->Seek(current_time_);
@@ -200,3 +216,19 @@ unsigned int ObjectMovieData::FrameDurationMilliseconds() const {
 
   return 1;
 }
+
+void ObjectMovieData::RestoreCheckpoint(const SerializationContext& context) {
+  backend_ = context.backend;
+  clock_ = context.GetClock();
+  if (!backend_)
+    throw std::runtime_error("Movie requires graphics backend");
+  current_time_ = 0;
+  last_tick_ = Now();
+  decoder_ = std::make_unique<OmvDecoder>(path_, loop_);
+  frame_.resize(static_cast<std::size_t>(decoder_->width()) *
+                decoder_->height() * 4);
+  decoder_->DecodeFrame(0, frame_, true);
+  surface_ = backend_->CreateSurfaceBGRA(decoder_->info().size, frame_, true);
+}
+
+BOOST_CLASS_EXPORT_IMPLEMENT(ObjectMovieData)

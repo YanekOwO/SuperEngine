@@ -38,6 +38,8 @@ class BgmTable {
   void SetListenAll(bool value);
   int GetListen(std::string name) const;
   std::size_t Count() const;
+  std::vector<bool> ListenState() const { return listened_; }
+  void RestoreListenState(std::vector<bool> listened);
 
  private:
   int Find(const std::string& name) const;

@@ -21,14 +21,8 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
-#include "core/object_internal/object_mutator.hpp"
 #include "core/stage.hpp"
-#include "libsiglus/siglus_scene_renderer.hpp"
-#include "mock_clock.hpp"
-#include "mock_graphics_object_data.hpp"
-
+#include <gtest/gtest.h>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -37,6 +31,17 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include "core/object_internal/objdrawer.hpp"
+#include "core/object_internal/object_mutator.hpp"
+#include "core/selection.hpp"
+#include "libsiglus/siglus_scene_renderer.hpp"
+#include "mock_clock.hpp"
+#include "mock_graphics_object_data.hpp"
+#include "serialization_test_helpers.hpp"
+#include "systems/sdl/sdl_surface.hpp"
+#include "systems/text_window.hpp"
+
+namespace {
 
 class StageTest : public ::testing::Test {
  protected:
@@ -774,3 +779,91 @@ TEST(StageElementTest, FactoryAllocatesOnlyOnSuccessAndOnlyOnce) {
   EXPECT_EQ(elements.Get(kLayerFg, 0, factory), value);
   EXPECT_EQ(calls, 1);
 }
+
+// ------------------------------------------------------------------------------
+class StageArchiveTest : public ::testing::Test {};
+
+TEST_F(StageArchiveTest, RestoresEveryLayer) {
+  // Distinct poses in all three layers survive replacing the source stage.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage source(2, 1, 1, 1), target;
+    for (int layer = 0; layer < 3; ++layer)
+      source.objects.Get(layer, 0)->Param().SetX(10 + layer);
+    auto bytes = serialization_test::Save(source, format);
+    source.Reset();
+    serialization_test::Load(bytes, target, format);
+    for (int layer = 0; layer < 3; ++layer)
+      EXPECT_EQ(target.objects.Get(layer, 0)->Param().x(), 10 + layer);
+  });
+}
+
+TEST_F(StageArchiveTest, ExternalHandleSharesRestoredStageSlots) {
+  // Two stage slots and an external reference reconstruct one object.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage stage(2);
+    auto object = stage.objects.Get(0, 0);
+    stage.objects[1][1] = object;
+    auto source = std::pair{stage.CaptureCheckpoint(), object};
+    decltype(source) target;
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_EQ(target.second, target.first.objects[0][0]);
+    EXPECT_EQ(target.second, target.first.objects[1][1]);
+    EXPECT_NE(target.second, object);
+  });
+}
+
+TEST_F(StageArchiveTest, RetainsOtherResourceCollections) {
+  // Stage groups, effects, quakes and screen effects retain their layer-owned
+  // values.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage source(0, 1, 1, 1), target;
+    for (int layer = 0; layer < 3; ++layer) {
+      source.groups.Get(layer, 0)->order = 10 + layer;
+      source.effects.Get(layer, 0)->x = 20 + layer;
+      source.quakes.Get(layer, 0)->Start(
+          {.type = 0, .power = 5, .period_ms = 100});
+    }
+    source.screen_effects.push_back(std::make_shared<Effect>());
+    source.screen_effects.back()->y = 37;
+    source.mwnd_order = 9;
+    serialization_test::RoundTrip(source, target, format);
+    for (int layer = 0; layer < 3; ++layer) {
+      EXPECT_EQ(target.groups.Get(layer, 0)->order, 10 + layer);
+      EXPECT_EQ(target.effects.Get(layer, 0)->x, 20 + layer);
+      EXPECT_TRUE(target.quakes.Get(layer, 0)->IsActive());
+    }
+    ASSERT_EQ(target.screen_effects.size(), source.screen_effects.size());
+    EXPECT_EQ(target.screen_effects.back()->y, 37);
+    EXPECT_EQ(target.mwnd_order, 9);
+  });
+}
+
+TEST_F(StageArchiveTest, OmitsReplayCaches) {
+  // A stage archive contains live objects but omits RealLive replay command
+  // caches.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage source, target;
+    source.graphics_stack.push_back("live replay");
+    source.saved_graphics_stack.push_back("savepoint replay");
+    serialization_test::RoundTrip(source, target, format);
+    EXPECT_TRUE(target.graphics_stack.empty());
+    EXPECT_TRUE(target.saved_graphics_stack.empty());
+  });
+}
+
+TEST_F(StageArchiveTest, RetainsTransitionRange) {
+  // An active transition retains its inclusive sorting range.
+  serialization_test::ForEachFormat([&](auto format) {
+    Stage source, target;
+    source.SetTransitionRenderRange(2, 7, -1, 3);
+    source.SetTransitionRenderAlpha(0.4, 0.6);
+    serialization_test::RoundTrip(source, target, format);
+    ASSERT_TRUE(target.transition_render_range());
+    EXPECT_EQ(target.transition_render_range()->begin, (std::pair{2, -1}));
+    EXPECT_EQ(target.transition_render_range()->end, (std::pair{7, 3}));
+    EXPECT_DOUBLE_EQ(target.foreground_render_alpha(), 0.0);
+    EXPECT_DOUBLE_EQ(target.next_render_alpha(), 1.0);
+  });
+}
+
+}  // namespace

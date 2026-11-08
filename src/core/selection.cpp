@@ -166,12 +166,6 @@ std::shared_ptr<Selection> BuildSelection(
     }
     config.hit_color = config.color;
   } else {
-    if ((!config.base_file.empty() || !config.filter_file.empty()) && !images)
-      throw std::invalid_argument("Button selection requires image resources");
-    if (!config.base_file.empty())
-      s->base = images->GetSurfaceNamed(config.base_file);
-    if (!config.filter_file.empty())
-      s->filter = images->GetSurfaceNamed(config.filter_file);
     const auto& actions = text.mwnd_config().button_actions();
     if (config.action >= 0 &&
         static_cast<std::size_t>(config.action) < actions.GetCount())
@@ -185,41 +179,7 @@ std::shared_ptr<Selection> BuildSelection(
     }
   }
   s->config = config;
-  auto shadow = Color(
-      gexe, reallive ? 255 : gexe("MWND.SHADOW_COLOR").Int().value_or(255),
-      RGBColour::Black());
-  const auto normal_color = reallive && s->window
-                                ? s->window->GetFontColor()
-                                : Color(gexe, config.color, RGBColour::White());
-  const auto hit_color = reallive && s->window
-                             ? normal_color
-                             : Color(gexe, config.hit_color, normal_color);
-  Size button_size(0, 0);
-  for (std::size_t i = 0; i < s->items.size(); ++i) {
-    const auto& option = s->request.options[i];
-    auto& item = s->items[i];
-    if (option.type == 0)
-      continue;
-    const auto color = option.color >= 0
-                           ? Color(gexe, option.color, normal_color)
-                           : normal_color;
-    if (!option.text.empty()) {
-      item.normal =
-          text.RenderText(option.text, config.font_size, config.x_spacing,
-                          config.y_spacing, color, &shadow, config.text_count);
-      item.highlighted = text.RenderText(
-          option.text, config.font_size, config.x_spacing, config.y_spacing,
-          option.type == 2 ? color : hit_color, &shadow, config.text_count);
-      // Surface storage includes a two-pixel shadow and trailing spacing.
-      // Neither belongs to Siglus' logical text or selection rectangle.
-      const Size storage = item.normal->GetSize();
-      item.size = Size(std::max(0, storage.width() - 2 - config.x_spacing),
-                       std::max(0, storage.height() - 2));
-    } else
-      item.size = Size(0, config.font_size);
-    button_size = Size(std::max(button_size.width(), item.size.width()),
-                       std::max(button_size.height(), item.size.height()));
-  }
+  Size button_size = s->RebuildVisuals(system, images.get());
   if (buttons) {
     // A button image fixes the common hit size; text-only buttons use the
     // largest measured option instead.
@@ -670,4 +630,69 @@ SelState::InputResult SelState::HandleEvent(std::shared_ptr<Event> event) {
   if (consume)
     *event = std::monostate();
   return feedback;
+}
+
+Size Selection::RebuildVisuals(System& system, ImageResources* images) {
+  auto& gexe = system.gameexe();
+  auto& text = system.text();
+  const bool reallive = config.format == BtnSelTemplate::Format::Reallive;
+  if (request.kind == SelectionRequest::Kind::Buttons) {
+    if ((!config.base_file.empty() || !config.filter_file.empty()) && !images)
+      throw std::runtime_error("Saved selection requires image resources");
+    base = config.base_file.empty() ? nullptr
+                                    : images->GetSurfaceNamed(config.base_file);
+    filter = config.filter_file.empty()
+                 ? nullptr
+                 : images->GetSurfaceNamed(config.filter_file);
+  }
+  auto shadow = Color(
+      gexe, reallive ? 255 : gexe("MWND.SHADOW_COLOR").Int().value_or(255),
+      RGBColour::Black());
+  const auto normal_color = reallive && window
+                                ? window->GetFontColor()
+                                : Color(gexe, config.color, RGBColour::White());
+  const auto hit_color = reallive && window
+                             ? normal_color
+                             : Color(gexe, config.hit_color, normal_color);
+  Size button_size(0, 0);
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto& option = request.options[i];
+    auto& item = items[i];
+    if (option.type == 0)
+      continue;
+    const auto color = option.color >= 0
+                           ? Color(gexe, option.color, normal_color)
+                           : normal_color;
+    if (!option.text.empty()) {
+      item.normal =
+          text.RenderText(option.text, config.font_size, config.x_spacing,
+                          config.y_spacing, color, &shadow, config.text_count);
+      item.highlighted = text.RenderText(
+          option.text, config.font_size, config.x_spacing, config.y_spacing,
+          option.type == 2 ? color : hit_color, &shadow, config.text_count);
+      // Surface storage includes a two-pixel shadow and trailing spacing.
+      // Neither belongs to Siglus' logical text or selection rectangle.
+      const Size storage = item.normal->GetSize();
+      item.size = Size(std::max(0, storage.width() - 2 - config.x_spacing),
+                       std::max(0, storage.height() - 2));
+    } else
+      item.size = Size(0, config.font_size);
+    button_size = Size(std::max(button_size.width(), item.size.width()),
+                       std::max(button_size.height(), item.size.height()));
+  }
+  return button_size;
+}
+
+void Selection::RestoreVisuals(const SerializationContext& context) {
+  if (items.size() != request.options.size() ||
+      (result && (*result < -1 || *result >= static_cast<int>(items.size()))))
+    throw std::runtime_error("Invalid saved selection options");
+  if (!context.system)
+    throw std::runtime_error("Saved selection requires a text system");
+  std::vector<Size> sizes;
+  for (const auto& item : items)
+    sizes.push_back(item.size);
+  RebuildVisuals(*context.system, context.images);
+  for (std::size_t i = 0; i < items.size(); ++i)
+    items[i].size = sizes[i];
 }

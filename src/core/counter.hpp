@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -102,15 +104,29 @@ class Counter {
   }
 
  private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & is_running_ & use_real_time_ & mode_ & current_time_;
+  }
   bool is_running_ = false;
   bool use_real_time_ = false;
 
-  struct Timer {};
+  struct Timer {
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto&, unsigned int) {}
+  };
   struct Frame {
     bool loop = false;
     int start = 0;
     int end = 0;
     std::chrono::milliseconds duration = std::chrono::milliseconds::zero();
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) {
+      ar & loop & start & end & duration;
+    }
   };
   std::variant<Timer, Frame> mode_;
 
@@ -120,7 +136,7 @@ class Counter {
 
 struct CounterList {
   std::vector<std::shared_ptr<Counter>> elements_;
-  explicit CounterList(std::size_t size);
+  explicit CounterList(std::size_t size = 0);
 
   inline std::size_t size() const { return elements_.size(); }
   std::shared_ptr<Counter> GetHandle(int index) const;
@@ -133,4 +149,10 @@ struct CounterList {
   // Resets every counter in place, preserving the list size and existing
   // handles.
   void Reset();
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    SerializeBoundedSequence(ar, elements_);
+  }
 };

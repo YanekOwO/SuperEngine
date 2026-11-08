@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 enum class InterpolationMode {
   Linear = 0,      // f(t) = t
   LogEaseOut = 1,  // f(t) = log(1+t)/2
@@ -66,7 +68,7 @@ double InterpolateBetween(const InterpolationRange& time,
 
 class Interpolation {
  public:
-  explicit Interpolation(Range range,
+  explicit Interpolation(Range range = {},
                          InterpolationType type = InterpolationType::OneShot,
                          InterpolationMode mode = InterpolationMode::Linear)
       : range_(range), type_(type), mode_(mode) {}
@@ -82,4 +84,10 @@ class Interpolation {
   Range range_;
   InterpolationType type_;
   InterpolationMode mode_;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & range_.start & range_.end & type_ & mode_;
+  }
 };

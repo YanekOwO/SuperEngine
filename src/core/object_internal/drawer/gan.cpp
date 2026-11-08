@@ -31,6 +31,11 @@
 
 #include "core/object_internal/drawer/gan.hpp"
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+
 #include "core/object.hpp"
 #include "core/object_internal/animator.hpp"
 #include "systems/sdl/sdl_surface.hpp"
@@ -45,10 +50,12 @@
 // -----------------------------------------------------------------------
 
 GanGraphicsObjectData::GanGraphicsObjectData(
+    std::string filename,
     std::shared_ptr<SDLSurface> image,
     std::vector<std::vector<GanDecoder::Frame>> frames,
     std::shared_ptr<Clock> clock)
     : animator_(clock ? std::move(clock) : std::make_shared<Clock>()),
+      filename_(std::move(filename)),
       image_(image),
       animation_sets(std::move(frames)),
       current_set_(-1),
@@ -210,33 +217,4 @@ void GanGraphicsObjectData::PlaySet(int set) {
   delta_time_ = 0;
 }
 
-// template <class Archive>
-// void GanGraphicsObjectData::load(Archive& ar, unsigned int version) {
-//   ar & animator_ & gan_filename_ & img_filename_ & current_set_ &
-//       current_frame_;
-
-//   LoadGANData();
-// }
-
-// template <class Archive>
-// void GanGraphicsObjectData::save(Archive& ar, unsigned int version) const {
-//   ar & animator_ & gan_filename_ & img_filename_ & current_set_ &
-//       current_frame_;
-// }
-
-// // -----------------------------------------------------------------------
-
-// // Explicit instantiations for text archives (since we hide the
-// // implementation)
-
-// template void GanGraphicsObjectData::save<boost::archive::text_oarchive>(
-//     boost::archive::text_oarchive& ar,
-//     unsigned int version) const;
-
-// template void GanGraphicsObjectData::load<boost::archive::text_iarchive>(
-//     boost::archive::text_iarchive& ar,
-//     unsigned int version);
-
-// // -----------------------------------------------------------------------
-
-// BOOST_CLASS_EXPORT(GanGraphicsObjectData);
+BOOST_CLASS_EXPORT_IMPLEMENT(GanGraphicsObjectData)

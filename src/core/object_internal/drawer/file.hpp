@@ -24,12 +24,17 @@
 
 #pragma once
 
+#include <boost/serialization/export.hpp>
+#include "utilities/serialization.hpp"
+
 #include "core/object_internal/animator.hpp"
 #include "core/object_internal/objdrawer.hpp"
 #include "core/object_internal/object_layers.hpp"
+#include "core/serialization_context.hpp"
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 class SDLSurface;
@@ -41,7 +46,25 @@ class SDLSurface;
 // object. It has support for normal display, and also
 class GraphicsObjectOfFile : public GraphicsObjectData {
  public:
-  GraphicsObjectOfFile(std::shared_ptr<SDLSurface> surface);
+  enum class SourceKind { Asset, SaveThumbnail, LocalThumbnail, Capture };
+  struct Source {
+    SourceKind kind = SourceKind::Capture;
+    std::string filename;
+    int thumbnail_number = 0;
+
+   private:
+    friend class boost::serialization::access;
+    void serialize(auto& ar, unsigned int) {
+      ar & kind & filename & thumbnail_number;
+      if constexpr (std::decay_t<decltype(ar)>::is_loading::value)
+        if (kind < SourceKind::Asset || kind > SourceKind::Capture)
+          throw std::runtime_error("Invalid saved image source");
+    }
+  };
+
+  GraphicsObjectOfFile(std::string filename,
+                       std::shared_ptr<SDLSurface> surface);
+  GraphicsObjectOfFile(Source source, std::shared_ptr<SDLSurface> surface);
   virtual ~GraphicsObjectOfFile();
 
   virtual int PixelWidth(const GraphicsObject& rp) override;
@@ -65,7 +88,10 @@ class GraphicsObjectOfFile : public GraphicsObjectData {
   virtual Point DstOrigin(const GraphicsObject& go) const override;
 
  private:
+  GraphicsObjectOfFile() : GraphicsObjectOfFile(Source{}, nullptr) {}
+
   Animator animator_;
+  Source source_;
 
   // The encapsulated surface to render
   std::shared_ptr<SDLSurface> surface_;
@@ -76,6 +102,22 @@ class GraphicsObjectOfFile : public GraphicsObjectData {
 
   // Current frame displayed (when animating)
   int current_frame_;
+
+ private:
+  friend class boost::serialization::access;
+  void save(auto& ar, unsigned int) const {
+    WarnIfCapture();
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & source_ &
+        frame_time_ & current_frame_ & animator_;
+  }
+  void load(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & source_ &
+        frame_time_ & current_frame_ & animator_;
+    RestoreSurface(SerializationContext::Get(ar));
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+  void WarnIfCapture() const;
+  void RestoreSurface(const SerializationContext& context);
 };
 
 // -----------------------------------------------------------------------
@@ -120,5 +162,16 @@ class CompositeGraphicsObject : public GraphicsObjectData {
   virtual Point DstOrigin(const GraphicsObject& go) const override;
 
  private:
+  CompositeGraphicsObject() = default;
+
   ObjectLayers layers_;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar& boost::serialization::base_object<GraphicsObjectData>(*this) & layers_;
+  }
 };
+
+BOOST_CLASS_EXPORT_KEY(GraphicsObjectOfFile)
+BOOST_CLASS_EXPORT_KEY(CompositeGraphicsObject)

@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include "core/rect.hpp"
 
 #include <cstdint>
@@ -34,6 +36,11 @@ struct PixelRegion {
   Rect rect;
   Point origin;
 
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) { ar & rect & origin; }
+
+ public:
   bool Contains(Point point) const {
     const auto x = static_cast<std::int64_t>(point.x()) + origin.x();
     const auto y = static_cast<std::int64_t>(point.y()) + origin.y();
@@ -50,4 +57,10 @@ struct GrpRect {
 
   // Sampling metadata can differ from the rectangle used for rendering.
   std::optional<PixelRegion> pixel_region;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) {
+    ar & rect & originX & originY & pixel_region;
+  }
 };

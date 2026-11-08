@@ -83,8 +83,8 @@ TEST(ObjectDrawerTest, GanPrimeSetShowsFirstFrameWithoutPlaying) {
   GraphicsObject object;
   object.Param().SetX(100);
   object.Param().SetY(50);
-  auto drawer =
-      std::make_unique<GanGraphicsObjectData>(surface, GanFrames(), clock);
+  auto drawer = std::make_unique<GanGraphicsObjectData>("atlas", surface,
+                                                        GanFrames(), clock);
   auto& data = *drawer;
   object.SetDrawer(std::move(drawer));
 
@@ -100,7 +100,7 @@ TEST(ObjectDrawerTest, GanPrimeSetShowsFirstFrameWithoutPlaying) {
 TEST(ObjectDrawerTest, GanPlaySetAdvancesAndFinishesOneShot) {
   auto surface = PatternedSurface();
   auto clock = std::make_shared<MockClock>();
-  GanGraphicsObjectData data(surface, GanFrames(), clock);
+  GanGraphicsObjectData data("atlas", surface, GanFrames(), clock);
   GraphicsObject object;
 
   data.PlaySet(0);
@@ -121,7 +121,7 @@ TEST(ObjectDrawerTest, GanPlaySetAdvancesAndFinishesOneShot) {
 TEST(ObjectDrawerTest, GanLoopWrapsToFirstFrame) {
   auto surface = PatternedSurface();
   auto clock = std::make_shared<MockClock>();
-  GanGraphicsObjectData data(surface, GanFrames(), clock);
+  GanGraphicsObjectData data("atlas", surface, GanFrames(), clock);
   GraphicsObject object;
 
   data.PlaySet(0);

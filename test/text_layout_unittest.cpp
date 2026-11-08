@@ -21,13 +21,12 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/text_layout.hpp"
-
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "serialization_test_helpers.hpp"
 
 namespace {
 
@@ -41,8 +40,6 @@ std::vector<Point> Positions(const TextLayout::Result& result) {
 TextLayout::FontMetrics Proportional(int advance) {
   return {.monospace = false, .advance = [advance](int) { return advance; }};
 }
-
-}  // namespace
 
 class SiglusMessageFitTest : public ::testing::Test {
  protected:
@@ -92,6 +89,8 @@ TEST_F(SiglusMessageFitTest, CheckingFitDoesNotMoveTheCursor) {
   layout.CanFitMessage(25, true);
   EXPECT_EQ(layout.GetInsertionPoint(), position);
 }
+
+// ------------------------------------------------------------------------------
 
 TEST(TextLayoutTest, ValidatesPhysicalExtentAndDefaultLayoutIsFull) {
   EXPECT_THROW(TextLayout({}, Size(10, 10), 9), std::invalid_argument);
@@ -434,3 +433,58 @@ TEST(TextLayoutTest, NextMessageRestoresDefaultsAndPreservesCursorAndNameMode) {
   ASSERT_EQ(layout.LayoutText("「", {}).glyphs.size(), 1);
   EXPECT_EQ(layout.GetIndentation(), 0);
 }
+
+// ------------------------------------------------------------------------------
+
+class TextLayoutArchiveTest : public ::testing::Test {};
+
+TEST_F(TextLayoutArchiveTest, ContinuesWrappingAndIndentation) {
+  // A partially filled layout resumes glyph placement with saved indentation
+  // and offsets.
+  serialization_test::ForEachFormat([&](auto format) {
+    TextLayout source =
+                   TextLayout::FromCells({.engine = TextLayout::Engine::Siglus,
+                                          .font_size = 20,
+                                          .x_spacing = 2,
+                                          .y_spacing = 3},
+                                         Size(4, 4)),
+               target;
+    source.SetInsertionPoint(Point(10, 0));
+    source.SetIndentation();
+    source.SetGlyphRenderOffset(Point(3, 5));
+    (void)source.LayoutText("ABC", {});
+    serialization_test::RoundTrip(source, target, format);
+    auto expected = source.LayoutText("DEFGHI", {}),
+         actual = target.LayoutText("DEFGHI", {});
+    ASSERT_EQ(actual.glyphs.size(), expected.glyphs.size());
+    EXPECT_EQ(actual.consumed_bytes, expected.consumed_bytes);
+    for (std::size_t i = 0; i < actual.glyphs.size(); ++i) {
+      EXPECT_EQ(actual.glyphs[i].position, expected.glyphs[i].position);
+      EXPECT_EQ(actual.glyphs[i].byte_offset, expected.glyphs[i].byte_offset);
+    }
+    EXPECT_EQ(target.GetInsertionPoint(), source.GetInsertionPoint());
+    EXPECT_EQ(target.GetIndentation(), 10);
+    EXPECT_EQ(target.GetGlyphRenderOffset(), Point(3, 5));
+  });
+}
+
+TEST_F(TextLayoutArchiveTest, ContinuesOpenRubySpan) {
+  // A saved open ruby span produces the same annotation rectangle after
+  // loading.
+  serialization_test::ForEachFormat([&](auto format) {
+    TextLayout source =
+                   TextLayout::FromCells({.engine = TextLayout::Engine::Siglus,
+                                          .font_size = 20,
+                                          .ruby_font_size = 8},
+                                         Size(10, 4)),
+               target;
+    source.RubyBegin();
+    (void)source.LayoutText("ABC", {});
+    serialization_test::RoundTrip(source, target, format);
+    ASSERT_TRUE(target.IsRubyActive());
+    EXPECT_EQ(target.RubyEnd("ruby", Size(16, 8)),
+              source.RubyEnd("ruby", Size(16, 8)));
+  });
+}
+
+}  // namespace

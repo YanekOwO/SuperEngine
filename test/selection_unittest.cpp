@@ -22,18 +22,20 @@
 // -----------------------------------------------------------------------
 
 #include "core/selection.hpp"
-
 #include "core/gameexe.hpp"
+#include "headless_resource_host.hpp"
 #include "libsiglus/bindings/selection.hpp"
 #include "long_operations/reallive_task.hpp"
 #include "long_operations/wait_for_selection.hpp"
 #include "mock_clock.hpp"
+#include "serialization_test_helpers.hpp"
 
 #include <gtest/gtest.h>
-
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
+
+namespace {
 
 using namespace std::chrono_literals;
 
@@ -364,3 +366,100 @@ TEST_F(SelectionInputTest, ReplacingAnUnfinishedSessionFailsItsWaiter) {
   EXPECT_EQ(finished, 0);
   EXPECT_EQ(canceled, 1);
 }
+
+// ------------------------------------------------------------------------------
+
+class SelectionArchiveTest : public ::testing::Test {};
+
+TEST_F(SelectionArchiveTest, RebuildsVisualsWithSavedGeometry) {
+  // Selection images are regenerated while explicitly saved positions and hit
+  // rectangles survive.
+  serialization_test::ForEachFormat([&](auto format) {
+    HeadlessResourceHost host;
+    auto source = BuildSelection(*host.system,
+                                 {.kind = SelectionRequest::Kind::Buttons,
+                                  .options = {{"choice", 1, -1}}},
+                                 {}, {}, Size(640, 480));
+    source->items[0].position = Point(17, 23);
+    source->items[0].size = Size(73, 29);
+    source->items[0].hit_rect = Rect::REC(11, 13, 73, 29);
+    auto old_image = source->items[0].normal;
+    std::shared_ptr<Selection> target;
+    serialization_test::RoundTrip(source, target, format, {}, host.Context());
+    ASSERT_TRUE(target);
+    ASSERT_EQ(target->items.size(), 1u);
+    EXPECT_EQ(target->items[0].position, Point(17, 23));
+    EXPECT_EQ(target->items[0].size, Size(73, 29));
+    EXPECT_EQ(target->items[0].hit_rect, source->items[0].hit_rect);
+    EXPECT_NE(target->items[0].normal, old_image);
+    EXPECT_TRUE(target->items[0].normal);
+  });
+}
+
+TEST_F(SelectionArchiveTest, ClearsTransientInputAndRestartsPhaseTimer) {
+  // An opening selection retains its phase but drops focus, press and elapsed
+  // animation time.
+  serialization_test::ForEachFormat([&](auto format) {
+    HeadlessResourceHost host;
+    auto source = std::make_shared<Selection>(
+        SelectionRequest{.kind = SelectionRequest::Kind::Buttons,
+                         .options = {{"", 1, -1}}},
+        BtnSelTemplate{.open_time = 100});
+    source->Start();
+    source->Advance(30);
+    source->focused = 0;
+    source->pressed = 0;
+    std::shared_ptr<Selection> target;
+    serialization_test::RoundTrip(source, target, format, {}, host.Context());
+    ASSERT_TRUE(target);
+    EXPECT_EQ(target->phase(), Selection::Phase::Opening);
+    EXPECT_EQ(target->elapsed(), 0);
+    EXPECT_FALSE(target->focused);
+    EXPECT_FALSE(target->pressed);
+  });
+}
+
+TEST_F(SelectionArchiveTest, AcceptedResultDiscardsCapturedBackground) {
+  // A decided selection retains its choice while discarding captured pixels.
+  serialization_test::ForEachFormat([&](auto format) {
+    HeadlessResourceHost host;
+    auto selection = std::make_shared<Selection>(SelectionRequest{
+        .kind = SelectionRequest::Kind::Buttons, .options = {{"", 1, -1}}});
+    selection->result = 0;
+    selection->capture = std::make_shared<SDLSurface>(Size(1, 1));
+    std::shared_ptr<Selection> target;
+    serialization_test::RoundTrip(selection, target, format, {},
+                                  host.Context());
+    ASSERT_TRUE(target);
+    EXPECT_EQ(target->result, 0);
+    EXPECT_FALSE(target->capture);
+  });
+}
+
+TEST_F(SelectionArchiveTest, RejectsMismatchedOptionGeometry) {
+  // A selection with fewer items than options cannot be reconstructed.
+  serialization_test::ForEachFormat([&](auto format) {
+    HeadlessResourceHost host;
+    auto source = std::make_shared<Selection>(
+        SelectionRequest{.options = {{"choice", 1, -1}}});
+    source->items.clear();
+    auto bytes = serialization_test::Save(source, format);
+    std::shared_ptr<Selection> target;
+    EXPECT_THROW(
+        serialization_test::Load(bytes, target, format, host.Context()),
+        std::runtime_error);
+  });
+}
+
+TEST_F(SelectionArchiveTest, RequiresTextServices) {
+  // Selection reconstruction rejects a missing host text system.
+  serialization_test::ForEachFormat([&](auto format) {
+    auto source = std::make_shared<Selection>(SelectionRequest{});
+    auto bytes = serialization_test::Save(source, format);
+    std::shared_ptr<Selection> target;
+    EXPECT_THROW(serialization_test::Load(bytes, target, format),
+                 std::runtime_error);
+  });
+}
+
+}  // namespace

@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "utilities/serialization.hpp"
+
 #include <array>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/serialization.hpp>
@@ -61,6 +63,8 @@ constexpr int NUM_PCM_CHANNELS = 16;
 
 class SoundSystem {
  public:
+  enum class PlaybackStatus { Stopped, Playing, Paused };
+
   explicit SoundSystem(System& system,
                        std::unique_ptr<ISoundSystem> impl = nullptr);
   ~SoundSystem();
@@ -85,6 +89,8 @@ class SoundSystem {
   player_t GetBgm() const;
 
   bool BgmPlaying() const;
+  PlaybackStatus GetBgmStatus() const;
+  bool BgmFadingOut() const;
 
   void BgmPlay(const std::string& bgm_name, bool loop);
   void BgmPlay(const std::string& bgm_name, bool loop, int fade_in_ms);
@@ -114,7 +120,12 @@ class SoundSystem {
                bool loop,
                const int channel,
                const int fadein_ms);
-  bool WavPlaying(const int channel);
+  void WavPrepare(const std::string& name, bool loop, int channel);
+  void WavPause(int channel);
+  void WavResume(int channel, int fade_in_ms = 0);
+  bool WavPlaying(const int channel) const;
+  PlaybackStatus GetWavStatus(int channel) const;
+  bool WavFadingOut(int channel) const;
   void WavStop(const int channel);
   void WavStopAll();
   void WavFadeOut(const int channel, const int fadetime);
@@ -182,6 +193,20 @@ class SoundSystem {
 
   // Creates a player object from a name. Throws if the bgm isn't found.
   player_t LoadMusic(const std::string& bgm_name);
+  player_t LoadWave(const std::string& name, bool loop);
+
+  struct PlaybackState {
+    std::string name;
+    bool loop = false;
+    bool prepared = false;
+    PlaybackStatus status = PlaybackStatus::Stopped;
+    // Fade progress is transient; fading-out playback is omitted on save.
+    bool fading_out = false;
+
+    void serialize(auto& ar, unsigned int) {
+      ar & name & loop & prepared & status;
+    }
+  };
 
   // Computes the actual volume for a channel based on the per channel
   // and the per system volume.
@@ -213,7 +238,10 @@ class SoundSystem {
   System& system_;
 
   AudioTable audio_table_;
+  PlaybackState bgm_state_;
 
+  // Per channel state
+  std::array<PlaybackState, NUM_TOTAL_CHANNELS> channel_state_;
   // Per channel volume
   std::array<int, NUM_TOTAL_CHANNELS> channel_volume_;
   std::array<SoundCategory, NUM_TOTAL_CHANNELS> channel_categories_;

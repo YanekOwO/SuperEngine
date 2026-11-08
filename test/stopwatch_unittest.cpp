@@ -21,17 +21,17 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
-#include "mock_clock.hpp"
-#include "utilities/clock.hpp"
 #include "utilities/stopwatch.hpp"
-
+#include <gtest/gtest.h>
 #include <algorithm>
 #include <chrono>
 #include <utility>
 #include <vector>
+#include "mock_clock.hpp"
+#include "serialization_test_helpers.hpp"
+#include "utilities/clock.hpp"
 
+namespace {
 namespace chr = std::chrono;
 using namespace std::chrono_literals;
 
@@ -315,3 +315,49 @@ TEST_F(StopwatchTest, LapTime) {
   clock->SetEpoch(epoch + 40ms);
   EXPECT_EQ(stopwatch.LapTime(), 10ms);
 }
+
+// ------------------------------------------------------------------------------
+
+class StopwatchArchiveTest : public ::testing::Test {};
+
+TEST_F(StopwatchArchiveTest, SavesUnpolledElapsedTime) {
+  // Saving a running timer captures elapsed time without consuming its pending
+  // lap.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    Stopwatch source(clock);
+    source.Apply(Stopwatch::Action::Run);
+    clock->AdvanceTime(40ms);
+    EXPECT_EQ(source.LapTime(), 40ms);
+    clock->AdvanceTime(15ms);
+    auto loading_clock = std::make_shared<MockClock>();
+    loading_clock->SetElapsed(9000ms);
+    Stopwatch target(loading_clock);
+    serialization_test::RoundTrip(source, target, format, {},
+                                  {.clock = loading_clock});
+    EXPECT_EQ(target.GetReading(), 55ms);
+    EXPECT_EQ(target.LapTime(), 15ms);
+    EXPECT_EQ(source.LapTime(), 15ms);
+    loading_clock->AdvanceTime(5ms);
+    EXPECT_EQ(target.GetReading(), 60ms);
+  });
+}
+
+TEST_F(StopwatchArchiveTest, StoppedTimerDoesNotRestart) {
+  // A stopped timer remains stopped after loading and clock advancement.
+  serialization_test::ForEachFormat([&](auto format) {
+    using namespace std::chrono_literals;
+    auto clock = std::make_shared<MockClock>();
+    Stopwatch source(clock), target(clock);
+    source.Apply(Stopwatch::Action::Run);
+    clock->AdvanceTime(100ms);
+    source.Apply(Stopwatch::Action::Reset);
+    serialization_test::RoundTrip(source, target, format, {}, {.clock = clock});
+    clock->AdvanceTime(50ms);
+    EXPECT_EQ(target.GetState(), Stopwatch::State::Stopped);
+    EXPECT_EQ(target.GetReading(), 0ms);
+  });
+}
+
+}  // namespace

@@ -21,11 +21,13 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // -----------------------------------------------------------------------
 
-#include <gtest/gtest.h>
-
 #include "core/interpolation.hpp"
+#include "serialization_test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <cmath>
+
+namespace {
 
 const double EPS = 1e-6;
 
@@ -256,3 +258,24 @@ TEST(InterpolationTests, BoundaryValues) {
     EXPECT_NEAR(result, expected, EPS);
   }
 }
+
+// ------------------------------------------------------------------------------
+
+class InterpolationArchiveTest : public ::testing::Test {};
+
+TEST_F(InterpolationArchiveTest, RetainsNondefaultCurve) {
+  // A looping eased curve keeps its range and behavior after loading.
+  serialization_test::ForEachFormat([&](auto format) {
+    for (auto type : {InterpolationType::OneShot, InterpolationType::Loop}) {
+      Interpolation source({-30, 70}, type, InterpolationMode::LogEaseOut),
+          target;
+      serialization_test::RoundTrip(source, target, format);
+      EXPECT_EQ(target.StartValue(), -30);
+      EXPECT_EQ(target.EndValue(), 70);
+      for (double t : {0.0, 0.25, 0.75, 1.5})
+        EXPECT_DOUBLE_EQ(target.ValueAt(t), source.ValueAt(t));
+    }
+  });
+}
+
+}  // namespace
