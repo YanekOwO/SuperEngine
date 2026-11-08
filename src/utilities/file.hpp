@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 //
 // Copyright (C) 2006, 2007 Elliot Glaysher
+// Copyright (C) 2026 RLVM contributors
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,13 +27,11 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
-
-class Gameexe;
-class RLMachine;
-class System;
 
 // Returns the correctly capitalized native path.
 // Returns an empty path if the file cannot be found.
@@ -45,13 +44,9 @@ std::string LoadFileStr(const std::filesystem::path& file_path);
 // Creates any missing parent directories before writing.
 void WriteFile(const std::filesystem::path& file_path,
                std::span<const std::uint8_t> data);
-inline void WriteFile(const std::filesystem::path& file_path,
-                      std::string_view data) {
-  return WriteFile(
-      file_path,
-      std::span<const std::uint8_t>(
-          reinterpret_cast<const std::uint8_t*>(data.data()), data.size()));
-}
+void WriteFile(const std::filesystem::path& file_path, std::string_view data);
+
+// ------------------------------------------------------------------------------
 
 class ScopedCurrentPath {
  public:
@@ -62,6 +57,9 @@ class ScopedCurrentPath {
   std::filesystem::path previous_;
 };
 
+// ------------------------------------------------------------------------------
+
+// RAII class that creates a unique temporary directory
 class ScopedTemporary {
  public:
   ScopedTemporary();
@@ -71,4 +69,28 @@ class ScopedTemporary {
 
  private:
   std::filesystem::path path_;
+};
+
+// ------------------------------------------------------------------------------
+
+class FileTransaction {
+ public:
+  struct Operation {
+    std::filesystem::path file_path;
+    std::optional<std::string> content;  // nullopt means delete the file.
+  };
+
+  // Queue a file write or deletion for the next commit.
+  // Relative paths are resolved now. Lexically equivalent destinations throw
+  // std::invalid_argument without changing the staged operations.
+  void Stage(std::filesystem::path file_path,
+             std::optional<std::string> content);
+
+  // Apply staged changes, attempting to restore original files on failure.
+  // Successful commits clear the operations; failed commits retain them to
+  // retry.
+  void Commit();
+
+ private:
+  std::vector<Operation> ops_;
 };

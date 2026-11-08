@@ -35,6 +35,10 @@ Follow surrounding conventions: `snake_case` filenames, `PascalCase` types and m
 
 Describe behavior and symbols in production/test comments and diagnostics. Keep filename, path, and line-number provenance in documentation because those references become stale. Use paths in code when required for behavior, such as includes or file-based fixtures.
 
+## Serialization
+
+Serialization support for game archives is under development and incomplete. When changing serialization code, backward compatibility with existing archives is not required. Keep serialized classes unversioned: do not add class versioning, and remove existing versioning and associated compatibility branches from classes you modify to keep the code simple.
+
 ## Testing Guidelines
 
 Tests use GoogleTest and GoogleMock. Name test files `*_unittest.cpp` and cases `TEST_F(Fixture, DescriptiveBehavior)`. Add deterministic regression coverage for changed behavior and edge cases.

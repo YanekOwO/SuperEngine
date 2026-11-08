@@ -43,10 +43,6 @@
 
 extern const Rect EMPTY_RECT;
 
-namespace serilang {
-struct Function;
-}
-
 struct TextProperties {
   std::string value = "";
 

@@ -23,25 +23,48 @@
 
 #pragma once
 
+#include <boost/circular_buffer.hpp>
+#include <boost/serialization/string.hpp>
+
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
+using CheckpointId = std::uint64_t;
+
+// Metadata is copied with each reference, independently of the immutable state
+// blob. Later message output cannot change a previously stocked checkpoint.
+struct CheckpointRef {
+  CheckpointId id = 0;
+  std::string title, message, full_message, append_dir, append_name;
+
+  explicit operator bool() const { return id != 0; }
+  bool operator==(const CheckpointRef&) const = default;
+  void serialize(auto& ar, const unsigned int) {
+    ar & id & title & message & full_message & append_dir & append_name;
+  }
+};
+
 // Selection points copy the latest savepoint rather than capturing live state.
 // Storage is shared by all script machines and survives EX calls.
 class SelectionPoint {
  public:
-  // Opaque serialized state, including embedded null bytes. Snapshot capture
-  // and restoration are not implemented; only the host can supply this data.
-  using Snapshot = std::string;
+  struct State {
+    std::optional<CheckpointRef> current;
+    std::optional<CheckpointRef> stock;
+    std::vector<CheckpointRef> history;
+  };
 
-  explicit SelectionPoint(int capacity = 1);
+  explicit SelectionPoint(std::size_t capacity = 1);
+  State GetState() const;
+  // Restores copied state while retaining this instance's configured capacity.
+  void RestoreState(State state);
 
-  // An empty snapshot means no savepoint is available.
-  void SetCurrentSnapshot(Snapshot snapshot);
-  void ClearCurrentSnapshot();
+  // A zero checkpoint ID means no savepoint is available.
+  void SetCurrentSnapshot(CheckpointRef snapshot);
 
   void Mark();
   void Clear();
@@ -53,13 +76,15 @@ class SelectionPoint {
   // Clear all snapshots while retaining the configured history capacity.
   void Reset();
 
-  std::span<const Snapshot> history() const { return history_; }
+  inline std::span<const CheckpointRef> history() {
+    return std::span<const CheckpointRef>(history_.linearize(),
+                                          history_.size());
+  }
 
  private:
-  void Append(const std::optional<Snapshot>& snapshot);
+  void Append(const std::optional<CheckpointRef>& snapshot);
 
-  std::size_t capacity_;
-  std::optional<Snapshot> current_;
-  std::optional<Snapshot> stock_;
-  std::vector<Snapshot> history_;
+  std::optional<CheckpointRef> current_;
+  std::optional<CheckpointRef> stock_;
+  boost::circular_buffer<CheckpointRef> history_;
 };

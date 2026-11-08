@@ -24,25 +24,22 @@
 #include "core/selection_point.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
-SelectionPoint::SelectionPoint(int capacity)
-    : capacity_(std::clamp(capacity, 1, 100)) {}
+SelectionPoint::SelectionPoint(std::size_t capacity)
+    : history_(std::max<std::size_t>(1, capacity)) {}
 
-void SelectionPoint::SetCurrentSnapshot(Snapshot snapshot) {
-  if (snapshot.empty())
-    ClearCurrentSnapshot();
+void SelectionPoint::SetCurrentSnapshot(CheckpointRef snapshot) {
+  if (!snapshot)
+    current_.reset();
   else
     current_ = std::move(snapshot);
 }
 
-void SelectionPoint::ClearCurrentSnapshot() { current_.reset(); }
-
-void SelectionPoint::Append(const std::optional<Snapshot>& snapshot) {
+void SelectionPoint::Append(const std::optional<CheckpointRef>& snapshot) {
   if (!snapshot)
     return;
-  if (history_.size() == capacity_)
-    history_.erase(history_.begin());
   history_.push_back(*snapshot);
 }
 
@@ -60,7 +57,27 @@ void SelectionPoint::Drop() {
 }
 
 void SelectionPoint::Reset() {
-  ClearCurrentSnapshot();
+  current_.reset();
   stock_.reset();
   Clear();
+}
+
+SelectionPoint::State SelectionPoint::GetState() const {
+  std::vector<CheckpointRef> history(history_.cbegin(), history_.cend());
+  return {current_, stock_, std::move(history)};
+}
+
+void SelectionPoint::RestoreState(State state) {
+  if (state.current && !*state.current)
+    state.current.reset();
+  if (state.stock && !*state.stock)
+    state.stock.reset();
+  std::erase_if(state.history,
+                [](const auto& checkpoint) { return !checkpoint; });
+
+  current_ = std::move(state.current);
+  stock_ = std::move(state.stock);
+  history_.assign(history_.capacity(),
+                  std::make_move_iterator(state.history.begin()),
+                  std::make_move_iterator(state.history.end()));
 }

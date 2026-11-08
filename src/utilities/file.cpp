@@ -28,11 +28,15 @@
 #include <boost/filesystem.hpp>
 #include <filesystem>
 
+#include <atomic>
+#include <chrono>
+#include <format>
 #include <fstream>
 #include <stack>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <utility>
 
 using boost::to_upper;
 namespace fs = std::filesystem;
@@ -194,6 +198,12 @@ std::string LoadFileStr(const std::filesystem::path& path) {
 
 void WriteFile(const std::filesystem::path& path,
                std::span<const std::uint8_t> data) {
+  std::string_view data_view(reinterpret_cast<const char*>(data.data()),
+                             data.size());
+  WriteFile(path, data_view);
+}
+
+void WriteFile(const std::filesystem::path& path, std::string_view data) {
   if (path.has_parent_path())
     fs::create_directories(path.parent_path());
 
@@ -201,7 +211,7 @@ void WriteFile(const std::filesystem::path& path,
   if (!file)
     throw std::runtime_error("Failed to open file: " + path.string());
 
-  if (!file.write(reinterpret_cast<const char*>(data.data()), data.size()))
+  if (!file.write(data.data(), data.size()))
     throw std::runtime_error("Failed to write file: " + path.string());
 
   file.close();
@@ -209,9 +219,10 @@ void WriteFile(const std::filesystem::path& path,
     throw std::runtime_error("Failed to close file: " + path.string());
 }
 
+// ------------------------------------------------------------------------------
+
 ScopedTemporary::ScopedTemporary() {
-  auto pth =
-      bfs::temp_directory_path() / bfs::unique_path("rlvm-audio-%%%%-%%%%");
+  auto pth = bfs::temp_directory_path() / bfs::unique_path("rlvm-%%%%-%%%%");
   path_ = pth.native();
   fs::create_directory(path_);
 }
@@ -219,4 +230,79 @@ ScopedTemporary::ScopedTemporary() {
 ScopedTemporary::~ScopedTemporary() {
   std::error_code ec;
   fs::remove_all(path_, ec);
+}
+
+// ------------------------------------------------------------------------------
+
+void FileTransaction::Stage(fs::path file_path,
+                            std::optional<std::string> content) {
+  file_path = fs::absolute(file_path);
+  const auto normalized = file_path.lexically_normal();
+  if (std::any_of(ops_.begin(), ops_.end(), [&](const auto& op) {
+        return op.file_path.lexically_normal() == normalized;
+      }))
+    throw std::invalid_argument("Duplicate file transaction destination: " +
+                                file_path.string());
+
+  ops_.emplace_back(std::move(file_path), std::move(content));
+}
+
+void FileTransaction::Commit() {
+  struct Entry {
+    fs::path path, temporary, backup;
+    bool saved = false, installed = false;
+  };
+  // Use unique suffixes to avoid collisions with other commits.
+  static std::atomic<std::uint64_t> sequence = 0;
+  const auto nonce =
+      std::format(".rlvm-{}-{}",
+                  std::chrono::steady_clock::now().time_since_epoch().count(),
+                  sequence.fetch_add(1));
+
+  std::vector<Entry> entries;
+  entries.reserve(ops_.size());
+  try {
+    // Prepare all writes before modifying any destination files.
+    for (const auto& [path, bytes] : ops_) {
+      if (fs::exists(path) && !fs::is_regular_file(path))
+        throw std::runtime_error("File destination is not a regular file: " +
+                                 path.string());
+      fs::create_directories(path.parent_path());
+      entries.push_back({path, path.string() + nonce + ".tmp",
+                         path.string() + nonce + ".bak"});
+      if (bytes)
+        WriteFile(entries.back().temporary, *bytes);
+    }
+
+    // Back up originals, then install replacements or leave files deleted.
+    for (std::size_t i = 0; i < ops_.size(); ++i) {
+      auto& entry = entries[i];
+      if (fs::exists(entry.path)) {
+        fs::rename(entry.path, entry.backup);
+        entry.saved = true;
+      }
+      if (ops_[i].content) {
+        fs::rename(entry.temporary, entry.path);
+        entry.installed = true;
+      }
+    }
+  } catch (...) {
+    // Undo changes in reverse order, preserving the original exception.
+    for (auto i = entries.rbegin(); i != entries.rend(); ++i) {
+      std::error_code ec;
+      if (i->installed)
+        fs::remove(i->path, ec);
+      if (i->saved)
+        fs::rename(i->backup, i->path, ec);
+      fs::remove(i->temporary, ec);
+    }
+    throw;
+  }
+
+  // Discard operations and backups only after every operation succeeds.
+  ops_.clear();
+  for (const auto& entry : entries) {
+    std::error_code ec;
+    fs::remove(entry.backup, ec);
+  }
 }
