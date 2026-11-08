@@ -283,6 +283,14 @@ void BindSyscom(SiglusMachine& runtime) {
   m.def("menu", [&runtime] { runtime.host().OpenExcallScene("CANCEL_SCENE"); });
   m.def("open_config_menu",
         [&runtime] { runtime.host().OpenExcallScene("CONFIG_SCENE"); });
+
+  // TODO: Native platform preference dialogs.
+  m.def("open_config_windowmode_menu", [] {});
+  m.def("open_config_font_menu", [] {});
+  m.def("open_config_movie_menu", [] {});
+  m.def("open_config_system_menu", [] {});
+  m.def("open_config_filter_color_menu", [] {});
+
   m.def(
       "return_to_menu",
       [sys, gameexe, &runtime, &platform = runtime.host().platform_implementor](

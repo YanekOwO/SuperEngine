@@ -2079,7 +2079,7 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("open_config_menu");
             continue;
           case 138:
-            append_node(Type::None, Member("open_config_windowmode_menu"));
+            append_callable("open_config_windowmode_menu");
             continue;
           case 139:
             append_node(Type::None, Member("open_config_volume_menu"));
@@ -2100,19 +2100,19 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_node(Type::None, Member("open_config_message_speed_menu"));
             continue;
           case 136:
-            append_node(Type::None, Member("open_config_filter_color_menu"));
+            append_callable("open_config_filter_color_menu");
             continue;
           case 140:
             append_node(Type::None, Member("open_config_auto_mode_menu"));
             continue;
           case 142:
-            append_node(Type::None, Member("open_config_font_menu"));
+            append_callable("open_config_font_menu");
             continue;
           case 141:
-            append_node(Type::None, Member("open_config_system_menu"));
+            append_callable("open_config_system_menu");
             continue;
           case 167:
-            append_node(Type::None, Member("open_config_movie_menu"));
+            append_callable("open_config_movie_menu");
             continue;
           case 4:
             append_node(Type::Callable, Member("set_window_mode"));
