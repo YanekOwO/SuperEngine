@@ -23,62 +23,85 @@
 
 #include "libsiglus/bindings/properties.hpp"
 
-#include "libsiglus/archive.hpp"
-#include "libsiglus/bindings/util.hpp"
+#include "core/memory_internal/facade.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/exception.hpp"
 #include "vm/string.hpp"
 
+#include <concepts>
 #include <type_traits>
+#include <utility>
 
 namespace libsiglus::binding {
 namespace sr = serilang;
 namespace sb = srbind;
-namespace {
-struct PropertyTable {
-  std::shared_ptr<PropertyStorage::Table> values;
-};
-}  // namespace
+
+template <class Values>
+static Values& GetList(PropertyStorage& storage, int scene, int index) {
+  auto* values = std::get_if<Values>(&storage.Get(scene, index).value);
+  if (!values)
+    throw sr::RuntimeError(
+        "property no longer contains the expected list type");
+  return *values;
+}
+
+template <class Values, class Facade>
+static Values CopyList(Facade& source, sr::Fiber& fiber) {
+  const int size = source.size(fiber);
+  Values values;
+  values.reserve(size);
+  for (int i = 0; i < size; ++i)
+    values.push_back(source.get(fiber, i));
+  return values;
+}
 
 void BindProperties(SiglusMachine& machine) {
   auto& vm = *machine.vm;
-  sb::module_ module(vm.gc_.get(), vm.globals_.get());
-  sb::class_<PropertyTable> table(module, "__SiglusPropertyTable");
-  table.add_gc_root(*machine.ilist_cls);
-  table.add_gc_root(*machine.slist_cls);
-  auto integers = *machine.ilist_cls;
-  auto strings = *machine.slist_cls;
-  table.def(
-      "__getitem__",
-      [integers, strings](PropertyTable* self, sr::VM& vm,
-                          int index) mutable -> sr::Value {
-        if (index < 0 ||
-            static_cast<std::size_t>(index) >= self->values->size())
-          throw sr::RuntimeError("property index out of range");
+  sb::module_ m(vm.gc_.get(), vm.globals_.get());
+  auto integers = machine.ilist_cls;
+  auto strings = machine.slist_cls;
+  // Native helper captures are opaque to the GC. Retain their list classes
+  // even if script removes the public class names.
+  (*vm.builtins_)["%%siglus_property_integers"] = integers->native_class();
+  (*vm.builtins_)["%%siglus_property_strings"] = strings->native_class();
+
+  PropertyStorage& storage = machine.host().properties;
+  m.def(
+      "__builtin_load_prop",
+      [&storage, integers, strings](sr::VM& vm, int scene,
+                                    int index) -> sr::Value {
+        const auto& entry = storage.Get(scene, index);
         return std::visit(
             [&](const auto& value) -> sr::Value {
               using T = std::decay_t<decltype(value)>;
-              if constexpr (std::same_as<T, std::monostate>)
+              if constexpr (std::same_as<T, std::monostate>) {
                 return sr::nil;
-              else if constexpr (std::same_as<T, int> ||
-                                 std::same_as<T, bool> ||
-                                 std::same_as<T, double>)
-                return value;
-              else if constexpr (std::same_as<T, std::string>)
+              } else if constexpr (std::same_as<T, std::string>) {
                 return vm.gc_->Allocate<sr::String>(value);
-              else if constexpr (std::same_as<T, PropertyStorage::Integers>)
-                return integers.make_inst(*value);
-              else
-                return strings.make_inst(*value);
+              } else if constexpr (std::same_as<T, PropertyStorage::Integers>) {
+                auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
+                  return GetList<T>(storage, scene, index);
+                };
+                return integers->make_inst(std::move(getter),
+                                           entry.initial_size,
+                                           ListInitialization::Ready);
+              } else if constexpr (std::same_as<T, PropertyStorage::Strings>) {
+                auto getter = [&storage, scene, index](sr::Fiber&) -> T& {
+                  return GetList<T>(storage, scene, index);
+                };
+                return strings->make_inst(std::move(getter), entry.initial_size,
+                                          ListInitialization::Ready);
+              } else {
+                return value;
+              }
             },
-            self->values->at(index));
+            entry.value);
       });
-  table.def("__setitem__", [integers, strings](PropertyTable* self, int index,
-                                               sr::Value value) {
-    if (index < 0 || static_cast<std::size_t>(index) >= self->values->size())
-      throw sr::RuntimeError("property index out of range");
-    auto& destination = self->values->at(index);
+  m.def("__builtin_store_prop", [&storage, integers, strings](
+                                    sr::Fiber& fiber, int scene, int index,
+                                    sr::Value value) {
+    auto& destination = storage.Get(scene, index).value;
     if (const auto* boolean = value.Get_if<bool>())
       destination = *boolean;
     else if (const auto* real = value.Get_if<double>())
@@ -91,36 +114,17 @@ void BindProperties(SiglusMachine& machine) {
       destination = std::monostate{};
     else if (const auto* native = value.Get_if<sr::NativeInstance>();
              native && native->foreign &&
-             native->klass == integers.native_class())
-      destination = std::make_shared<SiglusIntListFacade>(
-          *native->GetForeign<SiglusIntListFacade>());
+             native->klass == integers->native_class())
+      destination = CopyList<PropertyStorage::Integers>(
+          *native->GetForeign<SiglusIntListFacade>(), fiber);
     else if (const auto* native = value.Get_if<sr::NativeInstance>();
              native && native->foreign &&
-             native->klass == strings.native_class())
-      destination = std::make_shared<SiglusStrListFacade>(
-          *native->GetForeign<SiglusStrListFacade>());
+             native->klass == strings->native_class())
+      destination = CopyList<PropertyStorage::Strings>(
+          *native->GetForeign<SiglusStrListFacade>(), fiber);
     else
-      throw sr::RuntimeError("unsupported shared property value: " +
-                             value.Desc());
+      throw sr::RuntimeError("unsupported property value: " + value.Desc());
   });
-  table.def("len", [](PropertyTable* self) {
-    return facade_detail::CheckedIntSize(self->values->size());
-  });
-  // Loader callbacks are C++ objects, so explicitly retain their VM class
-  // roots.
-  (*vm.builtins_)["%%siglus_property_class"] = table.native_class();
-  auto make_table =
-      [&machine, table](
-          int scene,
-          std::span<const Property> properties) mutable -> sr::Value {
-    return table.make_inst(machine.host().properties.Get(scene, properties));
-  };
-  if (machine.loader)
-    machine.loader->SetPropertyFactory(make_table);
-  (*vm.globals_)["__globalprop"] = make_table(
-      -1, machine.host().archive
-              ? std::span<const Property>(machine.host().archive->prop_)
-              : std::span<const Property>{});
 }
 
 }  // namespace libsiglus::binding

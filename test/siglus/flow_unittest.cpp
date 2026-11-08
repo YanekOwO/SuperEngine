@@ -1745,6 +1745,7 @@ class SiglusRestartTest : public ::testing::Test {
             ->globals)[GetUsercmdId(callback.entry)] =
           machine.vm->globals_->at("callback_entry");
     };
+    runtime.properties.Initialize(*runtime.archive);
     runtime.GameplayMachine().Initialize();
   }
 
@@ -1770,13 +1771,14 @@ TEST_F(SiglusRestartTest, RestartReplacesTheGameplayVmAtTheHostSafePoint) {
 
 TEST_F(SiglusRestartTest, RestartPreservesSharedProperties) {
   // Store a property before restarting; its value belongs to the host and is
-  // readable through the replacement VM's freshly bound property facade.
-  Execute(*runtime.GameplayMachine().vm, "__globalprop[0] = 71;");
+  // readable through the replacement VM's freshly bound property helpers.
+  Execute(*runtime.GameplayMachine().vm, "__builtin_store_prop(-1, 0, 71);");
   ScheduleRestart(runtime.GameplayMachine());
   runtime.DriveScripts();
   runtime.DriveScripts();
 
-  Execute(*runtime.GameplayMachine().vm, "retained = __globalprop[0];");
+  Execute(*runtime.GameplayMachine().vm,
+          "retained = __builtin_load_prop(-1, 0);");
 
   EXPECT_EQ(runtime.GameplayMachine().vm->globals_->at("retained"),
             sr::Value(71));

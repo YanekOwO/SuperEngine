@@ -40,6 +40,9 @@
 #include <utility>
 #include <vector>
 
+// Ready backing is already allocated; the declared size is used only by init().
+enum class ListInitialization { Lazy, Ready };
+
 namespace facade_detail {
 
 inline std::size_t CheckIndex(int idx) {
@@ -92,10 +95,14 @@ class IntListFacade {
   using storage_type = std::vector<int>;
   using getter_t = std::function<storage_type&(Ts...)>;
 
-  explicit IntListFacade(getter_t getter,
-                         std::optional<int> size = std::nullopt)
+  explicit IntListFacade(
+      getter_t getter,
+      std::optional<int> size = std::nullopt,
+      ListInitialization initialization = ListInitialization::Lazy)
       : getter_(std::move(getter)),
-        default_size_(facade_detail::CheckSize(size.value_or(0))) {
+        default_size_(facade_detail::CheckSize(size.value_or(0))),
+        initialized_(std::make_shared<bool>(initialization ==
+                                            ListInitialization::Ready)) {
     if (!getter_)
       throw std::invalid_argument("IntListFacade: getter is empty.");
   }
@@ -202,7 +209,7 @@ class IntListFacade {
 
   getter_t getter_;
   std::size_t default_size_;
-  std::shared_ptr<bool> initialized_ = std::make_shared<bool>(false);
+  std::shared_ptr<bool> initialized_;
 };
 
 template <class... Ts>
@@ -211,10 +218,14 @@ class StrListFacade {
   using storage_type = std::vector<std::string>;
   using getter_t = std::function<storage_type&(Ts...)>;
 
-  explicit StrListFacade(getter_t getter,
-                         std::optional<int> size = std::nullopt)
+  explicit StrListFacade(
+      getter_t getter,
+      std::optional<int> size = std::nullopt,
+      ListInitialization initialization = ListInitialization::Lazy)
       : getter_(std::move(getter)),
-        default_size_(facade_detail::CheckSize(size.value_or(0))) {
+        default_size_(facade_detail::CheckSize(size.value_or(0))),
+        initialized_(std::make_shared<bool>(initialization ==
+                                            ListInitialization::Ready)) {
     if (!getter_)
       throw std::invalid_argument("StrListFacade: getter is empty.");
   }
@@ -263,5 +274,5 @@ class StrListFacade {
 
   getter_t getter_;
   std::size_t default_size_;
-  std::shared_ptr<bool> initialized_ = std::make_shared<bool>(false);
+  std::shared_ptr<bool> initialized_;
 };

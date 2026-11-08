@@ -76,7 +76,7 @@ sr::Module* Loader::Load(int scene) {
     std::cerr << warning << std::endl;
 
   Recompiler compiler(vm_.gc_);
-  compiler.SetSceneProperties(scn.id_, scn.property);
+  compiler.SetSceneId(scn.id_);
   compiler.is_debug_ = is_debug_;
   compiler.trace_enabled_ = trace_enabled_;
   compiler.Compile(tokens);
@@ -111,9 +111,6 @@ sr::Module* Loader::Load(int scene) {
     throw sr::RuntimeError(std::format("failed to bootstrap scene {} ({}): {}",
                                        scene, scn.scnname_, e.what()));
   }
-
-  if (property_factory_)
-    (*mod->globals)["__usrprop"] = property_factory_(scene, scn.property);
 
   auto* dispatcher = mod->globals->at("%%dispatch").Get_if<sr::Function>();
   (*mod->globals)["%%script"] =

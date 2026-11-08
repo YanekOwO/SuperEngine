@@ -23,48 +23,65 @@
 
 #include "libsiglus/property_storage.hpp"
 
+#include "libsiglus/archive.hpp"
+
+#include <format>
+#include <span>
+#include <utility>
+
 namespace libsiglus {
 
-std::shared_ptr<PropertyStorage::Table> PropertyStorage::Get(
-    int scene,
-    std::span<const Property> properties) {
-  if (auto found = tables_.find(scene); found != tables_.end())
-    return found->second;
-  auto table = std::make_shared<Table>();
-  table->reserve(properties.size());
+static PropertyStorage::Table MakeTable(std::span<const Property> properties) {
+  PropertyStorage::Table table;
+  table.reserve(properties.size());
   for (const auto& property : properties) {
+    PropertyStorage::Entry entry;
     switch (property.form) {
       case Type::Int:
-        table->emplace_back(0);
+        entry.value = 0;
         break;
       case Type::String:
-        table->emplace_back(std::string{});
+        entry.value = std::string{};
         break;
-      case Type::IntList: {
-        auto storage = std::make_shared<std::vector<int>>();
-        table->emplace_back(std::make_shared<IntListFacade<serilang::Fiber&>>(
-            [storage](serilang::Fiber&) -> std::vector<int>& {
-              return *storage;
-            },
-            property.size));
+      case Type::IntList:
+      case Type::StrList:
+        if (property.size < 0)
+          throw std::invalid_argument("negative property array size");
+        entry.initial_size = property.size;
+        if (property.form == Type::IntList)
+          entry.value = PropertyStorage::Integers(property.size);
+        else
+          entry.value = PropertyStorage::Strings(property.size);
         break;
-      }
-      case Type::StrList: {
-        auto storage = std::make_shared<std::vector<std::string>>();
-        table->emplace_back(std::make_shared<StrListFacade<serilang::Fiber&>>(
-            [storage](serilang::Fiber&) -> std::vector<std::string>& {
-              return *storage;
-            },
-            property.size));
-        break;
-      }
       default:
-        table->emplace_back(std::monostate{});
         break;
     }
+    table.push_back(std::move(entry));
   }
-  tables_.emplace(scene, table);
   return table;
+}
+
+void PropertyStorage::Initialize(const Archive& archive) {
+  decltype(tables_) tables;
+  tables.emplace(-1, MakeTable(archive.prop_));
+  for (std::size_t i = 0; i < archive.GetScenarioCount(); ++i)
+    tables.emplace(static_cast<int>(i),
+                   MakeTable(archive.ParseScene(static_cast<int>(i)).property));
+  tables_.swap(tables);
+}
+
+const PropertyStorage::Entry& PropertyStorage::Get(int scene, int index) const {
+  const auto it = tables_.find(scene);
+  if (it == tables_.end())
+    throw std::out_of_range(std::format("property scene {} not found", scene));
+  if (index < 0 || static_cast<std::size_t>(index) >= it->second.size())
+    throw std::out_of_range(std::format(
+        "property index {} out of range for scene {}", index, scene));
+  return it->second[index];
+}
+
+PropertyStorage::Entry& PropertyStorage::Get(int scene, int index) {
+  return const_cast<Entry&>(std::as_const(*this).Get(scene, index));
 }
 
 }  // namespace libsiglus

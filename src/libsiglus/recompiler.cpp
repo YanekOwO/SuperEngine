@@ -347,12 +347,6 @@ Recompiler::Recompiler(std::shared_ptr<serilang::GarbageCollector> gc)
 }
 Recompiler::~Recompiler() = default;
 
-void Recompiler::SetSceneProperties(int scene_id,
-                                    std::vector<Property> properties) {
-  scene_id_ = scene_id;
-  scene_properties_ = std::move(properties);
-}
-
 void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
   // The allocator reserves slot 0 for the callable. Make room for entry
   // and arguments before the scene's argument and temporary slots.
@@ -415,8 +409,7 @@ void Recompiler::Compile(const std::vector<Parser::ParsedToken>& tokens) {
   for (const Parser::ParsedToken& tok : tokens)
     Gen(tok.token, tok.line);
 
-  // Append the return epilogue and bootstrap that publishes %%dispatch and
-  // initializes scene properties when the module is loaded.
+  // Append the return epilogue and bootstrap that publishes %%dispatch.
   Finish();
 }
 
@@ -699,10 +692,6 @@ void Recompiler::Finish() {
                         .nparam = 1,
                         .has_vararg = true});
   emit_store_global("%%dispatch");
-  if (scene_id_.has_value()) {
-    emit_scene_property_table();
-    emit_store_global("__usrprop");
-  }
   emit_const_nil();
   emit(sr::Return{});
   is_finalized_ = true;
@@ -786,29 +775,6 @@ void Recompiler::emit_store_global(std::string id) {
 }
 void Recompiler::emit_load_global(std::string id) {
   emit(sr::LoadGlobal{intern_name(std::move(id))});
-}
-
-void Recompiler::emit_scene_property_table() {
-  for (const Property& property : scene_properties_)
-    emit_init_value(property.form, property.size);
-  emit(sr::MakeList{.nelms = static_cast<uint32_t>(scene_properties_.size())});
-}
-
-void Recompiler::emit_load_proplist(int scene) {
-  if (scene == -1) {
-    emit_load_global("__globalprop");
-    return;
-  }
-
-  if (scene == scene_id_) {
-    emit_load_global("__usrprop");
-    return;
-  }
-
-  emit_load_global("__builtin_load_scn");
-  emit_const(scene);
-  emit(sr::Call{.argcnt = 1, .kwargcnt = 0});
-  emit(sr::GetField{intern_name("__usrprop")});
 }
 
 void Recompiler::emit_init_value(Type type, int size) {
@@ -1014,10 +980,12 @@ void Recompiler::emit_elm(const elm::AccessChain& e, const Value* assign) {
   }
   if (auto* prop = std::get_if<elm::Usrprop>(&e.root.var);
       prop && assign && e.nodes.empty()) {
-    emit_load_proplist(prop->scene);  // (prop[])
-
-    emit_const(prop->idx), emit_val(*assign);
-    emit(sr::SetItem{});  // (prop[], idx, val) -> ()
+    emit_load_global("__builtin_store_prop");
+    emit_const(prop->scene);
+    emit_const(prop->idx);
+    emit_val(*assign);
+    emit(sr::Call{.argcnt = 3});
+    emit(sr::Pop{});
     return;
   }
   if (auto* arg = std::get_if<elm::Arg>(&e.root.var);
@@ -1107,10 +1075,10 @@ void Recompiler::emit_elm_root(const elm::Usrcmd& r) {
   // (usrcmd, args...) -> (ret)
 }
 void Recompiler::emit_elm_root(const elm::Usrprop& r) {
-  emit_load_proplist(r.scene);
-  // (prop[])
+  emit_load_global("__builtin_load_prop");
+  emit_const(r.scene);
   emit_const(r.idx);
-  emit(sr::GetItem{});  // (prop[], idx) -> (item)
+  emit(sr::Call{.argcnt = 2});
 }
 void Recompiler::emit_elm_root(const elm::Arg& r) {
   // fast: (fn, arg_0, arg_1, ...)

@@ -25,7 +25,6 @@
 
 #include "libsiglus/element.hpp"
 #include "libsiglus/parser.hpp"
-#include "libsiglus/property.hpp"
 #include "libsiglus/token.hpp"
 #include "utilities/expected.hpp"
 #include "vm/gc.hpp"
@@ -82,7 +81,7 @@ class Recompiler {
   inline void ClearErrors() { errors_.clear(); }
   inline serilang::Code* GetCode() const { return cur_chunk_; }
 
-  void SetSceneProperties(int scene_id, std::vector<Property> properties);
+  void SetSceneId(int scene_id) { scene_id_ = scene_id; }
   void Compile(const std::vector<Parser::ParsedToken>& tokens);
 
  private:
@@ -101,7 +100,6 @@ class Recompiler {
   std::unordered_map<int, int> zlabel_lines_;
 
   std::optional<int> scene_id_;
-  std::vector<Property> scene_properties_;
   std::vector<UserCommandMetadata> user_commands_;
 
  public:
@@ -143,8 +141,6 @@ class Recompiler {
 
   void emit_store_global(std::string id);
   void emit_load_global(std::string id);
-  void emit_scene_property_table();
-  void emit_load_proplist(int scene);
   void emit_init_value(Type type, int size = 0);
 
   void patch(std::size_t site, std::size_t target);
@@ -205,7 +201,6 @@ return_entry:
 bootstrap:
   %%dispatch = MakeFunction(this_code, dispatch_entry,
                             one_parameter, variadic)
-  ... initialize scene properties ...
   Return nil
 
 */

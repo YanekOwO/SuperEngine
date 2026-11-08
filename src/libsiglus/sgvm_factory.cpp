@@ -184,6 +184,7 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
   fs::path seen_path = CorrectPath(base_path_, "scene.pck");
   MappedFile archive_mf(seen_path);
   rt.archive = std::make_shared<Archive>(Archive::Create(archive_mf.Read()));
+  rt.properties.Initialize(*rt.archive);
   rt.GameplayMachine().loader =
       std::make_unique<binding::Loader>(*rt.archive, vm, debug_, trace_);
 
