@@ -25,6 +25,7 @@
 
 #include "libsiglus/siglus_runtime.hpp"
 #include "core/property_storage.hpp"
+#include "libsiglus/backlog.hpp"
 #include "libsiglus/bindings/frame_action.hpp"
 #include "libsiglus/bindings/object.hpp"
 
@@ -87,6 +88,23 @@ SiglusSaveLoad& SiglusRuntime::Saves() {
   if (!saves_)
     saves_ = std::make_unique<SiglusSaveLoad>(*this);
   return *saves_;
+}
+
+SiglusBacklog& SiglusRuntime::Backlog() {
+  if (!backlog) {
+    backlog = std::make_shared<SiglusBacklog>(*this);
+    system->event().AddListener(35, backlog);
+    system->text().SetBacklogView(
+        [this] { return backlog && backlog->IsOpen(); },
+        [this](int direction) {
+          if (backlog->IsOpen())
+            backlog->Scroll(direction * 120);
+          else if (direction < 0)
+            backlog->Open(IsExcall() && excall && excall->allocated ? 1 : 0);
+        },
+        [this] { backlog->Close(); });
+  }
+  return *backlog;
 }
 
 void SiglusRuntime::RegisterCounter(std::shared_ptr<Counter> counter,
@@ -223,6 +241,8 @@ bool SiglusRuntime::ScriptScopeActive(int owner) const {
 }
 
 void SiglusRuntime::FreeExcall(bool finish_actions) {
+  if (backlog && backlog->IsOpen() && backlog->Capture()->owner == 1)
+    backlog->Close();
   if (!excall || (excall->releasing && finish_actions))
     return;
   if (excall->allocated && finish_active_wipe && *finish_active_wipe)
@@ -349,6 +369,8 @@ void SiglusRuntime::ResetExcall() {
 }
 
 void SiglusRuntime::ResetLocalMemory(bool preserve_backlog) {
+  if (backlog)
+    backlog->Close();
   if (saves_)
     saves_->Reset(preserve_backlog);
   if (memory) {
@@ -536,6 +558,8 @@ void SiglusRuntime::DriveScripts() {
       return;
     CollectCompletedExcalls();
     ApplyExcallRequests();
+    if (backlog && backlog->IsOpen())
+      return;
     auto& machine = ActiveMachine();
     DriveMachine(machine, [&] { machine.vm->RunReadyUntilBlocked(); });
     const bool checkpoint = saves_ && saves_->CheckpointPending();
@@ -669,7 +693,7 @@ void SiglusRuntime::Start(std::optional<int> start_scene) {
 void SiglusRuntime::Update(std::chrono::milliseconds real_delta,
                            std::chrono::milliseconds game_delta) {
   CancelExpiredCaptures();
-  if (saves_ && saves_->PauseGameTime())
+  if ((backlog && backlog->IsOpen()) || (saves_ && saves_->PauseGameTime()))
     return;
   const bool dispatch = !saves_ || !saves_->CheckpointPending();
   SiglusMachine* callback_frames[] = {callbacks_[0].get(), callbacks_[1].get()};
@@ -821,10 +845,13 @@ void SiglusRuntime::Run() {
     system->event().ExecuteEventSystem();
 
     // Advance clock
-    if (IsExcall() && excall && excall->allocated && excall_interaction_manager)
-      excall_interaction_manager->Update();
-    else if (interaction_manager)
-      interaction_manager->Update();
+    if (!backlog || !backlog->IsOpen()) {
+      if (IsExcall() && excall && excall->allocated &&
+          excall_interaction_manager)
+        excall_interaction_manager->Update();
+      else if (interaction_manager)
+        interaction_manager->Update();
+    }
     const auto now = GameplayMachine().vm->scheduler_.GetTime();
     const auto real_delta = std::max(
         std::chrono::duration_cast<Clock::duration_t>(now - last_frame_tick),
@@ -842,7 +869,7 @@ void SiglusRuntime::Run() {
     system->text().ExecuteTextSystem();
     system->sound().ExecuteSoundSystem();
 
-    if (renderer)
+    if (renderer && (!backlog || !backlog->IsOpen()))
       renderer->ExecuteFrame();
 
     if (GameplayMachine().vm->IsStopRequested() || system->IsQuitRequested())
@@ -900,6 +927,8 @@ void SiglusRuntime::RenderFrame() {
       custom();
     else if (renderer)
       renderer->RenderScene();
+    if (backlog)
+      backlog->Render();
     if (saves_)
       saves_->RenderOverlay();
   });

@@ -220,6 +220,13 @@ class TextSystem final : public EventListener {
   void NewPageOnWindow(std::shared_ptr<TextWindow> window);
 
   // Navigate detached history windows without modifying the live stage.
+  void SetBacklogView(std::function<bool()> is_open,
+                      std::function<void(int)> navigate,
+                      std::function<void()> close) {
+    backlog_is_open_ = std::move(is_open);
+    backlog_navigate_ = std::move(navigate);
+    backlog_close_ = std::move(close);
+  }
   void BackPage();
   void ForwardPage();
 
@@ -315,6 +322,9 @@ class TextSystem final : public EventListener {
  private:
   // Whether we are reading the backlog
   bool is_reading_backlog_;
+  std::function<bool()> backlog_is_open_;
+  std::function<void(int)> backlog_navigate_;
+  std::function<void()> backlog_close_;
   std::function<void(std::uint64_t)> backlog_load_;
   WindowList history_windows_;
   std::chrono::milliseconds message_time_{};

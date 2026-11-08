@@ -465,6 +465,7 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
     rt.binding_names.push_back(it->first);
     it->second(rt.GameplayMachine());
   }
+  rt.Backlog();
   std::shared_ptr<InputListener> input = rt.input_event_listener;
 
   rt.interaction_manager = std::make_unique<InteractionManager>(

@@ -688,6 +688,10 @@ void TextSystem::NewPageOnWindow(std::shared_ptr<TextWindow> window) {
 }
 
 void TextSystem::BackPage() {
+  if (backlog_navigate_) {
+    backlog_navigate_(-1);
+    return;
+  }
   if (previous_page_sets_.empty())
     return;
   if (!IsReadingBacklog()) {
@@ -701,6 +705,10 @@ void TextSystem::BackPage() {
 }
 
 void TextSystem::ForwardPage() {
+  if (backlog_navigate_) {
+    backlog_navigate_(1);
+    return;
+  }
   if (!IsReadingBacklog() || previous_page_it_ == previous_page_sets_.end())
     return;
   ++previous_page_it_;
@@ -739,7 +747,9 @@ void TextSystem::ReplayPageSet(const PageSet& set) {
   RequestRefresh();
 }
 
-bool TextSystem::IsReadingBacklog() const { return is_reading_backlog_; }
+bool TextSystem::IsReadingBacklog() const {
+  return is_reading_backlog_ || (backlog_is_open_ && backlog_is_open_());
+}
 
 bool TextSystem::RequestBacklogLoad() {
   if (!backlog_load_ || !IsReadingBacklog() ||
@@ -755,6 +765,8 @@ bool TextSystem::RequestBacklogLoad() {
 }
 
 void TextSystem::StopReadingBacklog() {
+  if (backlog_close_)
+    backlog_close_();
   if (!IsReadingBacklog())
     return;
   is_reading_backlog_ = false;

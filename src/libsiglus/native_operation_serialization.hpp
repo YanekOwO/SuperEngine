@@ -24,6 +24,7 @@
 #pragma once
 
 #include "core/frame_counter.hpp"
+#include "libsiglus/backlog.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "utilities/serialization.hpp"
 
@@ -92,6 +93,13 @@ struct GroupSelectionOperationState {
   friend class boost::serialization::access;
   void serialize(auto& ar, unsigned int) { ar & group; }
 };
+struct BacklogOperationState {
+  std::shared_ptr<SiglusBacklog::Session> session;
+
+ private:
+  friend class boost::serialization::access;
+  void serialize(auto& ar, unsigned int) { ar & session; }
+};
 struct WipeOperationState {
   int duration = 0;
   InterpolationMode interpolation = InterpolationMode::Linear;
@@ -125,6 +133,7 @@ using NativeOperationState = std::variant<TextoutOperationState,
                                           MessageWaitOperationState,
                                           SelectionWaitOperationState,
                                           GroupSelectionOperationState,
+                                          BacklogOperationState,
                                           WipeOperationState,
                                           MovieOperationState>;
 NativeOperationState CaptureNativeOperation(lop::LongOperation& operation,

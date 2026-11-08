@@ -1758,10 +1758,10 @@ AccessChain ElementParser::make_chain(AccessChain result,
             append_callable("is_localmode_enable", Type::Int);
             continue;
           case 192:
-            append_node(Type::None, Member("open_msgback"));
+            append_callable("open_msgback", Type::None, AWAIT);
             continue;
           case 193:
-            append_node(Type::None, Member("close_msgback"));
+            append_callable("close_msgback");
             continue;
           case 194:
             append_callable("set_enable_msgback");

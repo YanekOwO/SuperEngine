@@ -84,7 +84,7 @@ class SiglusSaveLoad {
   void RenderOverlay();
 
   void SelectBacklog(CheckpointId id);
-  void OpenBacklogLoad(CheckpointId id);
+  bool OpenBacklogLoad(CheckpointId id);
   bool HasBacklogCheckpoint(CheckpointId id) const {
     return backlog_.contains(id);
   }

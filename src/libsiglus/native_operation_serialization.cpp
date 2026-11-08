@@ -27,6 +27,7 @@
 #include "core/input.hpp"
 #include "libsiglus/execution_serialization.hpp"
 #include "libsiglus/siglus_runtime.hpp"
+#include "long_operations/siglus_backlog.hpp"
 #include "long_operations/siglus_group_selection.hpp"
 #include "long_operations/siglus_movie.hpp"
 #include "long_operations/siglus_mwnd_wait.hpp"
@@ -136,6 +137,19 @@ std::unique_ptr<LongOperation> SiglusGroupSelection::RestoreCheckpoint(
     if (machine.host().script_input)
       machine.host().script_input->Clear();
   });
+}
+
+libsiglus::BacklogOperationState SiglusBacklogWait::CaptureCheckpoint(
+    libsiglus::ExecutionWriter&) const {
+  return {session_};
+}
+std::unique_ptr<LongOperation> SiglusBacklogWait::RestoreCheckpoint(
+    libsiglus::SiglusMachine&,
+    libsiglus::ExecutionReader&,
+    const libsiglus::BacklogOperationState& state) {
+  if (!state.session)
+    throw std::runtime_error("Saved backlog wait has no session");
+  return std::make_unique<SiglusBacklogWait>(state.session);
 }
 
 libsiglus::WipeOperationState SiglusWipeOperation::CaptureCheckpoint(
@@ -259,6 +273,7 @@ NativeOperationState CaptureNativeOperation(lop::LongOperation& operation,
   CAPTURE(SiglusMwndWaitOperation)
   CAPTURE(WaitForSelection)
   CAPTURE(SiglusGroupSelection)
+  CAPTURE(SiglusBacklogWait)
   CAPTURE(SiglusWipeOperation)
   CAPTURE(SiglusMovieOperation)
 #undef CAPTURE
@@ -284,6 +299,9 @@ std::unique_ptr<lop::LongOperation> RestoreNativeOperation(
         else if constexpr (std::is_same_v<T, GroupSelectionOperationState>)
           return lop::SiglusGroupSelection::RestoreCheckpoint(machine,
                                                               execution, state);
+        else if constexpr (std::is_same_v<T, BacklogOperationState>)
+          return lop::SiglusBacklogWait::RestoreCheckpoint(machine, execution,
+                                                           state);
         else if constexpr (std::is_same_v<T, WipeOperationState>)
           return lop::SiglusWipeOperation::RestoreCheckpoint(machine, execution,
                                                              state);

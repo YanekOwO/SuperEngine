@@ -880,9 +880,9 @@ void SiglusSaveLoad::RenderOverlay() {
                                 static_cast<int>(progress * 255));
 }
 
-void SiglusSaveLoad::OpenBacklogLoad(CheckpointId id) {
+bool SiglusSaveLoad::OpenBacklogLoad(CheckpointId id) {
   if (!backlog_.contains(id))
-    return;
+    return false;
   selected_backlog_ = id;
   if (runtime_.gameexe) {
     const auto target = (*runtime_.gameexe)("MSGBK.LOAD_CALL");
@@ -891,13 +891,13 @@ void SiglusSaveLoad::OpenBacklogLoad(CheckpointId id) {
       const auto command = target.StrAt(1).value_or("");
       if (command.empty())
         throw sr::RuntimeError("MSGBK.LOAD_CALL requires a command name");
-      runtime_.OpenExcall(runtime_.ActiveMachine()
-                              .loader->ResolveSceneUserCommand(scene, command)
-                              .target);
-      return;
+      return runtime_.OpenExcall(
+          runtime_.ActiveMachine()
+              .loader->ResolveSceneUserCommand(scene, command)
+              .target);
     }
   }
-  Load(runtime_.ActiveMachine(), 0, true, true, true, Source::Backlog);
+  return Load(runtime_.ActiveMachine(), 0, true, true, true, Source::Backlog);
 }
 
 void SiglusSaveLoad::LoadGlobal() {

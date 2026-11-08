@@ -82,6 +82,7 @@ namespace libsiglus {
 class Archive;
 class SiglusSceneRenderer;
 class SiglusSaveLoad;
+class SiglusBacklog;
 
 using SiglusWipeEndHook = std::function<void()>;
 
@@ -90,6 +91,7 @@ struct SiglusMachine;
 
 struct SiglusRuntime {
   friend class SiglusSaveLoad;
+  friend class SiglusBacklog;
   struct CheckpointState;
   CheckpointState CaptureCheckpoint() const;
 
@@ -105,6 +107,8 @@ struct SiglusRuntime {
   PropertyStorage properties;
   void InitializeProperties();
   SiglusSaveLoad& Saves();
+  SiglusBacklog& Backlog();
+  std::shared_ptr<SiglusBacklog> backlog;
   std::shared_ptr<MessageBack> message_back;
   std::string scene_title;
   std::string current_full_message;

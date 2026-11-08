@@ -13,7 +13,7 @@ Install dependencies described in `README.md`; presets require CMake 3.24+ and N
 ```sh
 git submodule update --init --recursive
 cmake --preset debug
-cmake --build --preset debug -j 3
+cmake --build --preset debug -j $(nproc)
 ctest --preset debug
 ```
 
@@ -21,7 +21,7 @@ Debug builds include unit tests. Release builds omit tests:
 
 ```sh
 cmake --preset release
-cmake --build --preset release -j 3
+cmake --build --preset release -j $(nproc)
 ./build/release/rlvm --engine siglus /path/to/game
 ```
 

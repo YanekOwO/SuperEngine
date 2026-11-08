@@ -29,6 +29,7 @@
 #include "core/message_back.hpp"
 #include "core/selection.hpp"
 #include "core/serialization_context.hpp"
+#include "libsiglus/backlog.hpp"
 #include "libsiglus/siglus_runtime.hpp"
 #include "systems/sound_system.hpp"
 #include "systems/text_system.hpp"
@@ -53,6 +54,7 @@ struct SiglusRuntime::CheckpointState {
   TextSystem* text = nullptr;
   SoundSystem* sound = nullptr;
   std::optional<MessageBack::CheckpointState> backlog;
+  std::shared_ptr<SiglusBacklog::Session> backlog_view;
 
   void Prepare(const SiglusRuntime& runtime);
   void Commit(SiglusRuntime& runtime);
@@ -109,7 +111,7 @@ struct SiglusRuntime::CheckpointState {
     } else if (has_sound) {
       ar&(*sound);
     }
-    ar & backlog;
+    ar & backlog & backlog_view;
   }
 };
 

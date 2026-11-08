@@ -83,6 +83,8 @@ SiglusRuntime::CheckpointState SiglusRuntime::CaptureCheckpoint() const {
   }
   if (message_back)
     saved.backlog = message_back->CaptureCheckpoint();
+  if (backlog)
+    saved.backlog_view = backlog->Capture();
   return saved;
 }
 
@@ -95,6 +97,11 @@ void SiglusRuntime::CheckpointState::Prepare(const SiglusRuntime& runtime) {
       (backlog && !runtime.message_back))
     throw std::runtime_error(
         "Saved resources require unavailable runtime subsystem");
+  if (backlog_view &&
+      (!runtime.system || !runtime.gameexe || backlog_view->owner < 0 ||
+       backlog_view->owner > 1 ||
+       (backlog_view->open && backlog_view->owner == 1 && !ex_stage)))
+    throw std::runtime_error("Invalid saved backlog view");
   if (static_cast<bool>(ex_stage) != static_cast<bool>(ex_counters) ||
       static_cast<bool>(ex_stage) != static_cast<bool>(ex_actions))
     throw std::runtime_error("Incomplete saved EX resource state");
@@ -140,6 +147,8 @@ void SiglusRuntime::CheckpointState::Commit(SiglusRuntime& runtime) {
     std::exchange(commit_sound_, {})();
   if (backlog)
     runtime.message_back->RestoreCheckpoint(std::move(*backlog));
+  if (backlog_view || runtime.backlog)
+    runtime.Backlog().Restore(std::move(backlog_view));
 }
 
 }  // namespace libsiglus
