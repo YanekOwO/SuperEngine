@@ -284,6 +284,27 @@ AccessChain ElementParser::resolve_element(ElementCode& elm) {
                         std::span(elm.code.begin() + 1, elm.code.end()));
     }
 
+    case 1:    // SELPOINT
+    case 110:  // CHECK_SELPOINT
+    case 111:  // CLEAR_SELPOINT
+    case 149:  // STACK_SELPOINT
+    case 150:  // DROP_SELPOINT
+    {
+      std::string_view name = root == 1     ? "selpoint"
+                              : root == 110 ? "check_selpoint"
+                              : root == 111 ? "clear_selpoint"
+                              : root == 149 ? "stack_selpoint"
+                                            : "drop_selpoint";
+      // The existence check produces an integer despite the legacy element
+      // declaration marking all selection-point commands as void.
+      elm.bind_ctx.return_type = root == 110 ? Type::Int : Type::None;
+      auto call = Node::BuildCall(std::move(elm.bind_ctx));
+      elm.force_bind = false;
+      return AccessChain{
+          .root = std::monostate(),
+          .nodes = {Node(Type::Callable, Member(name)), std::move(call)}};
+    }
+
     case 36:   // SAVEPOINT
     case 112:  // CHECK_SAVEPOINT
     case 113:  // CLEAR_SAVEPOINT

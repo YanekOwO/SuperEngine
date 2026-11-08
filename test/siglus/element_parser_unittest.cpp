@@ -1571,6 +1571,50 @@ TEST_F(ElementParserTest, G00bufFreeAllIsAnImplicitVoidCall) {
   EXPECT_EQ(parsed.chain.GetType(), Type::None);
 }
 
+TEST_F(ElementParserTest, SelpointIsASynchronousVoidCall) {
+  // An unbound selection-point marker parses as a simple call with no result.
+  auto parsed = chain(1);
+  EXPECT_EQ(parsed, "selpoint()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, CheckSelpointReturnsAnIntegerDespiteVoidDeclaration) {
+  // The explicit legacy void declaration must not hide the query's integer.
+  ElementCode element{110};
+  element.ForceBind({0, {}, Type::None});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed, "check_selpoint()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::Int);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, ClearSelpointIsASynchronousVoidCall) {
+  // Clearing history has no arguments and produces no script result.
+  auto parsed = chain(111);
+  EXPECT_EQ(parsed, "clear_selpoint()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, StackSelpointOverridesAnIntegerReturnDeclaration) {
+  // An explicit call still uses the stock command's actual void result type.
+  ElementCode element{149};
+  element.ForceBind({0, {}, Type::Int});
+  auto parsed = chain(element);
+  EXPECT_EQ(parsed, "stack_selpoint()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
+TEST_F(ElementParserTest, DropSelpointIsASynchronousVoidCall) {
+  // Consuming the stock slot is a simple call without an await or result.
+  auto parsed = chain(150);
+  EXPECT_EQ(parsed, "drop_selpoint()");
+  EXPECT_EQ(parsed.chain.GetType(), Type::None);
+  EXPECT_EQ(parsed.CallFlags(), "[]s");
+}
+
 TEST_F(ElementParserTest, UsrcmdGlobal) {
   global_commands = {Command{.scene_id = 1, .offset = 2, .name = "$$cmd"}};
   ResetParser();

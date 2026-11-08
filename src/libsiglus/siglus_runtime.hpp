@@ -24,10 +24,6 @@
 
 #pragma once
 
-#include "core/script_call.hpp"
-#include "libsiglus/property_storage.hpp"
-#include "libsiglus/siglus_machine.hpp"
-
 #include "core/asset_scanner.hpp"
 #include "core/capture.hpp"
 #include "core/counter.hpp"
@@ -39,11 +35,15 @@
 #include "core/interaction_manager.hpp"
 #include "core/memory_internal/memory.hpp"
 #include "core/quake.hpp"
+#include "core/script_call.hpp"
 #include "core/selection.hpp"
+#include "core/selection_point.hpp"
 #include "core/stage.hpp"
 #include "core/window_title.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/frame_request_manager.hpp"
+#include "libsiglus/property_storage.hpp"
+#include "libsiglus/siglus_machine.hpp"
 #include "systems/frame_presenter.hpp"
 #include "systems/system.hpp"
 #include "vm/value.hpp"
@@ -97,6 +97,7 @@ struct SiglusRuntime {
   std::shared_ptr<const DatabaseList> databases;
   std::unique_ptr<Memory> memory;
   PropertyStorage properties;
+  SelectionPoint selection_points;
   LocalConfig local_config;
   GlobalConfig global_config;
   std::shared_ptr<AssetScanner> asset_scanner;

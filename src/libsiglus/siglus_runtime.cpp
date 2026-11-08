@@ -269,6 +269,7 @@ void SiglusRuntime::ResetExcall() {
 }
 
 void SiglusRuntime::ResetLocalMemory() {
+  selection_points.Reset();
   if (memory) {
     memory->PartialReset(LocalMemory{});
     if (gameexe)

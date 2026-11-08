@@ -194,6 +194,7 @@ std::unique_ptr<SiglusRuntime> SGVMFactory::Create() {
 
   rt.gameexe = std::make_shared<Gameexe>(LoadGameexe(rt.asset_scanner));
   Gameexe& gexe = *rt.gameexe;
+  rt.selection_points = SelectionPoint(gexe("SEL_SAVE.CNT").ReadInt(1));
   rt.databases = DatabaseList::Load(gexe, rt.base_pth);
   gexe.SetStringAt("CAPTION", "SiglusTest");
   gexe.SetStringAt("REGNAME", "sjis: SIGLUS\\TEST");
