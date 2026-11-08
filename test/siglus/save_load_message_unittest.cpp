@@ -21,22 +21,13 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
 // -----------------------------------------------------------------------
 
-#include <SDL3/SDL.h>
-#include <gtest/gtest.h>
-#include <atomic>
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/archive/binary_oarchive.hpp>
-#include <filesystem>
-#include <fstream>
-#include <memory>
-#include <optional>
-#include <sstream>
-#include <string>
 #include "core/capture.hpp"
 #include "core/frame_action_manager.hpp"
 #include "core/kidoku_table.hpp"
+#include "core/message_back.hpp"
 #include "core/mwnd_config.hpp"
 #include "core/serialization_context.hpp"
+#include "headless_resource_host.hpp"
 #include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -54,36 +45,21 @@
 #include "vm/function.hpp"
 #include "vm/future.hpp"
 
-namespace libsiglus {
+#include <gtest/gtest.h>
+#include <atomic>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+
 namespace {
+using namespace libsiglus;
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
-
-class SaveMessageDrivers {
- public:
-  SaveMessageDrivers() {
-    if (const auto* previous = SDL_GetHint(SDL_HINT_VIDEO_DRIVER))
-      video_ = previous;
-    if (const auto* previous = SDL_GetHint(SDL_HINT_AUDIO_DRIVER))
-      audio_ = previous;
-    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
-    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
-  }
-  ~SaveMessageDrivers() {
-    Restore(SDL_HINT_VIDEO_DRIVER, video_);
-    Restore(SDL_HINT_AUDIO_DRIVER, audio_);
-  }
-
- private:
-  static void Restore(const char* hint,
-                      const std::optional<std::string>& value) {
-    if (value)
-      SDL_SetHint(hint, value->c_str());
-    else
-      SDL_ResetHint(hint);
-  }
-  std::optional<std::string> video_, audio_;
-};
 
 class SiglusSaveMessageTest : public ::testing::Test {
  protected:
@@ -176,11 +152,82 @@ class SiglusSaveMessageTest : public ::testing::Test {
     return session;
   }
 
-  SaveMessageDrivers drivers;
+  ScopedDummyDrivers drivers;
   SiglusRuntime runtime;
   MockClock* clock = nullptr;
   fs::path directory;
 };
+
+TEST_F(SiglusSaveMessageTest, DialogueRecordsOnceBeforeReveal) {
+  // Logical dialogue enters history once, independently of glyph revelation.
+  Run("await __builtin_textout(2, 9, \"hello\");");
+  Advance(200ms);
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].msg, "hello");
+  EXPECT_EQ(entries[0].scene_no, 2);
+}
+
+TEST_F(SiglusSaveMessageTest, MutedVoiceRetainsCharacterForReplay) {
+  // Muted dialogue still records the voice ID and its character preference.
+  runtime.global_config.play_all_sound_check = false;
+  Run("mwnd.koe(123, 4); await __builtin_textout(2, 9, \"voiced\");");
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].koe_no_list, std::vector<int>({123}));
+  EXPECT_EQ(entries[0].chara_no_list, std::vector<int>({4}));
+}
+
+TEST_F(SiglusSaveMessageTest, LineBreakRemainsInHistory) {
+  // Explicit newline commands retain their separation in recorded dialogue.
+  runtime.local_config.async_msg_mode = true;
+  Run("await __builtin_textout(2, 9, \"first\"); mwnd.nl(); "
+      "await __builtin_textout(2, 10, \"second\");");
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].msg, "first\nsecond");
+}
+
+TEST_F(SiglusSaveMessageTest, RecordingCanBeDisabled) {
+  // Disabling automatic recording leaves the backlog empty after dialogue.
+  runtime.local_config.msg_back_off = true;
+  Run("await __builtin_textout(2, 9, \"hidden\");");
+  Advance(200ms);
+  EXPECT_FALSE(runtime.message_back->HasMessages());
+}
+
+TEST_F(SiglusSaveMessageTest, ExplicitHistoryBypassesRecordingDisable) {
+  // The script may insert special-scene history while automatic recording is
+  // disabled; the text is not duplicated.
+  (*binding::SiglusBindingRegistry::Find("msgbk"))(runtime.GameplayMachine());
+  runtime.local_config.msg_back_off = true;
+  Run("msgbk.add_namae(\"speaker\"); msgbk.add_msg(\"manual\");");
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].msg, "manual");
+  EXPECT_EQ(entries[0].original_name, "speaker");
+}
+
+TEST_F(SiglusSaveMessageTest, HistoryAttachesLiveCheckpoint) {
+  // A recorded message points at the retained rollback snapshot for its block.
+  runtime.gameexe->SetAt("MESSAGE_BACK_SAVE.CNT", {2});
+  runtime.gameexe->SetAt("MESSAGE_BACK_SAVE.INTERVAL", {1});
+  Run("mwnd.msg_block(); await __builtin_textout(2, 9, \"saved\");");
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_NE(entries[0].checkpoint_id, 0u);
+  EXPECT_TRUE(runtime.Saves().HasBacklogCheckpoint(entries[0].checkpoint_id));
+}
+
+TEST_F(SiglusSaveMessageTest, NewMessageBlockSeparatesHistory) {
+  // A new message block starts a separate entry after the previous text.
+  runtime.message_back->AddMessage("previous");
+  Run("mwnd.msg_block(); await __builtin_textout(2, 9, \"next\");");
+  const auto entries = runtime.message_back->GetEntries();
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].msg, "previous");
+  EXPECT_EQ(entries[1].msg, "next");
+}
 
 TEST_F(SiglusSaveMessageTest, SaveBindingsPreserveSystemModuleMembers) {
   // Bind the system extensions in registry order; configuration, persistence,
@@ -550,4 +597,3 @@ TEST_F(SiglusSaveMessageTest, UnimplementedStageClassesRemainUnavailable) {
 }
 
 }  // namespace
-}  // namespace libsiglus

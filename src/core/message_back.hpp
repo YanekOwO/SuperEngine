@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/selection_point.hpp"
 #include "utilities/serialization.hpp"
 
 #include <boost/circular_buffer.hpp>
@@ -41,6 +42,7 @@ class MessageBack {
     std::vector<int> chara_no_list;
     int scene_no = -1;
     int line_no = -1;
+    CheckpointId checkpoint_id = 0;
     bool pct_flag = false;
     std::string image_file;
     int image_x = 0;
@@ -50,7 +52,8 @@ class MessageBack {
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
       ar & msg & original_name & display_name & debug_msg & koe_no_list &
-          chara_no_list & scene_no & line_no & pct_flag & image_file & image_x;
+          chara_no_list & scene_no & line_no & checkpoint_id & pct_flag &
+          image_file & image_x;
     }
   };
 
@@ -85,6 +88,10 @@ class MessageBack {
   void InsertImage(std::string file, int x = 0);
   void AddNamae(std::string name);
   void AddKoe(int koe_no, int chara_no);
+
+  void SetCheckpointId(CheckpointId id);
+  void SetLocation(int scene, int line);
+  bool HasMessages() const;
 
   void GoNextMsg();
 

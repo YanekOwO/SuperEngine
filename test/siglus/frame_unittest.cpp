@@ -33,6 +33,7 @@
 #include "core/input.hpp"
 #include "core/interaction_manager.hpp"
 #include "core/mwnd_config.hpp"
+#include "headless_resource_host.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/siglus_runtime.hpp"
@@ -114,38 +115,6 @@ class FrameHarness {
     auto future = runtime.GameplayMachine().RequestFrame();
     return sr::get_promise(future);
   }
-};
-
-class ScopedDummyDrivers {
- public:
-  ScopedDummyDrivers()
-      : audio_(Read(SDL_HINT_AUDIO_DRIVER)),
-        video_(Read(SDL_HINT_VIDEO_DRIVER)) {
-    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
-    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
-  }
-
-  ~ScopedDummyDrivers() {
-    Restore(SDL_HINT_VIDEO_DRIVER, video_);
-    Restore(SDL_HINT_AUDIO_DRIVER, audio_);
-  }
-
- private:
-  static std::optional<std::string> Read(const char* name) {
-    if (const auto* value = SDL_GetHint(name))
-      return std::string(value);
-    return std::nullopt;
-  }
-
-  static void Restore(const char* name,
-                      const std::optional<std::string>& value) {
-    if (value)
-      SDL_SetHint(name, value->c_str());
-    else
-      SDL_ResetHint(name);
-  }
-
-  std::optional<std::string> audio_, video_;
 };
 
 class SiglusFrameWaitTest : public ::testing::Test {

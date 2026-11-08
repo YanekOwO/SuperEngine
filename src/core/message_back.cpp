@@ -23,6 +23,8 @@
 
 #include "core/message_back.hpp"
 
+#include <algorithm>
+
 MessageBack::MessageBack() : entries_(kMaxHistory) {}
 
 std::vector<MessageBack::MsgbkEntry> MessageBack::GetEntries() const {
@@ -115,4 +117,23 @@ void MessageBack::RestoreCheckpoint(CheckpointState state) {
     entries_.push_back(std::move(entry));
   current_msg_pos_ = state.current;
   new_msg_ = state.new_message;
+}
+
+void MessageBack::SetCheckpointId(CheckpointId id) {
+  if (!entries_.empty())
+    entries_[current_msg_pos_].checkpoint_id = id;
+}
+
+void MessageBack::SetLocation(int scene, int line) {
+  if (!entries_.empty()) {
+    auto& entry = entries_[current_msg_pos_];
+    entry.scene_no = scene;
+    entry.line_no = line;
+  }
+}
+
+bool MessageBack::HasMessages() const {
+  return std::ranges::any_of(entries_, [](const MsgbkEntry& entry) {
+    return entry.pct_flag || !entry.msg.empty();
+  });
 }

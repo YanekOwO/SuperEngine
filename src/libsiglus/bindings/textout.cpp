@@ -23,8 +23,11 @@
 
 #include "core/game_config.hpp"
 #include "core/kidoku_table.hpp"
+#include "core/message_back.hpp"
+#include "libsiglus/archive.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/save_load.hpp"
+#include "libsiglus/scene.hpp"
 #include "long_operations/siglus_textout.hpp"
 #include "long_operations/siglus_wait.hpp"
 #include "srbind/module.hpp"
@@ -55,6 +58,22 @@ class SiglusTextout {
   sr::VM& vm_;
   System* sys_;
   LocalConfig& localcfg_;
+  std::unordered_map<int, std::vector<int>> source_lines_;
+
+  int SourceLine(int scene, int kidoku) {
+    const auto& archive = machine_.host().archive;
+    if (!archive || scene < 0 ||
+        static_cast<std::size_t>(scene) >= archive->GetScenarioCount())
+      return -1;
+    auto found = source_lines_.find(scene);
+    if (found == source_lines_.end())
+      found =
+          source_lines_.emplace(scene, archive->ParseScene(scene).kidoku).first;
+    const auto& lines = found->second;
+    return kidoku >= 0 && static_cast<std::size_t>(kidoku) < lines.size()
+               ? lines[kidoku]
+               : -1;
+  }
 };
 
 void BindTextout(SiglusMachine& runtime) {
@@ -90,6 +109,9 @@ void BindTextout(SiglusMachine& runtime) {
 
           auto window = to->sys_->text().GetCurrentMwnd();
           to->machine_.host().Saves().AppendMessage(text);
+          if (!to->localcfg_.msg_back_off)
+            to->machine_.host().message_back->SetLocation(
+                scenario, to->SourceLine(scenario, kidoku));
           if (to->localcfg_.multi_msg_mode)
             window->BeginMultiMessage();
           if (to->localcfg_.multi_msg_mode || to->localcfg_.async_msg_mode) {

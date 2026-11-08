@@ -270,6 +270,8 @@ void SiglusSaveLoad::RequestCheckpoint(SiglusMachine& machine,
 }
 void SiglusSaveLoad::BeginMessageBlock(SiglusMachine& machine,
                                        sr::Fiber& fiber) {
+  if (runtime_.message_back)
+    runtime_.message_back->GoNextMsg();
   ClearCheckpoint();
   if (!runtime_.local_config.dont_set_save_point)
     RequestCheckpoint(machine, fiber, false);
@@ -280,12 +282,25 @@ void SiglusSaveLoad::ClearCheckpoint() {
 }
 void SiglusSaveLoad::AppendMessage(std::string_view message) {
   runtime_.current_full_message.append(message);
+  if (!runtime_.local_config.msg_back_off && runtime_.message_back)
+    runtime_.message_back->AddMessage(std::string(message));
+  AppendCheckpointMessage(message, !runtime_.local_config.msg_back_off);
+}
+void SiglusSaveLoad::AppendBacklogMessage(std::string_view message) {
+  if (runtime_.message_back)
+    runtime_.message_back->AddMessage(std::string(message));
   AppendCheckpointMessage(message);
 }
-void SiglusSaveLoad::AppendName(std::string_view name) {
-  AppendCheckpointMessage(name);
+void SiglusSaveLoad::AssociateBacklogCheckpoint() {
+  AppendCheckpointMessage("");
 }
-void SiglusSaveLoad::AppendCheckpointMessage(std::string_view message) {
+void SiglusSaveLoad::AppendName(std::string_view name) {
+  if (!runtime_.local_config.msg_back_off && runtime_.message_back)
+    runtime_.message_back->AddNamae(std::string(name));
+  AppendCheckpointMessage(name, !runtime_.local_config.msg_back_off);
+}
+void SiglusSaveLoad::AppendCheckpointMessage(std::string_view message,
+                                             bool associate_backlog) {
   manager_.AppendMessage(message);
   if (!manager_.HasCheckpoint())
     return;
@@ -313,6 +328,8 @@ void SiglusSaveLoad::AppendCheckpointMessage(std::string_view message) {
   }
   if (auto found = backlog_.find(id); found != backlog_.end()) {
     found->second.active = manager_.active();
+    if (associate_backlog && runtime_.message_back)
+      runtime_.message_back->SetCheckpointId(id);
     if (runtime_.system)
       runtime_.system->text().GetCurrentMwnd()->SetCheckpointId(id);
   }

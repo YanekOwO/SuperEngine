@@ -25,6 +25,7 @@
 
 #include "core/message_back.hpp"
 #include "libsiglus/bindings/util.hpp"
+#include "libsiglus/save_load.hpp"
 #include "srbind/srbind.hpp"
 #include "vm/value.hpp"
 #include "vm/vm.hpp"
@@ -66,9 +67,10 @@ void BindMsgbk(SiglusMachine& runtime) {
 
   msgbk.def(
       "insert_msg",
-      [](MessageBack* msg, std::vector<sr::Value> raw_args) {
+      [&runtime](MessageBack* msg, std::vector<sr::Value> raw_args) {
         msg->GoNextMsg();
-        msg->AddMessage(DecodeFirstString(std::move(raw_args)));
+        runtime.host().Saves().AppendBacklogMessage(
+            DecodeFirstString(std::move(raw_args)));
       },
       sb::vararg);
   msgbk.def(
@@ -96,14 +98,15 @@ void BindMsgbk(SiglusMachine& runtime) {
       sb::vararg);
   msgbk.def(
       "add_msg",
-      [](MessageBack* msg, std::vector<sr::Value> raw_args) {
-        msg->AddMessage(DecodeFirstString(std::move(raw_args)));
+      [&runtime](MessageBack*, std::vector<sr::Value> raw_args) {
+        runtime.host().Saves().AppendBacklogMessage(
+            DecodeFirstString(std::move(raw_args)));
       },
       sb::vararg);
   msgbk.def("go_next_msg", &MessageBack::GoNextMsg);
   msgbk.def(
       "insert_img",
-      [](MessageBack* msg, std::vector<sr::Value> raw) {
+      [&runtime](MessageBack* msg, std::vector<sr::Value> raw) {
         const auto packet = CallPacket::DecodeFrom(std::move(raw));
         if (packet.args.empty())
           return;
@@ -111,6 +114,7 @@ void BindMsgbk(SiglusMachine& runtime) {
                          packet.args.size() > 1
                              ? RequireInt(packet.args[1], "backlog image x")
                              : 0);
+        runtime.host().Saves().AssociateBacklogCheckpoint();
       },
       sb::vararg);
 }

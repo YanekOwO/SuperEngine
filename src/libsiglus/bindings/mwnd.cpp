@@ -28,6 +28,7 @@
 #include "vm/serialization.hpp"
 
 #include "core/game_config.hpp"
+#include "core/message_back.hpp"
 #include "core/object.hpp"
 #include "core/rect.hpp"
 #include "libsiglus/bindings/object.hpp"
@@ -507,11 +508,18 @@ void BindMwnd(SiglusMachine& runtime) {
   mwnd.def("clear_indent", [page](MwndHandle* h) {
     page(h).Submit(msgcmd::ClearIndentation{});
   });
-  mwnd.def("nil",
-           [page](MwndHandle* h) { page(h).Submit(msgcmd::HardBreak{}); });
-  mwnd.def("nl", [page](MwndHandle* h) {
+  auto record_break = [&runtime] {
+    if (!runtime.host().local_config.msg_back_off)
+      runtime.host().message_back->AddMessage("\n");
+  };
+  mwnd.def("nil", [page, record_break](MwndHandle* h) {
+    page(h).Submit(msgcmd::HardBreak{});
+    record_break();
+  });
+  mwnd.def("nl", [page, record_break](MwndHandle* h) {
     page(h).Submit(msgcmd::ClearIndentation{});
     page(h).Submit(msgcmd::HardBreak{});
+    record_break();
   });
   auto clear = [state, page, sys](MwndHandle* h) {
     state(h)->MarkMessageClearReady(page(h), sys->local_config());
@@ -613,10 +621,12 @@ void BindMwnd(SiglusMachine& runtime) {
     window.Submit(msgcmd::SetFontSize{window.GetDefaultFontSize()});
   });
 
-  auto play_koe = [sys, state, page](MwndHandle* h,
-                                     std::vector<sr::Value> args) {
+  auto play_koe = [sys, state, page, &runtime](MwndHandle* h,
+                                               std::vector<sr::Value> args) {
     const auto params = KoeCallParams::ParseFrom(std::move(args));
     auto message = state(h);
+    if (!runtime.host().local_config.msg_back_off && params.koe >= 0)
+      runtime.host().message_back->AddKoe(params.koe, params.character);
     message->current_koe = params.koe;
     message->current_character = params.character;
     message->current_koe_played =

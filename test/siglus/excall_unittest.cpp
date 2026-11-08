@@ -26,6 +26,7 @@
 
 #include "core/excall.hpp"
 #include "core/frame_action_manager.hpp"
+#include "headless_resource_host.hpp"
 #include "libsiglus/bindings/loader.hpp"
 #include "libsiglus/bindings/registry.hpp"
 #include "libsiglus/bindings/util.hpp"
@@ -58,34 +59,9 @@ namespace libsiglus::binding {
 namespace sr = serilang;
 using namespace std::chrono_literals;
 
-class ExcallSDLHints {
- public:
-  ExcallSDLHints() {
-    if (const auto* value = SDL_GetHint(SDL_HINT_VIDEO_DRIVER))
-      video_ = value;
-    if (const auto* value = SDL_GetHint(SDL_HINT_AUDIO_DRIVER))
-      audio_ = value;
-    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
-    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
-  }
-  ~ExcallSDLHints() {
-    if (video_)
-      SDL_SetHint(SDL_HINT_VIDEO_DRIVER, video_->c_str());
-    else
-      SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
-    if (audio_)
-      SDL_SetHint(SDL_HINT_AUDIO_DRIVER, audio_->c_str());
-    else
-      SDL_ResetHint(SDL_HINT_AUDIO_DRIVER);
-  }
-
- private:
-  std::optional<std::string> video_, audio_;
-};
-
 class SiglusExcallTest : public ::testing::Test {
  protected:
-  ExcallSDLHints hints;
+  ScopedDummyDrivers hints;
   SiglusRuntime runtime;
   MockClock* clock = nullptr;
   std::map<int, std::string> menus;

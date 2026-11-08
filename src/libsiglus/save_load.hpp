@@ -60,6 +60,8 @@ class SiglusSaveLoad {
   void ClearCheckpoint();
   void AppendMessage(std::string_view message);
   void AppendName(std::string_view name);
+  void AppendBacklogMessage(std::string_view message);
+  void AssociateBacklogCheckpoint();
   void Reset(bool preserve_backlog = false);
   // Returns true when a load/restart owns script execution for this drive.
   bool Process();
@@ -83,6 +85,9 @@ class SiglusSaveLoad {
 
   void SelectBacklog(CheckpointId id);
   void OpenBacklogLoad(CheckpointId id);
+  bool HasBacklogCheckpoint(CheckpointId id) const {
+    return backlog_.contains(id);
+  }
   CheckpointId selected_backlog() const { return selected_backlog_; }
 
  private:
@@ -114,7 +119,8 @@ class SiglusSaveLoad {
 
   SaveLocalExtra Extra() const;
   bool Confirm(bool save, bool quick, bool selection = false) const;
-  void AppendCheckpointMessage(std::string_view message);
+  void AppendCheckpointMessage(std::string_view message,
+                               bool associate_backlog = true);
   std::string Capture(const CheckpointRequest& request);
   std::unique_ptr<PreparedLoad> Prepare(SlotPayload payload);
   void Commit(PreparedLoad& load);
